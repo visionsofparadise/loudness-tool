@@ -1,0 +1,156 @@
+import type { FileHandle } from "node:fs/promises";
+
+export type WavBitDepth = "16" | "24" | "32" | "32f";
+
+export type SourceBitDepth = WavBitDepth | "8" | "64f";
+
+export interface ParsedWavFormat {
+	readonly sampleRate: number;
+	readonly channelCount: number;
+	readonly bitDepth: SourceBitDepth;
+	readonly blockAlign: number;
+	readonly dataOffset: number;
+	readonly dataSize: number;
+}
+
+const RIFF_DATA_SIZE_LIMIT = 0xffffffff;
+
+export const nearestWritableBitDepth = (bitDepth: SourceBitDepth): WavBitDepth => {
+	switch (bitDepth) {
+		case "8":
+			return "16";
+		case "64f":
+			return "32f";
+		case "16":
+		case "24":
+		case "32":
+		case "32f":
+			return bitDepth;
+	}
+};
+
+export const assertRiffDataSize = (dataSize: number): void => {
+	if (dataSize > RIFF_DATA_SIZE_LIMIT) {
+		throw new Error(`RIFF data size ${dataSize} exceeds the 0xffffffff byte limit`);
+	}
+};
+
+const sourceBitDepthOf = (audioFormat: number, bitsPerSample: number): SourceBitDepth => {
+	if (audioFormat === 3) {
+		if (bitsPerSample === 32) {
+			return "32f";
+		}
+
+		if (bitsPerSample === 64) {
+			return "64f";
+		}
+	}
+
+	if (audioFormat === 1) {
+		if (bitsPerSample === 8) {
+			return "8";
+		}
+
+		if (bitsPerSample === 16) {
+			return "16";
+		}
+
+		if (bitsPerSample === 24) {
+			return "24";
+		}
+
+		if (bitsPerSample === 32) {
+			return "32";
+		}
+	}
+
+	throw new Error(`Unsupported WAV format: audioFormat ${audioFormat}, bitsPerSample ${bitsPerSample}`);
+};
+
+export const parseWavFormat = async (fileHandle: FileHandle, path: string): Promise<ParsedWavFormat> => {
+	const fileInfo = await fileHandle.stat();
+	const header = Buffer.alloc(12);
+
+	await fileHandle.read(header, 0, 12, 0);
+
+	const magic = header.toString("ascii", 0, 4);
+	const wave = header.toString("ascii", 8, 12);
+
+	if ((magic !== "RIFF" && magic !== "RF64") || wave !== "WAVE") {
+		throw new Error(`Not a WAV file: "${path}"`);
+	}
+
+	const isRf64 = magic === "RF64";
+	let ds64DataSize: number | undefined;
+	let offset = 12;
+	const fileSize = fileInfo.size;
+	let formatFields:
+		| {
+				readonly sampleRate: number;
+				readonly channelCount: number;
+				readonly bitDepth: SourceBitDepth;
+				readonly blockAlign: number;
+		  }
+		| undefined;
+	const chunkHeader = Buffer.alloc(8);
+
+	while (offset + 8 <= fileSize) {
+		await fileHandle.read(chunkHeader, 0, 8, offset);
+
+		const chunkId = chunkHeader.toString("ascii", 0, 4);
+		const chunkSize = chunkHeader.readUInt32LE(4);
+
+		if (chunkId === "ds64") {
+			const ds64Data = Buffer.alloc(Math.min(chunkSize, 28));
+
+			await fileHandle.read(ds64Data, 0, ds64Data.length, offset + 8);
+
+			ds64DataSize = Number(ds64Data.readBigUInt64LE(8));
+		} else if (chunkId === "fmt ") {
+			if (chunkSize < 16) {
+				throw new Error("WAV fmt chunk too small");
+			}
+
+			const formatData = Buffer.alloc(chunkSize);
+
+			await fileHandle.read(formatData, 0, chunkSize, offset + 8);
+
+			const audioFormat = formatData.readUInt16LE(0);
+			const channelCount = formatData.readUInt16LE(2);
+			const sampleRate = formatData.readUInt32LE(4);
+			const blockAlign = formatData.readUInt16LE(12);
+			const bitsPerSample = formatData.readUInt16LE(14);
+
+			formatFields = {
+				sampleRate,
+				channelCount,
+				bitDepth: sourceBitDepthOf(audioFormat, bitsPerSample),
+				blockAlign,
+			};
+		} else if (chunkId === "data") {
+			if (formatFields === undefined) {
+				throw new Error("WAV file has data chunk before fmt chunk");
+			}
+
+			if (formatFields.blockAlign === 0) {
+				throw new Error(`Invalid WAV file: "${path}"`);
+			}
+
+			const dataSize = isRf64 && ds64DataSize !== undefined ? ds64DataSize : chunkSize;
+
+			return {
+				...formatFields,
+				dataOffset: offset + 8,
+				dataSize,
+			};
+		}
+
+		offset += 8 + chunkSize;
+
+		if (chunkSize % 2 !== 0) {
+			offset++;
+		}
+	}
+
+	throw new Error(`Invalid WAV file: "${path}"`);
+};

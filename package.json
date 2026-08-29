@@ -6,6 +6,12 @@
 	"bin": {
 		"loudness-tool": "./dist/cli.js"
 	},
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
 	"files": [
 		"dist"
 	],
@@ -24,7 +30,7 @@
 		"fix": "concurrently -m 1 --group \"prettier --write .\" \"eslint . --fix --cache\" \"stylelint \\\"**/*.css\\\" --fix --allow-empty-input --cache\" \"markdownlint-cli2 --fix \\\"**/*.md\\\"\" \"textlint --fix \\\"**/*.md\\\"\"",
 		"check": "concurrently --group \"prettier --check .\" \"eslint . --no-cache -f unix\" \"tsc --noEmit --pretty false\" \"stylelint \\\"**/*.css\\\" -f unix --allow-empty-input --cache\" \"markdownlint-cli2 \\\"**/*.md\\\"\" \"textlint -f compact \\\"**/*.md\\\"\" \"knip --no-progress\" \"jscpd .\"",
 		"unit": "vitest run unit",
-		"build": "tsup src/cli.ts --format esm --treeshake --clean"
+		"build": "tsup src/index.ts src/cli.ts --format esm --dts --treeshake --clean"
 	},
 	"dependencies": {
 		"commander": "^14.0.1"
