@@ -13,7 +13,8 @@ export interface ParsedWavFormat {
 	readonly dataSize: number;
 }
 
-const RIFF_DATA_SIZE_LIMIT = 0xffffffff;
+const RIFF_HEADER_OVERHEAD = 36;
+const RIFF_DATA_SIZE_LIMIT = 0xffffffff - RIFF_HEADER_OVERHEAD;
 
 export const nearestWritableBitDepth = (bitDepth: SourceBitDepth): WavBitDepth => {
 	switch (bitDepth) {

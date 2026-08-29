@@ -95,18 +95,18 @@ const temporaryNamesOf = async (directory: string): Promise<Array<string>> => {
 };
 
 describe("assertRiffDataSize", () => {
-	it("accepts sizes at and below the 0xffffffff limit", () => {
+	it("accepts sizes at and below the RIFF payload ceiling", () => {
 		expect(() => {
 			assertRiffDataSize(0);
 		}).not.toThrow();
 		expect(() => {
-			assertRiffDataSize(0xffffffff);
+			assertRiffDataSize(0xffffffff - 36);
 		}).not.toThrow();
 	});
 
-	it("throws past 0xffffffff naming the limit", () => {
+	it("throws past the RIFF payload ceiling naming the 0xffffffff limit", () => {
 		expect(() => {
-			assertRiffDataSize(0xffffffff + 1);
+			assertRiffDataSize(0xffffffff - 36 + 1);
 		}).toThrow(/0xffffffff|4294967295/);
 	});
 });
