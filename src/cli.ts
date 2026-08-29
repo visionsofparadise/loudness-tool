@@ -21,5 +21,12 @@ export const createProgram = (): Command => {
 const entryPath = process.argv[1];
 
 if (entryPath !== undefined && import.meta.url === pathToFileURL(entryPath).href) {
-	void createProgram().parseAsync(process.argv);
+	void createProgram()
+		.parseAsync(process.argv)
+		.catch((error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+
+			process.stderr.write(`error: ${message}\n`);
+			process.exit(1);
+		});
 }
