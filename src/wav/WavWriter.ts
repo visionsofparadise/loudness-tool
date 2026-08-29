@@ -14,7 +14,7 @@ const buildWavHeader = (dataSize: number, sampleRate: number, channelCount: numb
 	const audioFormat = bitDepth === "32f" ? 3 : 1;
 
 	header.write("RIFF", 0);
-	header.writeUInt32LE(WAV_HEADER_SIZE - 8 + dataSize, 4);
+	header.writeUInt32LE(WAV_HEADER_SIZE - 8 + dataSize + (dataSize % 2), 4);
 	header.write("WAVE", 8);
 	header.write("fmt ", 12);
 	header.writeUInt32LE(16, 16);
@@ -105,6 +105,10 @@ export class WavWriter {
 	async close(): Promise<void> {
 		if (this.isSettled) {
 			return;
+		}
+
+		if (this.dataSize % 2 === 1) {
+			await this.fileHandle.write(Buffer.alloc(1), 0, 1, WAV_HEADER_SIZE + this.dataSize);
 		}
 
 		const header = buildWavHeader(this.dataSize, this.sampleRate, this.channelCount, this.bitDepth);

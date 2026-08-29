@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -100,11 +100,14 @@ describe("assertRiffDataSize", () => {
 			assertRiffDataSize(0);
 		}).not.toThrow();
 		expect(() => {
-			assertRiffDataSize(0xffffffff - 36);
+			assertRiffDataSize(0xffffffff - 36 - 1);
 		}).not.toThrow();
 	});
 
 	it("throws past the RIFF payload ceiling naming the payload limit", () => {
+		expect(() => {
+			assertRiffDataSize(0xffffffff - 36);
+		}).toThrow(/4294967259|payload ceiling/);
 		expect(() => {
 			assertRiffDataSize(0xffffffff - 36 + 1);
 		}).toThrow(/4294967259|payload ceiling/);
@@ -254,6 +257,29 @@ describe("WavWriter", () => {
 		);
 
 		await writer.abort();
+	});
+
+	it("pads an odd data chunk and round-trips 5-frame 24-bit mono", async () => {
+		const path = join(workingDirectory, "odd-24.wav");
+		const channels = createSine(5, 1, SAMPLE_RATE, 440, 0.75);
+		const writer = await WavWriter.create(path, { sampleRate: SAMPLE_RATE, channelCount: 1, bitDepth: "24" });
+
+		await writer.write(channels);
+		await writer.close();
+
+		const bytes = await readFile(path);
+
+		expect(bytes.length % 2).toBe(0);
+		expect(bytes.length).toBe(60);
+		expect(bytes.readUInt32LE(4)).toBe(52);
+		expect(bytes.readUInt32LE(40)).toBe(15);
+		expect(bytes[59]).toBe(0);
+
+		const read = await readAll(path);
+
+		expect(read.format.bitDepth).toBe("24");
+		expect(read.format.frameCount).toBe(5);
+		expectChannelsMatch(read.channels, channels, "24");
 	});
 
 	it("leaves a non-empty directory destination untouched when rename fails", async () => {
