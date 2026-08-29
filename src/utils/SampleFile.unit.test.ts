@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import * as fsPromises from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SampleFile } from "./SampleFile";
 import { Scratch } from "./Scratch";
+
+vi.mock("node:fs/promises", { spy: true });
 
 const SAMPLE_FILE_BLOCK_FRAMES = 65536;
 
@@ -40,6 +42,8 @@ describe("SampleFile", () => {
 	let scratch: Scratch | undefined;
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
+
 		if (scratch !== undefined) {
 			await scratch.dispose();
 			scratch = undefined;
@@ -217,6 +221,57 @@ describe("SampleFile", () => {
 
 		await expect(SampleFile.create(scratch, "../escaped")).rejects.toThrow(/must match/);
 	});
+
+	it("releases the label when open fails", async () => {
+		scratch = await Scratch.create();
+
+		await scratch.dispose();
+
+		const firstError = await SampleFile.create(scratch, "retry").then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		const secondError = await SampleFile.create(scratch, "retry").then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+
+		expect(firstError).toBeInstanceOf(Error);
+		expect(secondError).toBeInstanceOf(Error);
+		expect((firstError as Error).message).not.toMatch(/already live/);
+		expect((secondError as Error).message).not.toMatch(/already live/);
+	});
+
+	it("keeps the label claimed until unlink finishes", async () => {
+		scratch = await Scratch.create();
+
+		const file = await SampleFile.create(scratch, "held");
+		const heldPath = scratch.filePath("held");
+		let releaseUnlink: () => void = () => undefined;
+		const blocked = new Promise<void>((resolve) => {
+			releaseUnlink = resolve;
+		});
+		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+		vi.spyOn(fsPromises, "unlink").mockImplementation(async (path, ...args) => {
+			if (path === heldPath) {
+				await blocked;
+			}
+
+			return actual.unlink(path, ...args);
+		});
+
+		const closing = file.close();
+
+		await expect(SampleFile.create(scratch, "held")).rejects.toThrow(/already live/);
+
+		releaseUnlink();
+		await closing;
+
+		const reused = await SampleFile.create(scratch, "held");
+
+		await reused.close();
+	});
 });
 
 describe("Scratch plus SampleFile", () => {
@@ -227,7 +282,7 @@ describe("Scratch plus SampleFile", () => {
 		await file.append(new Float64Array(8).fill(0.5), 8);
 		await file.close();
 
-		expect(await readdir(scratch.directory)).toEqual([]);
+		expect(await fsPromises.readdir(scratch.directory)).toEqual([]);
 
 		await scratch.dispose();
 

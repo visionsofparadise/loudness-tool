@@ -110,10 +110,10 @@ export class SampleFile {
 		}
 
 		this.isClosed = true;
-		this.scratch.releaseLabel(this.label);
 
 		await this.fileHandle.close();
 		await unlink(this.path).catch(() => undefined);
+		this.scratch.releaseLabel(this.label);
 	}
 
 	private assertOpen(): void {

@@ -539,7 +539,10 @@ export const iterateForTargets = async (args: {
 
 		return result;
 	} finally {
-		await detectionEnvelope.close();
-		await winningEnvelope?.close();
+		try {
+			await winningEnvelope?.close();
+		} finally {
+			await detectionEnvelope.close();
+		}
 	}
 };
