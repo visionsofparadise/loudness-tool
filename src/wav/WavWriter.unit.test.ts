@@ -1,12 +1,14 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createNoise, createSine } from "../utils/testSignals";
 import { WavReader, type AudioBlock } from "./WavReader";
 import { WavWriter } from "./WavWriter";
-import { createNoise, createSine } from "../utils/testSignals";
 import { assertRiffDataSize, type WavBitDepth } from "./utils/wavFormat";
+
+vi.mock("node:fs/promises", { spy: true });
 
 const SAMPLE_RATE = 48000;
 
@@ -89,7 +91,7 @@ const expectChannelsMatch = (
 };
 
 const temporaryNamesOf = async (directory: string): Promise<Array<string>> => {
-	const names = await readdir(directory);
+	const names = await fsPromises.readdir(directory);
 
 	return names.filter((name) => name.endsWith(".tmp"));
 };
@@ -118,11 +120,12 @@ describe("WavWriter", () => {
 	let workingDirectory: string;
 
 	beforeEach(async () => {
-		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-wav-writer-"));
+		workingDirectory = await fsPromises.mkdtemp(join(tmpdir(), "loudness-tool-wav-writer-"));
 	});
 
 	afterEach(async () => {
-		await rm(workingDirectory, { recursive: true, force: true });
+		vi.restoreAllMocks();
+		await fsPromises.rm(workingDirectory, { recursive: true, force: true });
 	});
 
 	it.each([
@@ -267,7 +270,7 @@ describe("WavWriter", () => {
 		await writer.write(channels);
 		await writer.close();
 
-		const bytes = await readFile(path);
+		const bytes = await fsPromises.readFile(path);
 
 		expect(bytes.length % 2).toBe(0);
 		expect(bytes.length).toBe(60);
@@ -282,19 +285,23 @@ describe("WavWriter", () => {
 		expectChannelsMatch(read.channels, channels, "24");
 	});
 
-	it("leaves a non-empty directory destination untouched when rename fails", async () => {
-		const path = join(workingDirectory, "occupied");
+	it("leaves destination file bytes untouched when rename fails", async () => {
+		const path = join(workingDirectory, "existing.wav");
 
-		await mkdir(path);
-		await writeFile(join(path, "keep.txt"), "stay");
+		await fsPromises.writeFile(path, "original-bytes");
 
 		const writer = await WavWriter.create(path, { sampleRate: SAMPLE_RATE, channelCount: 1, bitDepth: "16" });
 
 		await writer.write(createSine(64, 1, SAMPLE_RATE, 440, 0.75));
 
+		const unlinkSpy = vi.spyOn(fsPromises, "unlink");
+
+		vi.spyOn(fsPromises, "rename").mockRejectedValue(new Error("rename failed"));
+
 		await expect(writer.close()).rejects.toThrow(`Failed to replace "${path}" with`);
 
-		expect(await readdir(path)).toEqual(["keep.txt"]);
+		expect(await fsPromises.readFile(path, "utf8")).toBe("original-bytes");
+		expect(unlinkSpy.mock.calls.some((call) => call[0] === path)).toBe(false);
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
 	});
 });
