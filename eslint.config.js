@@ -323,13 +323,6 @@ export default tseslint.config(
 	},
 
 	{
-		files: ["src/cli.ts", "src/commands/**"],
-		rules: {
-			"no-console": "off",
-		},
-	},
-
-	{
 		files: ["**/Components/UI/**/*.tsx"],
 		rules: {
 			"arrow-body-style": "off",

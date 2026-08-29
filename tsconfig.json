@@ -10,7 +10,6 @@
 		"resolveJsonModule": true,
 		"isolatedModules": true,
 		"incremental": true,
-		"tsBuildInfoFile": "tsconfig.tsbuildinfo",
 		"declaration": true,
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
