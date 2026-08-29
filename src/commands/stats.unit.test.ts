@@ -78,6 +78,7 @@ describe("stats", () => {
 		expect(stdout).toMatch(/bit depth\s+32f/);
 		expect(stdout).toMatch(/duration\s+0\.100 s/);
 		expect(stdout).toMatch(/true peak\s+-?\d/);
+		expect(stdout).toMatch(/integrated\s+n\/a/);
 	});
 
 	it("prints one group per file for multiple inputs", async () => {
@@ -113,7 +114,7 @@ describe("stats", () => {
 
 		const [entry] = parsed as Array<Record<string, unknown>>;
 
-		expect(Object.keys(entry ?? {})).toEqual([
+		expect(Object.keys(entry ?? {}).slice(0, 6)).toEqual([
 			"path",
 			"sampleRate",
 			"channelCount",
@@ -121,12 +122,22 @@ describe("stats", () => {
 			"durationSeconds",
 			"truePeakDb",
 		]);
+		expect(Object.keys(entry ?? {})).toEqual([
+			"path",
+			"sampleRate",
+			"channelCount",
+			"bitDepth",
+			"durationSeconds",
+			"truePeakDb",
+			"integratedLufs",
+		]);
 		expect(entry?.path).toBe(inputPath);
 		expect(entry?.sampleRate).toBe(SAMPLE_RATE);
 		expect(entry?.channelCount).toBe(2);
 		expect(entry?.bitDepth).toBe("32f");
 		expect(entry?.durationSeconds).toBe(frameCount / SAMPLE_RATE);
 		expect(typeof entry?.truePeakDb).toBe("number");
+		expect(entry?.integratedLufs).toBeNull();
 	});
 
 	it("reports truePeakDb null and human n/a for a zero-frame file", async () => {
@@ -143,11 +154,17 @@ describe("stats", () => {
 
 		expect(human.exitCode).toBeUndefined();
 		expect(human.stdout).toMatch(/true peak\s+n\/a/);
+		expect(human.stdout).toMatch(/integrated\s+n\/a/);
 
 		const json = await capture(() => stats([inputPath], { json: true }));
-		const parsed = JSON.parse(json.stdout) as Array<{ truePeakDb: number | null; durationSeconds: number }>;
+		const parsed = JSON.parse(json.stdout) as Array<{
+			truePeakDb: number | null;
+			integratedLufs: number | null;
+			durationSeconds: number;
+		}>;
 
 		expect(parsed[0]?.truePeakDb).toBeNull();
+		expect(parsed[0]?.integratedLufs).toBeNull();
 		expect(parsed[0]?.durationSeconds).toBe(0);
 	});
 
@@ -163,6 +180,18 @@ describe("stats", () => {
 
 		expect(parsed[0]?.truePeakDb).toEqual(expect.any(Number));
 		expect(Math.abs((parsed[0]?.truePeakDb ?? 0) - analyticDb)).toBeLessThan(0.01);
+	});
+
+	it("reports a full-scale 997 Hz sine within 0.05 LU of -3.01 LUFS", async () => {
+		const inputPath = join(workingDirectory, "full-scale.wav");
+
+		await writeWav(inputPath, createSine(SAMPLE_RATE * 5, 1, SAMPLE_RATE, 997, 1));
+
+		const { stdout } = await capture(() => stats([inputPath], { json: true }));
+		const parsed = JSON.parse(stdout) as Array<{ integratedLufs: number | null }>;
+
+		expect(parsed[0]?.integratedLufs).toEqual(expect.any(Number));
+		expect(Math.abs((parsed[0]?.integratedLufs ?? 0) - -3.01)).toBeLessThanOrEqual(0.05);
 	});
 
 	it("errors naming an unreadable file, measures the rest, and exits non-zero", async () => {

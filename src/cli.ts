@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { CommanderError, Command } from "commander";
+import { addLufsNormCommand } from "./commands/lufsNorm";
 import { addStatsCommand } from "./commands/stats";
 import { addTpNormCommand } from "./commands/tpNorm";
 
@@ -16,6 +17,7 @@ export const createProgram = (): Command => {
 
 	addStatsCommand(program);
 	addTpNormCommand(program);
+	addLufsNormCommand(program);
 
 	return program;
 };
