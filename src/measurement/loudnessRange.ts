@@ -55,3 +55,22 @@ export const computeLoudnessRange = (shortTerm: Float64Array): number => {
 
 	return (considered[highIndex] ?? 0) - (considered[lowIndex] ?? 0);
 };
+
+export const getLraConsideredStats = (shortTerm: Float64Array): { minimum: number; median: number } => {
+	const considered = consideredLoudnessOf(shortTerm);
+
+	if (considered.length === 0) {
+		return { minimum: Number.POSITIVE_INFINITY, median: Number.POSITIVE_INFINITY };
+	}
+
+	considered.sort((left, right) => left - right);
+
+	const minimum = considered[0] ?? Number.POSITIVE_INFINITY;
+	const middleIndex = considered.length >> 1;
+	const median =
+		considered.length % 2 === 1
+			? (considered[middleIndex] ?? Number.POSITIVE_INFINITY)
+			: ((considered[middleIndex - 1] ?? 0) + (considered[middleIndex] ?? 0)) / 2;
+
+	return { minimum, median };
+};

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { CommanderError, Command } from "commander";
 import { addLufsNormCommand } from "./commands/lufsNorm";
 import { addStatsCommand } from "./commands/stats";
+import { addTargetCommand } from "./commands/target";
 import { addTpNormCommand } from "./commands/tpNorm";
 
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -18,6 +19,7 @@ export const createProgram = (): Command => {
 	addStatsCommand(program);
 	addTpNormCommand(program);
 	addLufsNormCommand(program);
+	addTargetCommand(program);
 
 	return program;
 };

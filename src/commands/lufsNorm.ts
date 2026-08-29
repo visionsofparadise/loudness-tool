@@ -1,9 +1,8 @@
-import { copyFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { InvalidArgumentError, type Command } from "commander";
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
 import { dbToLinear, linearToDb } from "../utils/db";
 import { applyUniformGain } from "./utils/applyUniformGain";
+import { copyUnchanged } from "./utils/copyUnchanged";
 import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
 
 interface LufsNormOptions {
@@ -34,14 +33,6 @@ const measureIntegrated = async (path: string): Promise<number> =>
 
 		return accumulator.finalize();
 	});
-
-const copyUnchanged = async (inputPath: string, outputPath: string): Promise<void> => {
-	if (resolve(inputPath) === resolve(outputPath)) {
-		return;
-	}
-
-	await copyFile(inputPath, outputPath);
-};
 
 export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Promise<void> => {
 	const target = options.target ?? DEFAULT_TARGET_LUFS;

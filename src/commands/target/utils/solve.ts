@@ -1,0 +1,540 @@
+import { BidirectionalIir } from "../../../measurement/BidirectionalIir";
+import { IntegratedLufsAccumulator } from "../../../measurement/IntegratedLufsAccumulator";
+import { computeLoudnessRange } from "../../../measurement/loudnessRange";
+import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
+import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
+import { linearToDb } from "../../../utils/db";
+import { SampleFile } from "../../../utils/SampleFile";
+import { forEachEnvelopedBlock } from "./apply";
+import { gainDbAt } from "./curve";
+import { renderEnvelope } from "./envelope";
+import { windowSamplesFromMs } from "./window";
+import type { Anchors } from "./curve";
+import type { DetectionHistogram } from "./measureSource";
+import type { Scratch } from "../../../utils/Scratch";
+
+export const BOOST_LOWER_BOUND = -30;
+export const BOOST_UPPER_BOUND = 30;
+
+const LINEAR_AMPLITUDE_EPSILON = 1e-12;
+const LIMIT_EPSILON_DB = 0.01;
+const CHECK_GRAIN_DB = 0.01;
+const DEFAULT_MAX_ATTEMPTS = 10;
+const DEFAULT_TOLERANCE = 0.5;
+const MAX_BISECT_ITERATIONS = 50;
+
+export interface IterationAttempt {
+	boost: number;
+	limitDb: number;
+	lufsErr: number;
+	outputLufs: number;
+	outputTruePeakDb: number;
+	outputLra: number;
+	peakGainDb: number;
+	peakErr: number;
+}
+
+export interface IterateResult {
+	bestSmoothedEnvelope: SampleFile;
+	bestB: number;
+	bestLimitDb: number;
+	bestPeakGainDb: number;
+	attempts: ReadonlyArray<IterationAttempt>;
+	converged: boolean;
+	winnerOutputLufs: number | null;
+	winnerOutputTruePeakDb: number | null;
+	winnerOutputLra: number | null;
+}
+
+export const predictOutputLufs = (sourceLufs: number, anchors: Anchors, histogram: DetectionHistogram): number => {
+	const { buckets, bucketMax, totalSamples } = histogram;
+	const bucketCount = buckets.length;
+
+	if (bucketCount === 0 || bucketMax <= 0 || totalSamples === 0) {
+		return -Infinity;
+	}
+
+	if (!Number.isFinite(sourceLufs)) {
+		return -Infinity;
+	}
+
+	const bucketWidth = bucketMax / bucketCount;
+	let weightedGainEnergy = 0;
+	let weightedSourceEnergy = 0;
+
+	for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex++) {
+		const count = buckets[bucketIndex] ?? 0;
+
+		if (count === 0) {
+			continue;
+		}
+
+		const centreLinear = (bucketIndex + 0.5) * bucketWidth;
+
+		if (centreLinear < LINEAR_AMPLITUDE_EPSILON) {
+			continue;
+		}
+
+		const energy = count * centreLinear * centreLinear;
+		const centreDb = 20 * Math.log10(centreLinear);
+		const gainDb = gainDbAt(centreDb, anchors);
+		const gainLinear = Math.pow(10, gainDb / 20);
+
+		weightedSourceEnergy += energy;
+		weightedGainEnergy += energy * gainLinear * gainLinear;
+	}
+
+	if (weightedSourceEnergy <= 0 || weightedGainEnergy <= 0) {
+		return -Infinity;
+	}
+
+	return sourceLufs + 10 * Math.log10(weightedGainEnergy / weightedSourceEnergy);
+};
+
+export const assignPeakGainDb = (boost: number, tpCap: number, neverExpand: boolean): number =>
+	neverExpand ? Math.min(boost, tpCap) : tpCap;
+
+const truePeakResidual = (outputTruePeakDb: number, limitDb: number, peakGainDb: number): number =>
+	outputTruePeakDb - (limitDb + peakGainDb);
+
+export const bisectBForTargetLufs = (args: {
+	sourceLufs: number;
+	targetLufs: number;
+	anchors: Pick<Anchors, "floorDb" | "pivotDb" | "limitDb">;
+	histogram: DetectionHistogram;
+	tpCap: number;
+	neverExpand: boolean;
+	residual: number;
+	tolerance: number;
+}): number => {
+	const { sourceLufs, targetLufs, anchors: anchorBase, histogram, tpCap, neverExpand, residual, tolerance } = args;
+
+	if (!Number.isFinite(sourceLufs)) {
+		return 0;
+	}
+
+	const predictAt = (candidateB: number): number => {
+		const candidateAnchors: Anchors = {
+			floorDb: anchorBase.floorDb,
+			pivotDb: anchorBase.pivotDb,
+			limitDb: anchorBase.limitDb,
+			B: candidateB,
+			peakGainDb: assignPeakGainDb(candidateB, tpCap, neverExpand),
+		};
+
+		return predictOutputLufs(sourceLufs, candidateAnchors, histogram) + residual;
+	};
+
+	let lower = BOOST_LOWER_BOUND;
+	let upper = BOOST_UPPER_BOUND;
+	const lowerLufs = predictAt(lower);
+	const upperLufs = predictAt(upper);
+	const lowerError = lowerLufs - targetLufs;
+	const upperError = upperLufs - targetLufs;
+
+	if (
+		!Number.isFinite(lowerError) ||
+		!Number.isFinite(upperError) ||
+		Math.sign(lowerError) === Math.sign(upperError)
+	) {
+		const lowerAbs = Number.isFinite(lowerError) ? Math.abs(lowerError) : Infinity;
+		const upperAbs = Number.isFinite(upperError) ? Math.abs(upperError) : Infinity;
+
+		return lowerAbs <= upperAbs ? lower : upper;
+	}
+
+	let bestB = lower;
+	let bestAbsError = Math.abs(lowerError);
+	let workingLowerError = lowerError;
+	const subToleranceBracket = tolerance / 100;
+
+	for (let iteration = 0; iteration < MAX_BISECT_ITERATIONS; iteration++) {
+		const mid = 0.5 * (lower + upper);
+		const midError = predictAt(mid) - targetLufs;
+
+		if (Math.abs(midError) < bestAbsError || iteration === 0) {
+			bestB = mid;
+			bestAbsError = Math.abs(midError);
+		}
+
+		if (!Number.isFinite(midError) || Math.sign(midError) === Math.sign(workingLowerError)) {
+			lower = mid;
+			workingLowerError = midError;
+		} else {
+			upper = mid;
+		}
+
+		if (upper - lower < subToleranceBracket) {
+			break;
+		}
+	}
+
+	return bestB;
+};
+
+const grainedDb = (errorDb: number): number => Math.round(errorDb / CHECK_GRAIN_DB) * CHECK_GRAIN_DB;
+
+export const holdsTruePeak = (outputTruePeakDb: number, effectiveTargetTp: number): boolean =>
+	grainedDb(outputTruePeakDb - effectiveTargetTp) <= 0;
+
+export const isLegalAttempt = (
+	outputLufs: number,
+	outputTruePeakDb: number,
+	targetLufs: number,
+	effectiveTargetTp: number,
+): boolean => grainedDb(outputLufs - targetLufs) <= 0 && holdsTruePeak(outputTruePeakDb, effectiveTargetTp);
+
+export const attemptBeatsWinner = (
+	candidate: Pick<IterationAttempt, "outputLufs" | "outputTruePeakDb" | "lufsErr">,
+	winner: Pick<IterationAttempt, "outputLufs" | "outputTruePeakDb" | "lufsErr"> | undefined,
+	targetLufs: number,
+	effectiveTargetTp: number,
+): boolean => {
+	if (winner === undefined) {
+		return true;
+	}
+
+	const candidateLegal = isLegalAttempt(
+		candidate.outputLufs,
+		candidate.outputTruePeakDb,
+		targetLufs,
+		effectiveTargetTp,
+	);
+	const winnerLegal = isLegalAttempt(winner.outputLufs, winner.outputTruePeakDb, targetLufs, effectiveTargetTp);
+
+	if (candidateLegal !== winnerLegal) {
+		return candidateLegal;
+	}
+
+	if (candidateLegal) {
+		return Math.abs(candidate.lufsErr) < Math.abs(winner.lufsErr);
+	}
+
+	const candidateHoldsTp = holdsTruePeak(candidate.outputTruePeakDb, effectiveTargetTp);
+	const winnerHoldsTp = holdsTruePeak(winner.outputTruePeakDb, effectiveTargetTp);
+
+	if (candidateHoldsTp !== winnerHoldsTp) {
+		return candidateHoldsTp;
+	}
+
+	if (candidateHoldsTp) {
+		return Math.abs(candidate.lufsErr) < Math.abs(winner.lufsErr);
+	}
+
+	const candidatePeakAbs = Math.abs(candidate.outputTruePeakDb - effectiveTargetTp);
+	const winnerPeakAbs = Math.abs(winner.outputTruePeakDb - effectiveTargetTp);
+
+	if (candidatePeakAbs !== winnerPeakAbs) {
+		return candidatePeakAbs < winnerPeakAbs;
+	}
+
+	return Math.abs(candidate.lufsErr) < Math.abs(winner.lufsErr);
+};
+
+const nextSearchBoost = (
+	attempts: ReadonlyArray<IterationAttempt>,
+	residualBoost: number,
+	targetLufs: number,
+): number => {
+	let highestUnderBoost: number | undefined;
+	let lowestOverBoost: number | undefined;
+
+	for (const attempt of attempts) {
+		if (attempt.outputLufs <= targetLufs) {
+			if (highestUnderBoost === undefined || attempt.boost > highestUnderBoost) {
+				highestUnderBoost = attempt.boost;
+			}
+		} else if (lowestOverBoost === undefined || attempt.boost < lowestOverBoost) {
+			lowestOverBoost = attempt.boost;
+		}
+	}
+
+	if (highestUnderBoost !== undefined && lowestOverBoost !== undefined && highestUnderBoost < lowestOverBoost) {
+		return 0.5 * (highestUnderBoost + lowestOverBoost);
+	}
+
+	return residualBoost;
+};
+
+const clampBoost = (boost: number): number => {
+	if (!Number.isFinite(boost)) {
+		return 0;
+	}
+
+	if (boost < BOOST_LOWER_BOUND) {
+		return BOOST_LOWER_BOUND;
+	}
+
+	if (boost > BOOST_UPPER_BOUND) {
+		return BOOST_UPPER_BOUND;
+	}
+
+	return boost;
+};
+
+const clampLimit = (limitDb: number, pivotDb: number, sourcePeakDb: number): number => {
+	if (!Number.isFinite(limitDb)) {
+		return sourcePeakDb;
+	}
+
+	const lower = pivotDb + LIMIT_EPSILON_DB;
+
+	if (lower > sourcePeakDb) {
+		return sourcePeakDb;
+	}
+
+	if (limitDb < lower) {
+		return lower;
+	}
+
+	if (limitDb > sourcePeakDb) {
+		return sourcePeakDb;
+	}
+
+	return limitDb;
+};
+
+const measureAttemptOutput = async (args: {
+	inputPath: string;
+	sampleRate: number;
+	channelCount: number;
+	envelope: SampleFile;
+}): Promise<{ outputLufs: number; outputLra: number; outputTruePeakDb: number }> => {
+	const { inputPath, sampleRate, channelCount, envelope } = args;
+	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
+	const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, channelCount);
+	const truePeakAccumulator = new TruePeakAccumulator(channelCount);
+
+	await forEachEnvelopedBlock(inputPath, envelope, (channels, frameCount) => {
+		lufsAccumulator.push(channels, frameCount);
+		shortTermAccumulator.push(channels, frameCount);
+		truePeakAccumulator.push(channels, frameCount);
+	});
+
+	const shortTerm = shortTermAccumulator.finalize();
+
+	return {
+		outputLufs: lufsAccumulator.finalize(),
+		outputLra: shortTerm.length === 0 ? 0 : computeLoudnessRange(shortTerm),
+		outputTruePeakDb: linearToDb(truePeakAccumulator.finalize()),
+	};
+};
+
+export const iterateForTargets = async (args: {
+	inputPath: string;
+	scratch: Scratch;
+	sampleRate: number;
+	channelCount: number;
+	frameCount: number;
+	anchorBase: { floorDb: number | null; pivotDb: number };
+	smoothingMs: number;
+	targetLufs: number;
+	targetTp: number | undefined;
+	limitDbOverride?: number;
+	limitAutoDb: number;
+	sourceLufs: number;
+	sourcePeakDb: number;
+	maxAttempts?: number;
+	tolerance?: number;
+	neverExpand: boolean;
+	histogram: DetectionHistogram;
+	detectionEnvelope: SampleFile;
+	onAttempt?: (attempt: IterationAttempt, attemptIndex: number) => void;
+}): Promise<IterateResult> => {
+	const {
+		inputPath,
+		scratch,
+		sampleRate,
+		channelCount,
+		frameCount,
+		anchorBase,
+		smoothingMs,
+		targetLufs,
+		targetTp,
+		limitDbOverride,
+		limitAutoDb,
+		sourceLufs,
+		sourcePeakDb,
+		maxAttempts = DEFAULT_MAX_ATTEMPTS,
+		tolerance = DEFAULT_TOLERANCE,
+		neverExpand,
+		histogram,
+		detectionEnvelope,
+		onAttempt,
+	} = args;
+
+	if (channelCount === 0 || frameCount === 0) {
+		await detectionEnvelope.close();
+
+		return {
+			bestSmoothedEnvelope: await SampleFile.create(scratch, "empty-envelope"),
+			bestB: 0,
+			bestLimitDb: sourcePeakDb,
+			bestPeakGainDb: 0,
+			attempts: [],
+			converged: false,
+			winnerOutputLufs: null,
+			winnerOutputTruePeakDb: null,
+			winnerOutputLra: null,
+		};
+	}
+
+	const effectiveTargetTp = targetTp ?? sourcePeakDb;
+	let currentLimit: number;
+
+	if (limitDbOverride !== undefined) {
+		currentLimit = clampLimit(limitDbOverride, anchorBase.pivotDb, sourcePeakDb);
+	} else if (Number.isFinite(limitAutoDb)) {
+		currentLimit = clampLimit(limitAutoDb, anchorBase.pivotDb, sourcePeakDb);
+	} else {
+		currentLimit = sourcePeakDb;
+	}
+
+	const tpCap = effectiveTargetTp - currentLimit;
+	const halfWidth = windowSamplesFromMs(smoothingMs, sampleRate);
+	const iir = new BidirectionalIir(smoothingMs, sampleRate);
+	let residual = 0;
+	let tpCapEffective = tpCap;
+	let currentBoost = clampBoost(
+		bisectBForTargetLufs({
+			sourceLufs,
+			targetLufs,
+			anchors: { floorDb: anchorBase.floorDb, pivotDb: anchorBase.pivotDb, limitDb: currentLimit },
+			histogram,
+			tpCap: tpCapEffective,
+			neverExpand,
+			residual,
+			tolerance,
+		}),
+	);
+	const attempts: Array<IterationAttempt> = [];
+	let winningAttempt: IterationAttempt | undefined;
+	let bestBoost = currentBoost;
+	let bestPeakGainDb = assignPeakGainDb(currentBoost, tpCapEffective, neverExpand);
+	let winnerOutputLufs: number | null = null;
+	let winnerOutputTruePeakDb: number | null = null;
+	let winnerOutputLra: number | null = null;
+	let winningEnvelope: SampleFile | undefined;
+
+	try {
+		for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex++) {
+			const currentPeakGainDb = assignPeakGainDb(currentBoost, tpCapEffective, neverExpand);
+			const anchors: Anchors = {
+				floorDb: anchorBase.floorDb,
+				pivotDb: anchorBase.pivotDb,
+				limitDb: currentLimit,
+				B: currentBoost,
+				peakGainDb: currentPeakGainDb,
+			};
+			const predictedLufs = predictOutputLufs(sourceLufs, anchors, histogram);
+			const dest = await SampleFile.create(scratch, `envelope-${attemptIndex}`);
+			let measured: { outputLufs: number; outputLra: number; outputTruePeakDb: number };
+
+			try {
+				await renderEnvelope({
+					detectionEnvelope,
+					dest,
+					scratch,
+					anchors,
+					iir,
+					halfWidth,
+					label: `attempt-${attemptIndex}`,
+				});
+				measured = await measureAttemptOutput({
+					inputPath,
+					sampleRate,
+					channelCount,
+					envelope: dest,
+				});
+			} catch (error: unknown) {
+				await dest.close();
+
+				throw error;
+			}
+
+			const lufsErr = measured.outputLufs - targetLufs;
+			const peakErr = measured.outputTruePeakDb - effectiveTargetTp;
+			const attempt: IterationAttempt = {
+				boost: currentBoost,
+				limitDb: currentLimit,
+				lufsErr,
+				outputLufs: measured.outputLufs,
+				outputTruePeakDb: measured.outputTruePeakDb,
+				outputLra: measured.outputLra,
+				peakGainDb: currentPeakGainDb,
+				peakErr,
+			};
+
+			attempts.push(attempt);
+			onAttempt?.(attempt, attemptIndex);
+
+			if (attemptBeatsWinner(attempt, winningAttempt, targetLufs, effectiveTargetTp)) {
+				winningAttempt = attempt;
+				bestBoost = currentBoost;
+				bestPeakGainDb = currentPeakGainDb;
+				winnerOutputLufs = measured.outputLufs;
+				winnerOutputTruePeakDb = measured.outputTruePeakDb;
+				winnerOutputLra = measured.outputLra;
+
+				if (winningEnvelope !== undefined) {
+					await winningEnvelope.close();
+				}
+
+				winningEnvelope = dest;
+			} else {
+				await dest.close();
+			}
+
+			residual = measured.outputLufs - predictedLufs;
+			tpCapEffective = tpCap - truePeakResidual(measured.outputTruePeakDb, currentLimit, currentPeakGainDb);
+
+			const residualBoost = bisectBForTargetLufs({
+				sourceLufs,
+				targetLufs,
+				anchors: { floorDb: anchorBase.floorDb, pivotDb: anchorBase.pivotDb, limitDb: currentLimit },
+				histogram,
+				tpCap: tpCapEffective,
+				neverExpand,
+				residual,
+				tolerance,
+			});
+			const nextB = nextSearchBoost(attempts, residualBoost, targetLufs);
+			const legalWinnerWithinTolerance =
+				winningAttempt !== undefined &&
+				isLegalAttempt(winningAttempt.outputLufs, winningAttempt.outputTruePeakDb, targetLufs, effectiveTargetTp) &&
+				Math.abs(grainedDb(winningAttempt.lufsErr)) < tolerance;
+			const boostBoundExhausted =
+				(currentBoost === BOOST_UPPER_BOUND && measured.outputLufs < targetLufs) ||
+				(currentBoost === BOOST_LOWER_BOUND && measured.outputLufs > targetLufs);
+
+			if (
+				legalWinnerWithinTolerance ||
+				(boostBoundExhausted && holdsTruePeak(measured.outputTruePeakDb, effectiveTargetTp)) ||
+				attemptIndex === maxAttempts - 1
+			) {
+				break;
+			}
+
+			currentBoost = clampBoost(nextB);
+		}
+
+		const converged =
+			winningAttempt !== undefined &&
+			isLegalAttempt(winningAttempt.outputLufs, winningAttempt.outputTruePeakDb, targetLufs, effectiveTargetTp) &&
+			Math.abs(grainedDb(winningAttempt.lufsErr)) < tolerance;
+
+		return {
+			bestSmoothedEnvelope: winningEnvelope ?? (await SampleFile.create(scratch, "empty-envelope")),
+			bestB: bestBoost,
+			bestLimitDb: currentLimit,
+			bestPeakGainDb,
+			attempts,
+			converged,
+			winnerOutputLufs,
+			winnerOutputTruePeakDb,
+			winnerOutputLra,
+		};
+	} finally {
+		await detectionEnvelope.close();
+	}
+};
