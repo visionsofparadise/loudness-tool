@@ -1,6 +1,6 @@
 {
 	"gitignore": true,
-	"ignores": ["**/.*/**"],
+	"ignores": ["**/.*/**", "specification/**"],
 	"noProgress": true,
 	"noBanner": true,
 	"config": {
