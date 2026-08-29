@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { CommanderError, Command } from "commander";
+import { addCrestCommand } from "./commands/crest";
 import { addLufsNormCommand } from "./commands/lufsNorm";
 import { addStatsCommand } from "./commands/stats";
 import { addTargetCommand } from "./commands/target";
@@ -20,6 +21,7 @@ export const createProgram = (): Command => {
 	addTpNormCommand(program);
 	addLufsNormCommand(program);
 	addTargetCommand(program);
+	addCrestCommand(program);
 
 	return program;
 };

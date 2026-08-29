@@ -10,12 +10,13 @@ describe("cli", () => {
 		expect(createProgram().version()).toBe("0.1.0");
 	});
 
-	it("registers stats, tp-norm, lufs-norm, and target", () => {
+	it("registers stats, tp-norm, lufs-norm, target, and crest", () => {
 		expect(createProgram().commands.map((command) => command.name())).toEqual([
 			"stats",
 			"tp-norm",
 			"lufs-norm",
 			"target",
+			"crest",
 		]);
 	});
 
