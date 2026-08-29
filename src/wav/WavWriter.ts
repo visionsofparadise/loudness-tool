@@ -113,20 +113,13 @@ export class WavWriter {
 		await this.fileHandle.close();
 
 		try {
-			try {
-				await rename(this.temporaryPath, this.destinationPath);
-			} catch {
-				try {
-					await unlink(this.destinationPath);
-					await rename(this.temporaryPath, this.destinationPath);
-				} catch (error) {
-					await unlink(this.temporaryPath).catch(() => undefined);
+			await rename(this.temporaryPath, this.destinationPath);
+		} catch (error) {
+			await unlink(this.temporaryPath).catch(() => undefined);
 
-					throw new Error(`Failed to replace "${this.destinationPath}" with "${this.temporaryPath}"`, {
-						cause: error,
-					});
-				}
-			}
+			throw new Error(`Failed to replace "${this.destinationPath}" with "${this.temporaryPath}"`, {
+				cause: error,
+			});
 		} finally {
 			this.isSettled = true;
 		}

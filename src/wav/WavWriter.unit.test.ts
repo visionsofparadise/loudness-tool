@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -254,5 +254,21 @@ describe("WavWriter", () => {
 		);
 
 		await writer.abort();
+	});
+
+	it("leaves a non-empty directory destination untouched when rename fails", async () => {
+		const path = join(workingDirectory, "occupied");
+
+		await mkdir(path);
+		await writeFile(join(path, "keep.txt"), "stay");
+
+		const writer = await WavWriter.create(path, { sampleRate: SAMPLE_RATE, channelCount: 1, bitDepth: "16" });
+
+		await writer.write(createSine(64, 1, SAMPLE_RATE, 440, 0.75));
+
+		await expect(writer.close()).rejects.toThrow(`Failed to replace "${path}" with`);
+
+		expect(await readdir(path)).toEqual(["keep.txt"]);
+		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
 	});
 });
