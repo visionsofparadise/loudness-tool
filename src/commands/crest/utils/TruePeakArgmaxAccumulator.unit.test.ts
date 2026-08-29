@@ -67,21 +67,17 @@ describe("TruePeakArgmaxAccumulator", () => {
 	});
 
 	it("keeps the first of two equal peaks", () => {
-		const first = new Float64Array(32).fill(0.8);
-		const second = new Float64Array(32).fill(0.8);
-		const whole = new Float64Array(64);
+		const input = new Float64Array(64);
 
-		whole.set(first, 0);
-		whole.set(second, 32);
+		input[8] = 0.9;
+		input[40] = 0.9;
 
 		const accumulator = new TruePeakArgmaxAccumulator(1);
 
-		accumulator.push([whole], whole.length);
+		accumulator.push([input], input.length);
 
-		const result = accumulator.finalize();
-
-		expect(result.peakInputSample).toBeGreaterThanOrEqual(0);
-		expect(result.peakInputSample).toBeLessThan(64);
+		expect(accumulator.finalize().peakInputSample).toBeGreaterThanOrEqual(8);
+		expect(accumulator.finalize().peakInputSample).toBeLessThan(24);
 	});
 
 	it("finalize is idempotent", () => {

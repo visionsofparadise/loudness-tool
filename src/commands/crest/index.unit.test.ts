@@ -113,6 +113,32 @@ const makeImpulses = (seconds: number, perSecond: number, dbfs: number, bedDbfs:
 	return samples;
 };
 
+const makeHeadroomBearing = (frameCount: number, fundamentalHz = 100, harmonics = 40): Float64Array => {
+	const samples = new Float64Array(frameCount);
+	let peak = 0;
+
+	for (let index = 0; index < frameCount; index++) {
+		let value = 0;
+
+		for (let harmonic = 1; harmonic <= harmonics; harmonic++) {
+			value += Math.cos((2 * Math.PI * harmonic * fundamentalHz * index) / SAMPLE_RATE);
+		}
+
+		samples[index] = value;
+		peak = Math.max(peak, Math.abs(value));
+	}
+
+	if (peak > 0) {
+		const scale = 0.9 / peak;
+
+		for (let index = 0; index < frameCount; index++) {
+			samples[index] = (samples[index] ?? 0) * scale;
+		}
+	}
+
+	return samples;
+};
+
 const makeMultitone = (frameCount: number): Float64Array => {
 	const out = new Float64Array(frameCount);
 	const frequencies = [110, 220, 330, 440, 550, 660, 880, 1320];
@@ -235,13 +261,13 @@ describe("crest", () => {
 		const inputPath = join(workingDirectory, "impulses.wav");
 		const outputPath = join(workingDirectory, "impulses-out.wav");
 
-		await writeWav(inputPath, [makeImpulses(1, 8, -6, -40)]);
+		await writeWav(inputPath, [makeHeadroomBearing(SAMPLE_RATE)]);
 
 		const { stdout } = await capture(() => crest(inputPath, { output: outputPath }));
 		const sourceTp = await measureTruePeakDb(inputPath);
 		const outputTp = await measureTruePeakDb(outputPath);
 
-		expect(outputTp).toBeLessThanOrEqual(sourceTp + 1e-6);
+		expect(outputTp).toBeLessThan(sourceTp - 0.5);
 		expect(stdout).toMatch(/source true peak/);
 		expect(stdout).toMatch(/output true peak/);
 		expect(stdout).toMatch(/delta/);
