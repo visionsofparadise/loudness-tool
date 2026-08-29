@@ -163,6 +163,50 @@ describe.each(VARIANTS)("SlidingWindow$nameStream", (variant) => {
 	});
 });
 
+describe.each(VARIANTS)("SlidingWindow$nameStream strictly monotone runs", (variant) => {
+	const halfWidths = [1, 17] as const;
+
+	const makeRamp = (length: number, ascending: boolean): Float64Array => {
+		const input = new Float64Array(length);
+
+		for (let frameIndex = 0; frameIndex < length; frameIndex++) {
+			input[frameIndex] = ascending ? frameIndex + 1 : length - frameIndex;
+		}
+
+		return input;
+	};
+
+	for (const halfWidth of halfWidths) {
+		const length = 8 * (2 * halfWidth + 1);
+
+		for (const chunkSize of [1, 3, length]) {
+			it(`strictly decreasing matches the naive windowed extreme (halfWidth ${halfWidth}, chunk ${chunkSize})`, () => {
+				const input = makeRamp(length, false);
+				const expected = slidingWindowNaive(input, halfWidth, variant);
+				const actual = runStreaming(input, halfWidth, chunkSize, variant);
+
+				expect(actual.length).toBe(expected.length);
+
+				for (let frameIndex = 0; frameIndex < expected.length; frameIndex++) {
+					expect(actual[frameIndex]).toBe(expected[frameIndex]);
+				}
+			});
+
+			it(`strictly increasing matches the naive windowed extreme (halfWidth ${halfWidth}, chunk ${chunkSize})`, () => {
+				const input = makeRamp(length, true);
+				const expected = slidingWindowNaive(input, halfWidth, variant);
+				const actual = runStreaming(input, halfWidth, chunkSize, variant);
+
+				expect(actual.length).toBe(expected.length);
+
+				for (let frameIndex = 0; frameIndex < expected.length; frameIndex++) {
+					expect(actual[frameIndex]).toBe(expected[frameIndex]);
+				}
+			});
+		}
+	}
+});
+
 describe("SlidingWindowMinStream", () => {
 	it("spike-down in a flat-high region equals the spike within halfWidth", () => {
 		const length = 200;
