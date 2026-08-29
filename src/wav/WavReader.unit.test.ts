@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BLOCK_FRAMES, WavReader, type AudioBlock } from "./WavReader";
 import { WavWriter } from "./WavWriter";
 import { bytesPerSampleOf, encodeSample } from "./utils/sampleCodec";
@@ -123,24 +123,28 @@ const writeRf64Wav = async (
 		channelCount: number;
 		bitDepth: WavBitDepth;
 		channels: ReadonlyArray<Float64Array>;
+		ds64DataSize?: number;
+		extraBytes?: number;
 	},
 ): Promise<void> => {
 	const data = encodePlanar(options.channels, options.bitDepth);
+	const extraBytes = options.extraBytes ?? 0;
 	const headerSize = 80;
-	const file = Buffer.alloc(headerSize + data.length);
+	const file = Buffer.alloc(headerSize + data.length + extraBytes);
 	const bytesPerSample = bytesPerSampleOf(options.bitDepth);
 	const blockAlign = options.channelCount * bytesPerSample;
 	const bitsPerSample = bytesPerSample * 8;
 	const audioFormat = options.bitDepth === "32f" ? 3 : 1;
 	const frameCount = options.channels[0]?.length ?? 0;
+	const ds64DataSize = options.ds64DataSize ?? data.length;
 
 	file.write("RF64", 0);
 	file.writeUInt32LE(0xffffffff, 4);
 	file.write("WAVE", 8);
 	file.write("ds64", 12);
 	file.writeUInt32LE(28, 16);
-	file.writeBigUInt64LE(BigInt(headerSize - 8 + data.length), 20);
-	file.writeBigUInt64LE(BigInt(data.length), 28);
+	file.writeBigUInt64LE(BigInt(headerSize - 8 + data.length + extraBytes), 20);
+	file.writeBigUInt64LE(BigInt(ds64DataSize), 28);
 	file.writeBigUInt64LE(BigInt(frameCount), 36);
 	file.writeUInt32LE(0, 44);
 	file.write("fmt ", 48);
@@ -217,6 +221,7 @@ describe("WavReader", () => {
 	});
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		await rm(workingDirectory, { recursive: true, force: true });
 	});
 
@@ -496,6 +501,87 @@ describe("WavReader", () => {
 		});
 
 		await expect(WavReader.open(path)).rejects.toThrow(/Invalid WAV file: blockAlign 2/);
+	});
+
+	it("rejects a file whose channelCount is 0 with a named Invalid WAV file error", async () => {
+		const path = join(workingDirectory, "zero-channels.wav");
+
+		await writeRiffWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 0,
+			bitDepth: "16",
+			channels: [],
+		});
+
+		await expect(WavReader.open(path)).rejects.toThrow(/Invalid WAV file: channelCount 0/);
+	});
+
+	it("rejects a file whose sampleRate is 0 with a named Invalid WAV file error", async () => {
+		const path = join(workingDirectory, "zero-rate.wav");
+
+		await writeRiffWav(path, {
+			sampleRate: 0,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: createRamp(8, 1),
+		});
+
+		await expect(WavReader.open(path)).rejects.toThrow(/Invalid WAV file: sampleRate 0/);
+	});
+
+	it("takes min(ds64, bytes present) for RF64 rather than the 0xFFFFFFFF data-chunk sentinel", async () => {
+		const path = join(workingDirectory, "rf64-ds64-clamp.wav");
+		const frameCount = 64;
+		const bytesPerFrame = 2 * bytesPerSampleOf("16");
+		const ds64Frames = 32;
+
+		await writeRf64Wav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 2,
+			bitDepth: "16",
+			channels: createRamp(frameCount, 2),
+			ds64DataSize: ds64Frames * bytesPerFrame,
+			extraBytes: ds64Frames * bytesPerFrame,
+		});
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(ds64Frames);
+	});
+
+	it("caps the fmt read at 64 bytes", async () => {
+		const path = join(workingDirectory, "large-fmt.wav");
+		const channels = createRamp(8, 1);
+		const data = encodePlanar(channels, "16");
+		const fmtChunkSize = 1000;
+		const headerSize = 12 + 8 + fmtChunkSize + 8;
+		const file = Buffer.alloc(headerSize + data.length);
+		const blockAlign = bytesPerSampleOf("16");
+
+		file.write("RIFF", 0);
+		file.writeUInt32LE(headerSize - 8 + data.length, 4);
+		file.write("WAVE", 8);
+		file.write("fmt ", 12);
+		file.writeUInt32LE(fmtChunkSize, 16);
+		file.writeUInt16LE(1, 20);
+		file.writeUInt16LE(1, 22);
+		file.writeUInt32LE(SAMPLE_RATE, 24);
+		file.writeUInt32LE(SAMPLE_RATE * blockAlign, 28);
+		file.writeUInt16LE(blockAlign, 32);
+		file.writeUInt16LE(16, 34);
+		file.write("data", 12 + 8 + fmtChunkSize);
+		file.writeUInt32LE(data.length, 12 + 8 + fmtChunkSize + 4);
+		data.copy(file, headerSize);
+
+		await writeFile(path, file);
+
+		const allocSpy = vi.spyOn(Buffer, "alloc");
+		const reader = await WavReader.open(path);
+
+		await reader.close();
+
+		expect(allocSpy.mock.calls.some((call) => call[0] === 64)).toBe(true);
+		expect(allocSpy.mock.calls.some((call) => call[0] === fmtChunkSize)).toBe(false);
 	});
 
 	it("rejects WAVE_FORMAT_EXTENSIBLE when the fmt chunk is too short to read the SubFormat GUID", async () => {
