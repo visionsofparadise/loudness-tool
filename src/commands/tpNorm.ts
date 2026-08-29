@@ -5,7 +5,7 @@ import { measureTruePeak } from "./utils/measureTruePeak";
 
 interface TpNormOptions {
 	readonly output: string;
-	readonly target?: number;
+	readonly tp?: number;
 }
 
 const LABEL_WIDTH = 16;
@@ -16,14 +16,14 @@ const parseTargetDb = (value: string): number => {
 	const parsed = Number(value);
 
 	if (!Number.isFinite(parsed) || parsed >= 0) {
-		throw new InvalidArgumentError(`target must be < 0, received ${value}`);
+		throw new InvalidArgumentError(`tp must be < 0, received ${value}`);
 	}
 
 	return parsed;
 };
 
 export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise<void> => {
-	const target = options.target ?? -1;
+	const target = options.tp ?? -1;
 	const measurement = await measureTruePeak(inputPath);
 	const gain = measurement.truePeak <= 0 ? 1 : dbToLinear(target - linearToDb(measurement.truePeak));
 
@@ -48,6 +48,6 @@ export const addTpNormCommand = (program: Command): void => {
 		.description("Normalize a WAV file to a true-peak target")
 		.argument("<input>", "input WAV path")
 		.requiredOption("-o, --output <path>", "output WAV path")
-		.option("--target <dBTP>", "target true peak in dBTP", parseTargetDb, -1)
+		.option("--tp <dBTP>", "target true peak in dBTP", parseTargetDb, -1)
 		.action(tpNorm);
 };

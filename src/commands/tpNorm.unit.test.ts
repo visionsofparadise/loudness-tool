@@ -185,7 +185,7 @@ describe("tp-norm", () => {
 
 		await writeWav(inputPath, createSine(12000, 1, SAMPLE_RATE, 997, 1));
 
-		const stdout = await captureStdout(() => tpNorm(inputPath, { output: outputPath, target }));
+		const stdout = await captureStdout(() => tpNorm(inputPath, { output: outputPath, tp: target }));
 		const measuredDb = linearToDb(await measureFileIndependent(outputPath));
 
 		expect(Math.abs(measuredDb - target)).toBeLessThan(0.01);
@@ -201,7 +201,7 @@ describe("tp-norm", () => {
 
 		await writeWav(inputPath, createSine(12000, 1, SAMPLE_RATE, 997, 0.25));
 
-		await captureStdout(() => tpNorm(inputPath, { output: outputPath, target }));
+		await captureStdout(() => tpNorm(inputPath, { output: outputPath, tp: target }));
 
 		expect(Math.abs(linearToDb(await measureFileIndependent(outputPath)) - target)).toBeLessThan(0.01);
 	});
@@ -212,7 +212,7 @@ describe("tp-norm", () => {
 		const silence = [new Float64Array(64)];
 
 		await writeWav(inputPath, silence);
-		await captureStdout(() => tpNorm(inputPath, { output: outputPath, target: -1 }));
+		await captureStdout(() => tpNorm(inputPath, { output: outputPath, tp: -1 }));
 
 		const output = await readAll(outputPath);
 
@@ -226,19 +226,15 @@ describe("tp-norm", () => {
 		const target = -1;
 
 		await writeWav(inputPath, createSine(4800, 2, SAMPLE_RATE, 997, 0.5));
-		await captureStdout(() => tpNorm(inputPath, { output: inputPath, target }));
+		await captureStdout(() => tpNorm(inputPath, { output: inputPath, tp: target }));
 
 		expect(Math.abs(linearToDb(await measureFileIndependent(inputPath)) - target)).toBeLessThan(0.01);
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
 	});
 
 	it("rejects a target that is not < 0", async () => {
-		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--target", "0"])).rejects.toThrow(
-			/target must be < 0/,
-		);
-		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--target", "1"])).rejects.toThrow(
-			/target must be < 0/,
-		);
+		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--tp", "0"])).rejects.toThrow(/tp must be < 0/);
+		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--tp", "1"])).rejects.toThrow(/tp must be < 0/);
 	});
 
 	it("leaves the destination untouched when a write fails", async () => {
@@ -261,7 +257,7 @@ describe("tp-norm", () => {
 			throw new Error("injected write failure");
 		});
 
-		await expect(tpNorm(inputPath, { output: outputPath, target: -1 })).rejects.toThrow("injected write failure");
+		await expect(tpNorm(inputPath, { output: outputPath, tp: -1 })).rejects.toThrow("injected write failure");
 
 		expect(existsSync(outputPath)).toBe(true);
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);

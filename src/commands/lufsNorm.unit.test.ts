@@ -249,7 +249,9 @@ describe("lufs-norm", () => {
 
 		await writeWav(inputPath, createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-20)));
 
-		const { stdout, stderr, exitCode } = await capture(() => lufsNorm(inputPath, { output: outputPath, target }));
+		const { stdout, stderr, exitCode } = await capture(() =>
+			lufsNorm(inputPath, { output: outputPath, lufs: target }),
+		);
 		const measured = await measureFileIndependent(outputPath);
 
 		expect(exitCode).toBeUndefined();
@@ -266,9 +268,7 @@ describe("lufs-norm", () => {
 
 		await writeWav(inputPath, [new Float64Array(SAMPLE_RATE * 2)]);
 
-		const { stdout, stderr, exitCode } = await capture(() =>
-			lufsNorm(inputPath, { output: outputPath, target: -16 }),
-		);
+		const { stdout, stderr, exitCode } = await capture(() => lufsNorm(inputPath, { output: outputPath, lufs: -16 }));
 		const inputBytes = await readFile(inputPath);
 		const outputBytes = await readFile(outputPath);
 
@@ -284,7 +284,7 @@ describe("lufs-norm", () => {
 
 		await writeWav(inputPath, createSine(64, 1, SAMPLE_RATE, 997, 1));
 
-		const { stderr, exitCode } = await capture(() => lufsNorm(inputPath, { output: outputPath, target: -16 }));
+		const { stderr, exitCode } = await capture(() => lufsNorm(inputPath, { output: outputPath, lufs: -16 }));
 
 		expect(exitCode).toBeUndefined();
 		expect(stderr).toMatch(/no measurable loudness/);
@@ -296,7 +296,7 @@ describe("lufs-norm", () => {
 		const target = -16;
 
 		await writeWav(inputPath, createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-20)));
-		await capture(() => lufsNorm(inputPath, { output: inputPath, target }));
+		await capture(() => lufsNorm(inputPath, { output: inputPath, lufs: target }));
 
 		expect(Math.abs((await measureFileIndependent(inputPath)) - target)).toBeLessThan(0.1);
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
@@ -308,7 +308,7 @@ describe("lufs-norm", () => {
 		await writeWav(inputPath, [new Float64Array(SAMPLE_RATE)]);
 
 		const original = await readFile(inputPath);
-		const { stderr, exitCode } = await capture(() => lufsNorm(inputPath, { output: inputPath, target: -16 }));
+		const { stderr, exitCode } = await capture(() => lufsNorm(inputPath, { output: inputPath, lufs: -16 }));
 
 		expect(exitCode).toBeUndefined();
 		expect(stderr).toMatch(/no measurable loudness/);
@@ -318,11 +318,11 @@ describe("lufs-norm", () => {
 	});
 
 	it("rejects a non-finite target", async () => {
-		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--target", "Infinity"])).rejects.toThrow(
-			/target must be finite/,
+		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--lufs", "Infinity"])).rejects.toThrow(
+			/lufs must be finite/,
 		);
-		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--target", "abc"])).rejects.toThrow(
-			/target must be finite/,
+		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--lufs", "abc"])).rejects.toThrow(
+			/lufs must be finite/,
 		);
 	});
 });

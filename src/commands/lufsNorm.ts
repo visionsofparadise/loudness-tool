@@ -7,7 +7,7 @@ import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
 
 interface LufsNormOptions {
 	readonly output: string;
-	readonly target?: number;
+	readonly lufs?: number;
 }
 
 const LABEL_WIDTH = 18;
@@ -19,7 +19,7 @@ const parseTargetLufs = (value: string): number => {
 	const parsed = Number(value);
 
 	if (!Number.isFinite(parsed)) {
-		throw new InvalidArgumentError(`target must be finite, received ${value}`);
+		throw new InvalidArgumentError(`lufs must be finite, received ${value}`);
 	}
 
 	return parsed;
@@ -35,7 +35,7 @@ const measureIntegrated = async (path: string): Promise<number> =>
 	});
 
 export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Promise<void> => {
-	const target = options.target ?? DEFAULT_TARGET_LUFS;
+	const target = options.lufs ?? DEFAULT_TARGET_LUFS;
 	const integrated = await measureIntegrated(inputPath);
 
 	if (!Number.isFinite(integrated)) {
@@ -65,6 +65,6 @@ export const addLufsNormCommand = (program: Command): void => {
 	command.description("Normalize a WAV file to an integrated-loudness target");
 	command.argument("<input>", "input WAV path");
 	command.requiredOption("-o, --output <path>", "output WAV path");
-	command.option("--target <LUFS>", "target integrated loudness in LUFS", parseTargetLufs, DEFAULT_TARGET_LUFS);
+	command.option("--lufs <LUFS>", "target integrated loudness in LUFS", parseTargetLufs, DEFAULT_TARGET_LUFS);
 	command.action(lufsNorm);
 };
