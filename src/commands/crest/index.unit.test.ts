@@ -207,11 +207,35 @@ describe("crest", () => {
 			/smoothing must be >= 0/,
 		);
 		await expect(parseProgram(["crest", "in.wav", "-o", "out.wav", "--frame-size", "1000"])).rejects.toThrow(
-			/frame-size must be a power of two/,
+			/frame-size must be a power of two >= 4/,
 		);
 		await expect(parseProgram(["crest", "in.wav", "-o", "out.wav", "--frame-size", "1.5"])).rejects.toThrow(
-			/frame-size must be a power of two/,
+			/frame-size must be a power of two >= 4/,
 		);
+		await expect(parseProgram(["crest", "in.wav", "-o", "out.wav", "--frame-size", "6442450944"])).rejects.toThrow(
+			/frame-size must be a power of two >= 4/,
+		);
+		await expect(
+			parseProgram(["crest", "in.wav", "-o", "out.wav", "--frame-size", String(2 ** 51 + 1)]),
+		).rejects.toThrow(/frame-size must be a power of two >= 4/);
+		await expect(parseProgram(["crest", "in.wav", "-o", "out.wav", "--frame-size", "2"])).rejects.toThrow(
+			/frame-size must be a power of two >= 4/,
+		);
+		await expect(crest("in.wav", { output: "out.wav", frameSize: 2 })).rejects.toThrow(
+			/frame-size must be a power of two >= 4/,
+		);
+	});
+
+	it("accepts a frame size of 4", async () => {
+		const inputPath = join(workingDirectory, "frame4.wav");
+		const outputPath = join(workingDirectory, "frame4-out.wav");
+
+		await writeWav(inputPath, [new Float64Array(64).fill(0.2)]);
+		await capture(async () => {
+			await parseProgram(["crest", inputPath, "-o", outputPath, "--frame-size", "4"]);
+		});
+
+		expect(existsSync(outputPath)).toBe(true);
 	});
 
 	it("preserves the magnitude spectrum of a multitone within tolerance", async () => {

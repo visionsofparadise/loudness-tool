@@ -1,2 +1,2 @@
 export const isPowerOfTwo = (value: number): boolean =>
-	Number.isInteger(value) && value > 0 && (value & (value - 1)) === 0;
+	Number.isSafeInteger(value) && value > 0 && 2 ** Math.round(Math.log2(value)) === value;

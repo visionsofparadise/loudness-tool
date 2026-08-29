@@ -44,8 +44,8 @@ const parseSmoothing = (value: string): number => {
 const parseFrameSize = (value: string): number => {
 	const parsed = Number(value);
 
-	if (!isPowerOfTwo(parsed)) {
-		throw new InvalidArgumentError(`frame-size must be a power of two, received ${value}`);
+	if (!isPowerOfTwo(parsed) || parsed < 4) {
+		throw new InvalidArgumentError(`frame-size must be a power of two >= 4, received ${value}`);
 	}
 
 	return parsed;
@@ -107,6 +107,11 @@ const measureSourcePeak = async (
 export const crest = async (inputPath: string, options: CrestOptions): Promise<void> => {
 	const smoothingMs = options.smoothing ?? DEFAULT_SMOOTHING_MS;
 	const frameSize = options.frameSize ?? DEFAULT_FRAME_SIZE;
+
+	if (!isPowerOfTwo(frameSize) || frameSize < 4) {
+		throw new InvalidArgumentError(`frame-size must be a power of two >= 4, received ${frameSize}`);
+	}
+
 	const hopSize = hopSizeOf(frameSize);
 	const source = await measureSourcePeak(inputPath);
 

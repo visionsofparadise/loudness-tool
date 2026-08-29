@@ -83,9 +83,12 @@ const energyOf = (real: ArrayLike<number>, imag: ArrayLike<number>): number => {
 const oracleToleranceOf = (size: number): number => (size >= 1024 ? 1e-8 : 1e-10);
 
 describe("Fft validation", () => {
-	it.each([0, -1, 1.5, 3, 6, 7, Number.POSITIVE_INFINITY, Number.NaN])("rejects invalid size %s", (size) => {
-		expect(() => new Fft(size)).toThrow("positive power of two");
-	});
+	it.each([0, -1, 1.5, 3, 6, 7, 6442450944, 2 ** 51 + 1, Number.POSITIVE_INFINITY, Number.NaN])(
+		"rejects invalid size %s",
+		(size) => {
+			expect(() => new Fft(size)).toThrow("positive power of two");
+		},
+	);
 
 	it("allows size one", () => {
 		const fft = new Fft(1);

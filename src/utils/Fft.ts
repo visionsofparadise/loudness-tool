@@ -2,7 +2,7 @@
 // Radix-2 transforms follow Cooley and Tukey, "An Algorithm for the Machine Calculation of Complex Fourier Series" (1965).
 
 const isPositivePowerOfTwo = (value: number): boolean =>
-	Number.isInteger(value) && value > 0 && (value & (value - 1)) === 0;
+	Number.isSafeInteger(value) && value > 0 && 2 ** Math.round(Math.log2(value)) === value;
 
 const twiddlesOf = (size: number): { readonly real: Float64Array; readonly imaginary: Float64Array } => {
 	const real = new Float64Array(Math.max(0, size - 1));
