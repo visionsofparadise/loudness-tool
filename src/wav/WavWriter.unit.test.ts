@@ -104,10 +104,10 @@ describe("assertRiffDataSize", () => {
 		}).not.toThrow();
 	});
 
-	it("throws past the RIFF payload ceiling naming the 0xffffffff limit", () => {
+	it("throws past the RIFF payload ceiling naming the payload limit", () => {
 		expect(() => {
 			assertRiffDataSize(0xffffffff - 36 + 1);
-		}).toThrow(/0xffffffff|4294967295/);
+		}).toThrow(/4294967259|payload ceiling/);
 	});
 });
 

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { createProgram } from "./cli";
+import { describe, expect, it, vi } from "vitest";
+import { createProgram, runProgram } from "./cli";
 
 describe("cli", () => {
 	it("names the program loudness-tool", () => {
@@ -12,5 +12,27 @@ describe("cli", () => {
 
 	it("registers convert", () => {
 		expect(createProgram().commands.map((command) => command.name())).toEqual(["convert"]);
+	});
+
+	it("prints action failures as one-line errors", async () => {
+		const writes: Array<string> = [];
+		const write = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+			writes.push(String(chunk));
+
+			return true;
+		});
+		const previousExitCode = process.exitCode;
+
+		process.exitCode = undefined;
+
+		try {
+			await runProgram(["node", "loudness-tool", "convert", "missing.wav", "-o", "out.wav"]);
+
+			expect(process.exitCode).toBe(1);
+			expect(writes.join("")).toMatch(/^error: /);
+		} finally {
+			write.mockRestore();
+			process.exitCode = previousExitCode;
+		}
 	});
 });
