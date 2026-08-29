@@ -273,9 +273,15 @@ describe("tp-norm", () => {
 		const tiny = new Float64Array(256).fill(1e-12);
 
 		await writeWav(inputPath, [tiny]);
-		await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
+
+		const { stdout } = await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
 
 		expect(Math.abs((await measureFileIndependent(outputPath)) - dbToLinear(target))).toBeLessThan(1e-6);
+		expect(stdout).not.toMatch(/-200\.00 dBTP/);
+
+		const reported = stdout.match(/source true peak\s+(-?\d+\.\d+) dBTP/);
+
+		expect(Number(reported?.[1])).toBeLessThan(-220);
 	});
 
 	it("supports in-place -o <input>", async () => {

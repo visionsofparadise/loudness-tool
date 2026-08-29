@@ -1,5 +1,5 @@
 import { InvalidArgumentError, type Command } from "commander";
-import { dbToLinear, linearToDb } from "../utils/db";
+import { dbToLinear } from "../utils/db";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { copyUnchanged } from "./utils/copyUnchanged";
 import { measureTruePeak } from "./utils/measureTruePeak";
@@ -48,8 +48,8 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 
 	await applyUniformGain(inputPath, options.output, gain);
 
-	const sourceTpDb = linearToDb(measurement.truePeak);
-	const gainDb = linearToDb(gain);
+	const sourceTpDb = 20 * Math.log10(measurement.truePeak);
+	const gainDb = 20 * Math.log10(gain);
 
 	process.stdout.write(
 		`${[

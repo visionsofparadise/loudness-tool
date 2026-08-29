@@ -1,7 +1,7 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
-import { dbToLinear, linearToDb } from "../utils/db";
+import { dbToLinear } from "../utils/db";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { copyUnchanged } from "./utils/copyUnchanged";
 import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
@@ -71,7 +71,7 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 
 	const gainDb = target - measurement.integratedLufs;
 	const gain = dbToLinear(gainDb);
-	const sourceTpDb = linearToDb(measurement.truePeak);
+	const sourceTpDb = 20 * Math.log10(Math.max(measurement.truePeak, 0));
 	const outputTruePeakDb = sourceTpDb + gainDb;
 
 	await applyUniformGain(inputPath, options.output, gain);
