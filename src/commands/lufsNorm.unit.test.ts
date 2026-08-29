@@ -259,6 +259,7 @@ describe("lufs-norm", () => {
 		expect(Math.abs(measured - target)).toBeLessThan(0.1);
 		expect(stdout).toMatch(/source integrated/);
 		expect(stdout).toMatch(/target\s+-16\.00 LUFS/);
+		expect(stdout).toMatch(/output true peak/);
 		expect(stdout).toContain(outputPath);
 	});
 
@@ -317,12 +318,51 @@ describe("lufs-norm", () => {
 		expect(existsSync(inputPath)).toBe(true);
 	});
 
-	it("rejects a non-finite target", async () => {
+	it("rejects a target outside [-50, 0] at the CLI parser", async () => {
+		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--lufs", "6"])).rejects.toThrow(
+			/lufs must be in \[-50, 0\]/,
+		);
+		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--lufs", "-51"])).rejects.toThrow(
+			/lufs must be in \[-50, 0\]/,
+		);
 		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--lufs", "Infinity"])).rejects.toThrow(
-			/lufs must be finite/,
+			/lufs must be in \[-50, 0\]/,
 		);
 		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--lufs", "abc"])).rejects.toThrow(
-			/lufs must be finite/,
+			/lufs must be in \[-50, 0\]/,
 		);
+	});
+
+	it("rejects a target outside [-50, 0] at the exported function", async () => {
+		await expect(lufsNorm("in.wav", { output: "out.wav", lufs: 6 })).rejects.toThrow(/lufs must be in \[-50, 0\]/);
+		await expect(lufsNorm("in.wav", { output: "out.wav", lufs: -51 })).rejects.toThrow(/lufs must be in \[-50, 0\]/);
+	});
+
+	it("accepts the [-50, 0] endpoints", async () => {
+		const inputPath = join(workingDirectory, "bounds.wav");
+		const minus50Path = join(workingDirectory, "bounds-minus50.wav");
+		const zeroPath = join(workingDirectory, "bounds-zero.wav");
+
+		await writeWav(inputPath, createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-20)));
+		await capture(async () => {
+			await parseProgram(["lufs-norm", inputPath, "-o", minus50Path, "--lufs", "-50"]);
+		});
+		await capture(() => lufsNorm(inputPath, { output: zeroPath, lufs: 0 }));
+
+		expect(Math.abs((await measureFileIndependent(minus50Path)) - -50)).toBeLessThan(0.1);
+		expect(Math.abs((await measureFileIndependent(zeroPath)) - 0)).toBeLessThan(0.1);
+	});
+
+	it("warns when predicted output true peak exceeds 0 dBTP", async () => {
+		const inputPath = join(workingDirectory, "boost.wav");
+		const outputPath = join(workingDirectory, "boost-out.wav");
+
+		await writeWav(inputPath, createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-20)));
+
+		const { stdout, stderr } = await capture(() => lufsNorm(inputPath, { output: outputPath, lufs: 0 }));
+
+		expect(stdout).toMatch(/output true peak/);
+		expect(stderr).toMatch(/warning: predicted output true peak/);
+		expect(stderr).toMatch(/exceeds 0 dBTP/);
 	});
 });

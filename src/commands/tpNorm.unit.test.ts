@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../cli";
-import { linearToDb } from "../utils/db";
+import { dbToLinear, linearToDb } from "../utils/db";
 import { createSine } from "../utils/testSignals";
 import { WavReader, type AudioBlock } from "../wav/WavReader";
 import { WavWriter } from "../wav/WavWriter";
@@ -125,10 +125,16 @@ const writeWav = async (path: string, channels: Array<Float64Array>): Promise<vo
 
 const measureFileIndependent = async (path: string): Promise<number> => measureIndependent(await readAll(path));
 
-const captureStdout = async (run: () => Promise<void>): Promise<string> => {
+const capture = async (run: () => Promise<void>): Promise<{ stdout: string; stderr: string }> => {
 	const stdout: Array<string> = [];
+	const stderr: Array<string> = [];
 	const writeOut = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
 		stdout.push(String(chunk));
+
+		return true;
+	});
+	const writeErr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+		stderr.push(String(chunk));
 
 		return true;
 	});
@@ -136,10 +142,33 @@ const captureStdout = async (run: () => Promise<void>): Promise<string> => {
 	try {
 		await run();
 
-		return stdout.join("");
+		return { stdout: stdout.join(""), stderr: stderr.join("") };
 	} finally {
 		writeOut.mockRestore();
+		writeErr.mockRestore();
 	}
+};
+
+const writeUnsigned8BitSilence = async (path: string, frameCount: number): Promise<void> => {
+	const dataSize = frameCount;
+	const file = Buffer.alloc(44 + dataSize);
+
+	file.write("RIFF", 0);
+	file.writeUInt32LE(36 + dataSize, 4);
+	file.write("WAVE", 8);
+	file.write("fmt ", 12);
+	file.writeUInt32LE(16, 16);
+	file.writeUInt16LE(1, 20);
+	file.writeUInt16LE(1, 22);
+	file.writeUInt32LE(SAMPLE_RATE, 24);
+	file.writeUInt32LE(SAMPLE_RATE, 28);
+	file.writeUInt16LE(1, 32);
+	file.writeUInt16LE(8, 34);
+	file.write("data", 36);
+	file.writeUInt32LE(dataSize, 40);
+	file.fill(128, 44);
+
+	await writeFile(path, file);
 };
 
 const parseProgram = (argv: Array<string>) => {
@@ -185,7 +214,7 @@ describe("tp-norm", () => {
 
 		await writeWav(inputPath, createSine(12000, 1, SAMPLE_RATE, 997, 1));
 
-		const stdout = await captureStdout(() => tpNorm(inputPath, { output: outputPath, tp: target }));
+		const { stdout } = await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
 		const measuredDb = linearToDb(await measureFileIndependent(outputPath));
 
 		expect(Math.abs(measuredDb - target)).toBeLessThan(0.01);
@@ -201,7 +230,7 @@ describe("tp-norm", () => {
 
 		await writeWav(inputPath, createSine(12000, 1, SAMPLE_RATE, 997, 0.25));
 
-		await captureStdout(() => tpNorm(inputPath, { output: outputPath, tp: target }));
+		await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
 
 		expect(Math.abs(linearToDb(await measureFileIndependent(outputPath)) - target)).toBeLessThan(0.01);
 	});
@@ -212,13 +241,41 @@ describe("tp-norm", () => {
 		const silence = [new Float64Array(64)];
 
 		await writeWav(inputPath, silence);
-		await captureStdout(() => tpNorm(inputPath, { output: outputPath, tp: -1 }));
 
+		const { stdout, stderr } = await capture(() => tpNorm(inputPath, { output: outputPath, tp: -1 }));
 		const output = await readAll(outputPath);
 
+		expect(stdout).toBe("");
+		expect(stderr).toMatch(/no measurable true peak/);
 		expect(output[0]?.length).toBe(64);
 		expect(Array.from(output[0] ?? [])).toEqual(Array.from(silence[0] ?? []));
 		expect(await measureFileIndependent(outputPath)).toBe(0);
+		expect(Buffer.compare(await readFile(inputPath), await readFile(outputPath))).toBe(0);
+	});
+
+	it("copies a silent 8-bit source byte-identically", async () => {
+		const inputPath = join(workingDirectory, "silence-8.wav");
+		const outputPath = join(workingDirectory, "silence-8-out.wav");
+
+		await writeUnsigned8BitSilence(inputPath, 64);
+
+		const { stdout, stderr } = await capture(() => tpNorm(inputPath, { output: outputPath, tp: -1 }));
+
+		expect(stdout).toBe("");
+		expect(stderr).toMatch(/no measurable true peak/);
+		expect(Buffer.compare(await readFile(inputPath), await readFile(outputPath))).toBe(0);
+	});
+
+	it("lands a 1e-12-peak 32f source on the linear target", async () => {
+		const inputPath = join(workingDirectory, "tiny.wav");
+		const outputPath = join(workingDirectory, "tiny-out.wav");
+		const target = -1;
+		const tiny = new Float64Array(256).fill(1e-12);
+
+		await writeWav(inputPath, [tiny]);
+		await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
+
+		expect(Math.abs((await measureFileIndependent(outputPath)) - dbToLinear(target))).toBeLessThan(1e-6);
 	});
 
 	it("supports in-place -o <input>", async () => {
@@ -226,15 +283,41 @@ describe("tp-norm", () => {
 		const target = -1;
 
 		await writeWav(inputPath, createSine(4800, 2, SAMPLE_RATE, 997, 0.5));
-		await captureStdout(() => tpNorm(inputPath, { output: inputPath, tp: target }));
+		await capture(() => tpNorm(inputPath, { output: inputPath, tp: target }));
 
 		expect(Math.abs(linearToDb(await measureFileIndependent(inputPath)) - target)).toBeLessThan(0.01);
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
 	});
 
-	it("rejects a target that is not < 0", async () => {
-		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--tp", "0"])).rejects.toThrow(/tp must be < 0/);
-		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--tp", "1"])).rejects.toThrow(/tp must be < 0/);
+	it("rejects a target outside [-24, 0) at the CLI parser", async () => {
+		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--tp", "-400"])).rejects.toThrow(
+			/tp must be in \[-24, 0\)/,
+		);
+		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--tp", "0"])).rejects.toThrow(
+			/tp must be in \[-24, 0\)/,
+		);
+		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--tp", "1"])).rejects.toThrow(
+			/tp must be in \[-24, 0\)/,
+		);
+	});
+
+	it("rejects a target outside [-24, 0) at the exported function", async () => {
+		await expect(tpNorm("in.wav", { output: "out.wav", tp: -400 })).rejects.toThrow(/tp must be in \[-24, 0\)/);
+		await expect(tpNorm("in.wav", { output: "out.wav", tp: 0 })).rejects.toThrow(/tp must be in \[-24, 0\)/);
+		await expect(tpNorm("in.wav", { output: "out.wav", tp: 1 })).rejects.toThrow(/tp must be in \[-24, 0\)/);
+	});
+
+	it("accepts a target of -24 dBTP", async () => {
+		const inputPath = join(workingDirectory, "bound.wav");
+		const outputPath = join(workingDirectory, "bound-out.wav");
+		const target = -24;
+
+		await writeWav(inputPath, createSine(12000, 1, SAMPLE_RATE, 997, 1));
+		await capture(async () => {
+			await parseProgram(["tp-norm", inputPath, "-o", outputPath, "--tp", "-24"]);
+		});
+
+		expect(Math.abs(linearToDb(await measureFileIndependent(outputPath)) - target)).toBeLessThan(0.01);
 	});
 
 	it("leaves the destination untouched when a write fails", async () => {

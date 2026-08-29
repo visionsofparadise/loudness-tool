@@ -1,6 +1,7 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { dbToLinear, linearToDb } from "../utils/db";
 import { applyUniformGain } from "./utils/applyUniformGain";
+import { copyUnchanged } from "./utils/copyUnchanged";
 import { measureTruePeak } from "./utils/measureTruePeak";
 
 interface TpNormOptions {
@@ -9,23 +10,41 @@ interface TpNormOptions {
 }
 
 const LABEL_WIDTH = 16;
+const DEFAULT_TARGET_DB = -1;
 
 const alignedLine = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}    ${value}`;
+
+const isTargetDbInRange = (target: number): boolean => Number.isFinite(target) && target >= -24 && target < 0;
+
+const assertTargetDb = (target: number, received: string | number): void => {
+	if (!isTargetDbInRange(target)) {
+		throw new InvalidArgumentError(`tp must be in [-24, 0), received ${received}`);
+	}
+};
 
 const parseTargetDb = (value: string): number => {
 	const parsed = Number(value);
 
-	if (!Number.isFinite(parsed) || parsed >= 0) {
-		throw new InvalidArgumentError(`tp must be < 0, received ${value}`);
-	}
+	assertTargetDb(parsed, value);
 
 	return parsed;
 };
 
 export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise<void> => {
-	const target = options.tp ?? -1;
+	const target = options.tp ?? DEFAULT_TARGET_DB;
+
+	assertTargetDb(target, target);
+
 	const measurement = await measureTruePeak(inputPath);
-	const gain = measurement.truePeak <= 0 ? 1 : dbToLinear(target - linearToDb(measurement.truePeak));
+
+	if (measurement.truePeak <= 0) {
+		await copyUnchanged(inputPath, options.output);
+		process.stderr.write("source has no measurable true peak; passed through unchanged\n");
+
+		return;
+	}
+
+	const gain = dbToLinear(target) / measurement.truePeak;
 
 	await applyUniformGain(inputPath, options.output, gain);
 
@@ -48,6 +67,6 @@ export const addTpNormCommand = (program: Command): void => {
 		.description("Normalize a WAV file to a true-peak target")
 		.argument("<input>", "input WAV path")
 		.requiredOption("-o, --output <path>", "output WAV path")
-		.option("--tp <dBTP>", "target true peak in dBTP", parseTargetDb, -1)
+		.option("--tp <dBTP>", "target true peak in dBTP", parseTargetDb, DEFAULT_TARGET_DB)
 		.action(tpNorm);
 };
