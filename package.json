@@ -1,0 +1,67 @@
+{
+	"name": "loudness-tool",
+	"version": "0.1.0",
+	"description": "WAV loudness processing",
+	"type": "module",
+	"bin": {
+		"loudness-tool": "./dist/cli.js"
+	},
+	"files": [
+		"dist"
+	],
+	"sideEffects": false,
+	"publishConfig": {
+		"access": "public"
+	},
+	"author": "Matt Cavender",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/visionsofparadise/loudness-tool.git"
+	},
+	"scripts": {
+		"prepare": "node -e \"import('node:child_process').then(({execSync})=>{try{execSync('git rev-parse --is-inside-work-tree',{stdio:'ignore'});execSync('git config core.hooksPath .githooks')}catch{}})\" && node tools.mjs install",
+		"fix": "concurrently -m 1 --group \"prettier --write .\" \"eslint . --fix --cache\" \"stylelint \\\"**/*.css\\\" --fix --allow-empty-input --cache\" \"markdownlint-cli2 --fix \\\"**/*.md\\\"\" \"textlint --fix \\\"**/*.md\\\"\"",
+		"check": "concurrently --group \"prettier --check .\" \"eslint . --no-cache -f unix\" \"tsc --noEmit --pretty false\" \"stylelint \\\"**/*.css\\\" -f unix --allow-empty-input --cache\" \"markdownlint-cli2 \\\"**/*.md\\\"\" \"textlint -f compact \\\"**/*.md\\\"\" \"knip --no-progress\" \"jscpd .\"",
+		"unit": "vitest run unit",
+		"build": "tsup src/cli.ts --format esm --treeshake --clean"
+	},
+	"dependencies": {
+		"commander": "^14.0.1"
+	},
+	"devDependencies": {
+		"@commitlint/cli": "^21.2.2",
+		"@commitlint/config-conventional": "^21.2.2",
+		"@eslint/compat": "^2.1.0",
+		"@eslint/js": "^10.0.1",
+		"@html-eslint/eslint-plugin": "^0.65.0",
+		"@stylistic/eslint-plugin": "^5.10.0",
+		"@types/node": "^24.5.2",
+		"concurrently": "^9.2.1",
+		"eslint": "^10.9.1",
+		"eslint-config-prettier": "^10.1.8",
+		"eslint-formatter-unix": "^9.0.1",
+		"eslint-import-resolver-typescript": "^4.4.5",
+		"eslint-plugin-barrel-files": "^3.0.1",
+		"eslint-plugin-comment-rules": "^0.1.7",
+		"eslint-plugin-import-x": "^4.17.1",
+		"globals": "^17.11.0",
+		"jscpd": "^4.0.5",
+		"knip": "^6.32.2",
+		"markdownlint-cli2": "^0.18.1",
+		"prettier": "^3.6.2",
+		"stylelint": "^16.25.0",
+		"stylelint-config-recommended": "^16.0.0",
+		"textlint": "^15.2.2",
+		"textlint-filter-rule-comments": "^1.2.2",
+		"textlint-rule-no-dead-link": "^6.2.1",
+		"tsup": "^8.5.0",
+		"typescript": "^5.9.2",
+		"typescript-eslint": "^8.68.0",
+		"vitest": "^4.1.11"
+	},
+	"allowScripts": {
+		"unrs-resolver@1.12.2": true,
+		"esbuild@0.27.7": true
+	}
+}

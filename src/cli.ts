@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { Command } from "commander";
+
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+	version: string;
+};
+
+export const createProgram = (): Command => {
+	const program = new Command();
+
+	program.name("loudness-tool").description("WAV loudness processing").version(packageJson.version);
+
+	return program;
+};
+
+const entryPath = process.argv[1];
+
+if (entryPath !== undefined && import.meta.url === pathToFileURL(entryPath).href) {
+	void createProgram().parseAsync(process.argv);
+}
