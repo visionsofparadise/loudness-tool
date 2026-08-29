@@ -20,19 +20,17 @@ const createComplexInput = (size: number): { real: Float64Array; imag: Float64Ar
 	return { real, imag };
 };
 
-const directTransform = (real: ArrayLike<number>, imag: ArrayLike<number>, inverse = false): ComplexResult => {
+const directTransform = (real: ArrayLike<number>, imag: ArrayLike<number>): ComplexResult => {
 	const size = real.length;
 	const outputReal = new Float64Array(size);
 	const outputImag = new Float64Array(size);
-	const direction = inverse ? 1 : -1;
-	const scale = inverse ? 1 / size : 1;
 
 	for (let bin = 0; bin < size; bin++) {
 		let sumReal = 0;
 		let sumImag = 0;
 
 		for (let index = 0; index < size; index++) {
-			const angle = (direction * 2 * Math.PI * bin * index) / size;
+			const angle = (-2 * Math.PI * bin * index) / size;
 			const cosine = Math.cos(angle);
 			const sine = Math.sin(angle);
 			const inputReal = real[index] ?? 0;
@@ -42,8 +40,8 @@ const directTransform = (real: ArrayLike<number>, imag: ArrayLike<number>, inver
 			sumImag += inputReal * sine + inputImag * cosine;
 		}
 
-		outputReal[bin] = sumReal * scale;
-		outputImag[bin] = sumImag * scale;
+		outputReal[bin] = sumReal;
+		outputImag[bin] = sumImag;
 	}
 
 	return { real: outputReal, imag: outputImag };
@@ -110,8 +108,6 @@ describe("Fft validation", () => {
 
 		expect(() => fft.forward(short, full)).toThrow("real capacity");
 		expect(() => fft.forward(full, short)).toThrow("imaginary capacity");
-		expect(() => fft.inverse(short, full)).toThrow("real capacity");
-		expect(() => fft.inverse(full, short)).toThrow("imaginary capacity");
 		expect(Array.from(real)).toEqual([9, 9, 9, 9]);
 		expect(Array.from(imag)).toEqual([8, 8, 8, 8]);
 	});
@@ -145,30 +141,6 @@ describe("Fft direct oracles", () => {
 		fft.forward(real, imag);
 
 		expect(maxComplexError(real, imag, expected)).toBeLessThan(oracleToleranceOf(size));
-	});
-
-	it.each(ORACLE_SIZES)("matches every direct Float64 inverse bin for size %i", (size) => {
-		const fft = new Fft(size);
-		const input = createComplexInput(size);
-		const expected = directTransform(input.real, input.imag, true);
-		const real = Float64Array.from(input.real);
-		const imag = Float64Array.from(input.imag);
-
-		fft.inverse(real, imag);
-
-		expect(maxComplexError(real, imag, expected)).toBeLessThan(oracleToleranceOf(size));
-	});
-
-	it.each(ORACLE_SIZES)("round-trips inverse(forward(x)) ≈ x for size %i", (size) => {
-		const fft = new Fft(size);
-		const input = createComplexInput(size);
-		const real = Float64Array.from(input.real);
-		const imag = Float64Array.from(input.imag);
-
-		fft.forward(real, imag);
-		fft.inverse(real, imag);
-
-		expect(maxComplexError(real, imag, { real: input.real, imag: input.imag })).toBeLessThan(oracleToleranceOf(size));
 	});
 
 	it.each(ORACLE_SIZES)("satisfies Parseval for size %i", (size) => {

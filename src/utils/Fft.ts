@@ -78,23 +78,6 @@ export class Fft {
 		this.butterfly(real, imaginary);
 	}
 
-	inverse(real: Float64Array, imaginary: Float64Array): void {
-		this.assertCapacity(real, imaginary);
-
-		for (let index = 0; index < this.size; index++) {
-			imaginary[index] = -(imaginary[index] ?? 0);
-		}
-
-		this.forward(real, imaginary);
-
-		const scale = 1 / this.size;
-
-		for (let index = 0; index < this.size; index++) {
-			real[index] = (real[index] ?? 0) * scale;
-			imaginary[index] = -(imaginary[index] ?? 0) * scale;
-		}
-	}
-
 	private assertCapacity(real: Float64Array, imaginary: Float64Array): void {
 		if (real.length < this.size) {
 			throw new Error(`Fft: real capacity must be at least ${this.size}, got ${real.length}`);

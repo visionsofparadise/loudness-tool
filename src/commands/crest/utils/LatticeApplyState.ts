@@ -20,14 +20,14 @@ export class LatticeApplyState {
 		this.interpolated = new Float64Array(order);
 	}
 
-	apply(channels: ReadonlyArray<Float64Array>, frameCount: number): void {
+	apply(channels: ReadonlyArray<Float64Array>, frames: number): void {
 		const channelCount = this.state.length;
 		const order = this.order;
 		const hopSize = this.hopSize;
 		const interpolated = this.interpolated;
 		const identity = this.trajectory.identity;
 
-		for (let index = 0; index < frameCount; index++) {
+		for (let index = 0; index < frames; index++) {
 			const framePos = hopSize > 0 ? this.sample / hopSize : 0;
 			const frame0 = Math.min(this.frameCount - 1, Math.max(0, Math.floor(framePos)));
 			const frame1 = Math.min(this.frameCount - 1, frame0 + 1);
