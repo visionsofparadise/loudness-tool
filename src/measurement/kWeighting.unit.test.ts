@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createSine } from "../utils/testSignals";
+import { IntegratedLufsAccumulator } from "./IntegratedLufsAccumulator";
 import { preFilterCoefficients, rlbFilterCoefficients } from "./kWeighting";
-
-const coefficientsOf = (coefficients: {
-	readonly b0: number;
-	readonly b1: number;
-	readonly b2: number;
-	readonly a1: number;
-	readonly a2: number;
-}): Array<number> => [coefficients.b0, coefficients.b1, coefficients.b2, coefficients.a1, coefficients.a2];
 
 describe("preFilterCoefficients", () => {
 	it("returns the BS.1770-5 Table 1 constants at 48 kHz", () => {
@@ -18,14 +12,6 @@ describe("preFilterCoefficients", () => {
 			a1: -1.69065929318241,
 			a2: 0.73248077421585,
 		});
-	});
-
-	it("returns finite coefficients at non-48 kHz rates", () => {
-		for (const sampleRate of [44100, 96000, 22050]) {
-			for (const coefficient of coefficientsOf(preFilterCoefficients(sampleRate))) {
-				expect(Number.isFinite(coefficient)).toBe(true);
-			}
-		}
 	});
 });
 
@@ -39,12 +25,15 @@ describe("rlbFilterCoefficients", () => {
 			a2: 0.99007225036621,
 		});
 	});
+});
 
-	it("returns finite coefficients at non-48 kHz rates", () => {
-		for (const sampleRate of [44100, 96000, 22050]) {
-			for (const coefficient of coefficientsOf(rlbFilterCoefficients(sampleRate))) {
-				expect(Number.isFinite(coefficient)).toBe(true);
-			}
-		}
+describe("K-weighting response", () => {
+	it.each([48000, 44100, 96000, 88200, 32000])("full-scale 997 Hz measures -3.01 LKFS ±0.1 at %i Hz", (sampleRate) => {
+		const channels = createSine(sampleRate * 5, 1, sampleRate, 997, 1);
+		const accumulator = new IntegratedLufsAccumulator(sampleRate, 1);
+
+		accumulator.push(channels, channels[0]?.length ?? 0);
+
+		expect(Math.abs(accumulator.finalize() - -3.01)).toBeLessThanOrEqual(0.1);
 	});
 });

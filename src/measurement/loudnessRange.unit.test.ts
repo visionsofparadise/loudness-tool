@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { createLevelSegments } from "../utils/testSignals";
 import { computeLoudnessRange, getLraConsideredStats } from "./loudnessRange";
+import { ShortTermLoudnessAccumulator } from "./ShortTermLoudnessAccumulator";
+
+const measureLra = (channels: ReadonlyArray<Float64Array>, sampleRate: number): number => {
+	const accumulator = new ShortTermLoudnessAccumulator(sampleRate, channels.length);
+
+	accumulator.push(channels, channels[0]?.length ?? 0);
+
+	return computeLoudnessRange(accumulator.finalize());
+};
 
 describe("computeLoudnessRange", () => {
 	it("returns 0 for empty and one-value series", () => {
@@ -33,6 +43,24 @@ describe("computeLoudnessRange", () => {
 
 	it("uses rounded zero-based 10th and 95th percentile indices", () => {
 		expect(computeLoudnessRange(Float64Array.from([-30, -29, -28, -27, -26, -25]))).toBe(4);
+	});
+});
+
+describe("Tech 3342 §4 minimum requirements", () => {
+	it.each([
+		{ levels: [-20, -30], expected: 10, sampleRate: 48000 },
+		{ levels: [-20, -15], expected: 5, sampleRate: 48000 },
+		{ levels: [-40, -20], expected: 20, sampleRate: 48000 },
+		{ levels: [-50, -35, -20, -35, -50], expected: 15, sampleRate: 48000 },
+		{ levels: [-20, -30], expected: 10, sampleRate: 44100 },
+	])("levels $levels yield $expected LU LRA at $sampleRate Hz", ({ levels, expected, sampleRate }) => {
+		const channels = createLevelSegments(
+			levels.map((db) => ({ seconds: 20, frequency: 1000, db })),
+			sampleRate,
+			2,
+		);
+
+		expect(Math.abs(measureLra(channels, sampleRate) - expected)).toBeLessThanOrEqual(1);
 	});
 });
 
