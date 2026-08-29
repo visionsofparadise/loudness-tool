@@ -9,4 +9,8 @@ describe("cli", () => {
 	it("reports the package version", () => {
 		expect(createProgram().version()).toBe("0.1.0");
 	});
+
+	it("registers convert", () => {
+		expect(createProgram().commands.map((command) => command.name())).toEqual(["convert"]);
+	});
 });
