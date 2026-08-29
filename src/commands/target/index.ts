@@ -83,7 +83,15 @@ const sampleRateOf = async (path: string): Promise<number> => {
 	const reader = await WavReader.open(path);
 
 	try {
-		return reader.format.sampleRate;
+		const { sampleRate, channelCount } = reader.format;
+
+		if (channelCount > 2) {
+			throw new Error(
+				`${path}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+			);
+		}
+
+		return sampleRate;
 	} finally {
 		await reader.close();
 	}

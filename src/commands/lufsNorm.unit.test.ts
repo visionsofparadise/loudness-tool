@@ -353,6 +353,17 @@ describe("lufs-norm", () => {
 		expect(Math.abs((await measureFileIndependent(zeroPath)) - 0)).toBeLessThan(0.1);
 	});
 
+	it("rejects a 4-channel source", async () => {
+		const inputPath = join(workingDirectory, "quad.wav");
+		const outputPath = join(workingDirectory, "quad-out.wav");
+
+		await writeWav(inputPath, createSine(64, 4, SAMPLE_RATE, 440, 0.5));
+
+		await expect(lufsNorm(inputPath, { output: outputPath, lufs: -16 })).rejects.toThrow(
+			`${inputPath}: 4 channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+		);
+	});
+
 	it("warns when predicted output true peak exceeds 0 dBTP", async () => {
 		const inputPath = join(workingDirectory, "boost.wav");
 		const outputPath = join(workingDirectory, "boost-out.wav");

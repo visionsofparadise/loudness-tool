@@ -52,6 +52,13 @@ const errorMessageOf = (error: unknown, inputPath: string): string => {
 const measureStats = async (inputPath: string): Promise<StatsJson> =>
 	withWavReader(inputPath, async (reader) => {
 		const { sampleRate, channelCount, bitDepth, frameCount } = reader.format;
+
+		if (channelCount > 2) {
+			throw new Error(
+				`${inputPath}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+			);
+		}
+
 		const truePeakAccumulator = new TruePeakAccumulator(channelCount);
 		const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
 		const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, channelCount);

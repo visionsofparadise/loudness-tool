@@ -289,6 +289,17 @@ describe("tp-norm", () => {
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
 	});
 
+	it("accepts a 4-channel source", async () => {
+		const inputPath = join(workingDirectory, "quad.wav");
+		const outputPath = join(workingDirectory, "quad-out.wav");
+		const target = -1;
+
+		await writeWav(inputPath, createSine(4800, 4, SAMPLE_RATE, 997, 0.5));
+		await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
+
+		expect(Math.abs(linearToDb(await measureFileIndependent(outputPath)) - target)).toBeLessThan(0.01);
+	});
+
 	it("rejects a target outside [-24, 0) at the CLI parser", async () => {
 		await expect(parseProgram(["tp-norm", "in.wav", "-o", "out.wav", "--tp", "-400"])).rejects.toThrow(
 			/tp must be in \[-24, 0\)/,

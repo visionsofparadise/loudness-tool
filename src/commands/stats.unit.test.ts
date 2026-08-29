@@ -250,4 +250,23 @@ describe("stats", () => {
 		expect(stderr).toContain(unreadablePath);
 		expect(parsed.map((entry) => entry.path)).toEqual([firstPath, lastPath]);
 	});
+
+	it("rejects a 4-channel file, measures the rest, and exits non-zero", async () => {
+		const firstPath = join(workingDirectory, "first.wav");
+		const quadPath = join(workingDirectory, "quad.wav");
+		const lastPath = join(workingDirectory, "last.wav");
+
+		await writeWav(firstPath, createSine(240, 1, SAMPLE_RATE, 440, 0.4));
+		await writeWav(quadPath, createSine(240, 4, SAMPLE_RATE, 440, 0.4));
+		await writeWav(lastPath, createSine(240, 1, SAMPLE_RATE, 440, 0.2));
+
+		const { stdout, stderr, exitCode } = await capture(() => stats([firstPath, quadPath, lastPath], { json: true }));
+		const parsed = JSON.parse(stdout) as Array<{ path: string }>;
+
+		expect(exitCode).toBe(1);
+		expect(stderr).toContain(
+			`${quadPath}: 4 channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+		);
+		expect(parsed.map((entry) => entry.path)).toEqual([firstPath, lastPath]);
+	});
 });

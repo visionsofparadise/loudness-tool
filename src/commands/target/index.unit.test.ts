@@ -176,6 +176,17 @@ describe("target", () => {
 		expect(await readdir(scratchDir)).toEqual([]);
 	}, 30_000);
 
+	it("rejects a 4-channel source", async () => {
+		const inputPath = join(workingDirectory, "quad.wav");
+		const outputPath = join(workingDirectory, "quad-out.wav");
+
+		await writeWav(inputPath, createSine(64, 4, SAMPLE_RATE, 440, 0.5));
+
+		await expect(target(inputPath, { output: outputPath, lufs: -16 })).rejects.toThrow(
+			`${inputPath}: 4 channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+		);
+	});
+
 	it("copies an unmeasurable source byte-identically", async () => {
 		const inputPath = join(workingDirectory, "silence.wav");
 		const outputPath = join(workingDirectory, "silence-out.wav");

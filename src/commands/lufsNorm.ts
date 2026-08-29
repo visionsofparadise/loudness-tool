@@ -36,8 +36,16 @@ const measureIntegratedAndTruePeak = async (
 	path: string,
 ): Promise<{ readonly integratedLufs: number; readonly truePeak: number }> =>
 	withWavReader(path, async (reader) => {
-		const lufsAccumulator = new IntegratedLufsAccumulator(reader.format.sampleRate, reader.format.channelCount);
-		const truePeakAccumulator = new TruePeakAccumulator(reader.format.channelCount);
+		const { sampleRate, channelCount } = reader.format;
+
+		if (channelCount > 2) {
+			throw new Error(
+				`${path}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+			);
+		}
+
+		const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
+		const truePeakAccumulator = new TruePeakAccumulator(channelCount);
 
 		await pushWavBlocks(reader, [lufsAccumulator, truePeakAccumulator]);
 
