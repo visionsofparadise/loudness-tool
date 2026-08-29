@@ -79,20 +79,6 @@ const applyEnvelopeAndWrite = async (inputPath: string, outputPath: string, enve
 	});
 };
 
-const attachScratchSignals = (scratch: Scratch): (() => void) => {
-	const onSignal = (): void => {
-		void scratch.dispose();
-	};
-
-	process.once("SIGINT", onSignal);
-	process.once("SIGTERM", onSignal);
-
-	return () => {
-		process.off("SIGINT", onSignal);
-		process.off("SIGTERM", onSignal);
-	};
-};
-
 const sampleRateOf = async (path: string): Promise<number> => {
 	const reader = await WavReader.open(path);
 
@@ -115,7 +101,6 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	}
 
 	const scratch = await Scratch.create(options.scratchDir);
-	const detachSignals = attachScratchSignals(scratch);
 	let winningEnvelope: SampleFile | undefined;
 
 	try {
@@ -202,7 +187,6 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 			].join("\n")}\n`,
 		);
 	} finally {
-		detachSignals();
 		await winningEnvelope?.close();
 		await scratch.dispose();
 	}

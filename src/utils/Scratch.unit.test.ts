@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Scratch } from "./Scratch";
 
@@ -15,20 +15,38 @@ afterEach(async () => {
 	scratchDirectories.length = 0;
 });
 
+const absentProcessIdOf = (): number => {
+	for (let processId = 1; processId < 1_000_000; processId++) {
+		if (processId === process.pid) {
+			continue;
+		}
+
+		try {
+			process.kill(processId, 0);
+		} catch (error) {
+			if (typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH") {
+				return processId;
+			}
+		}
+	}
+
+	throw new Error("no absent process id");
+};
+
 describe("Scratch", () => {
-	it("creates a unique directory under the default temp root", async () => {
+	it("creates a unique directory under the default namespaced root", async () => {
 		const scratch = await Scratch.create();
 
 		scratchDirectories.push(scratch.directory);
 
 		expect(existsSync(scratch.directory)).toBe(true);
-		expect(basename(scratch.directory).startsWith("loudness-tool-")).toBe(true);
-		expect(scratch.directory.startsWith(tmpdir())).toBe(true);
+		expect(dirname(scratch.directory)).toBe(join(tmpdir(), "loudness-tool"));
+		expect(basename(scratch.directory)).toMatch(new RegExp(`^scratch-${process.pid}-`));
 
 		await scratch.dispose();
 	});
 
-	it("creates the directory under an overridden base", async () => {
+	it("creates the directory under an overridden base as the root", async () => {
 		const baseDirectory = join(tmpdir(), `loudness-tool-scratch-base-${Date.now()}`);
 
 		scratchDirectories.push(baseDirectory);
@@ -37,8 +55,8 @@ describe("Scratch", () => {
 
 		const scratch = await Scratch.create(baseDirectory);
 
-		expect(scratch.directory.startsWith(baseDirectory)).toBe(true);
-		expect(basename(scratch.directory).startsWith("loudness-tool-")).toBe(true);
+		expect(dirname(scratch.directory)).toBe(baseDirectory);
+		expect(basename(scratch.directory)).toMatch(new RegExp(`^scratch-${process.pid}-`));
 
 		await scratch.dispose();
 		expect(existsSync(scratch.directory)).toBe(false);
@@ -55,6 +73,32 @@ describe("Scratch", () => {
 		expect(existsSync(scratch.directory)).toBe(true);
 
 		await scratch.dispose();
+	});
+
+	it("scavenges a dead-PID sibling and keeps a live-PID sibling", async () => {
+		const rootDirectory = join(tmpdir(), `loudness-tool-scratch-scavenge-${Date.now()}`);
+
+		scratchDirectories.push(rootDirectory);
+
+		await mkdir(rootDirectory, { recursive: true });
+
+		const deadDirectory = join(rootDirectory, `scratch-${absentProcessIdOf()}-stale`);
+		const liveDirectory = join(rootDirectory, `scratch-${process.pid}-keep`);
+
+		await mkdir(deadDirectory);
+		await mkdir(liveDirectory);
+		await writeFile(join(deadDirectory, "abandoned.bin"), "payload");
+
+		const scratch = await Scratch.create(rootDirectory);
+
+		expect(existsSync(deadDirectory)).toBe(false);
+		expect(existsSync(liveDirectory)).toBe(true);
+		expect(dirname(scratch.directory)).toBe(rootDirectory);
+
+		await scratch.dispose();
+
+		expect(existsSync(scratch.directory)).toBe(false);
+		expect(existsSync(liveDirectory)).toBe(true);
 	});
 
 	it("joins labels onto the directory", async () => {
