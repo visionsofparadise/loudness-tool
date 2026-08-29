@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../../cli";
+import { IntegratedLufsAccumulator } from "../../measurement/IntegratedLufsAccumulator";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
 import { Fft, hannWindow } from "../../utils/Fft";
 import { linearToDb } from "../../utils/db";
@@ -84,6 +85,15 @@ const measureTruePeakDb = async (path: string): Promise<number> =>
 		return linearToDb(accumulator.finalize());
 	});
 
+const measureLufs = async (path: string): Promise<number> =>
+	withWavReader(path, async (reader) => {
+		const accumulator = new IntegratedLufsAccumulator(reader.format.sampleRate, reader.format.channelCount);
+
+		await pushWavBlocks(reader, [accumulator]);
+
+		return accumulator.finalize();
+	});
+
 const readChannel = async (path: string): Promise<Float64Array> =>
 	withWavReader(path, async (reader) => {
 		const channel = new Float64Array(reader.format.frameCount);
@@ -97,6 +107,27 @@ const readChannel = async (path: string): Promise<Float64Array> =>
 		}
 
 		return channel;
+	});
+
+const readChannels = async (path: string): Promise<Array<Float64Array>> =>
+	withWavReader(path, async (reader) => {
+		const channels = Array.from(
+			{ length: reader.format.channelCount },
+			() => new Float64Array(reader.format.frameCount),
+		);
+		let cursor = 0;
+
+		for await (const block of reader.blocks()) {
+			const frames = block.channels[0]?.length ?? 0;
+
+			for (let channel = 0; channel < channels.length; channel++) {
+				channels[channel]?.set(block.channels[channel] ?? new Float64Array(frames), cursor);
+			}
+
+			cursor += frames;
+		}
+
+		return channels;
 	});
 
 const makeImpulses = (seconds: number, perSecond: number, dbfs: number, bedDbfs: number): Float64Array => {
@@ -296,6 +327,26 @@ describe("crest", () => {
 		expect(stdout).toMatch(/output true peak/);
 		expect(stdout).toMatch(/delta/);
 		expect(stdout).toContain(outputPath);
+	});
+
+	it("reduces true peak on a stereo harmonic train and leaves the silent channel at zero", async () => {
+		const inputPath = join(workingDirectory, "stereo-train.wav");
+		const outputPath = join(workingDirectory, "stereo-train-out.wav");
+		const train = makeHeadroomBearing(SAMPLE_RATE);
+		const silent = new Float64Array(train.length);
+
+		await writeWav(inputPath, [train, silent]);
+		await capture(() => crest(inputPath, { output: outputPath }));
+
+		const sourceTp = await measureTruePeakDb(inputPath);
+		const outputTp = await measureTruePeakDb(outputPath);
+		const sourceLufs = await measureLufs(inputPath);
+		const outputLufs = await measureLufs(outputPath);
+		const outputChannels = await readChannels(outputPath);
+
+		expect(outputTp).toBeLessThan(sourceTp - 0.5);
+		expect(Math.abs(outputLufs - sourceLufs)).toBeLessThanOrEqual(0.05);
+		expect(outputChannels[1]?.every((sample) => sample === 0)).toBe(true);
 	});
 
 	it("is approximately identity on already-diffuse noise", async () => {

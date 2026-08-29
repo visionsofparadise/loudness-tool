@@ -27,19 +27,23 @@ describe("LatticeApplyState", () => {
 
 		applyState.apply([channel], channel.length);
 
-		const midRow = Float64Array.from([0.4, -0.3, 0, 0, 0, 0, 0, 0]);
 		const expectedStart = applyLatticeChannel(signal, row0, 1, LATTICE_ORDER);
 
 		expect(channel[0]).toBeCloseTo(expectedStart[0] ?? Number.NaN, 12);
 
+		const midRow = Float64Array.from([0.4, -0.3, 0, 0, 0, 0, 0, 0]);
 		const midInput = new Float64Array(8);
 
 		midInput[2] = 1;
 
+		const midChannel = Float64Array.from(midInput);
+		const midApplyState = new LatticeApplyState(trajectoryOf([row0, row1]), LATTICE_ORDER, hopSize, 1);
+
+		midApplyState.apply([midChannel], midChannel.length);
+
 		const expectedMid = applyLatticeChannel(midInput, midRow, 1, LATTICE_ORDER);
 
-		expect(Number.isFinite(channel[2])).toBe(true);
-		expect(expectedMid[2]).toBeDefined();
+		expect(midChannel[2]).toBeCloseTo(expectedMid[2] ?? Number.NaN, 12);
 	});
 
 	it("an all-zero trajectory is exactly an M-sample delay", () => {
