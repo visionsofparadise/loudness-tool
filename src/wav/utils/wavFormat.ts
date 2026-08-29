@@ -15,6 +15,12 @@ export interface ParsedWavFormat {
 
 const RIFF_HEADER_OVERHEAD = 36;
 const RIFF_DATA_SIZE_LIMIT = 0xffffffff - RIFF_HEADER_OVERHEAD;
+const WAVE_FORMAT_PCM = 1;
+const WAVE_FORMAT_IEEE_FLOAT = 3;
+const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
+const WAVE_FORMAT_EXTENSIBLE_EXTENSION_SIZE = 22;
+const SUBFORMAT_GUID_OFFSET = 24;
+const SUBFORMAT_GUID_SIZE = 16;
 
 export const nearestWritableBitDepth = (bitDepth: SourceBitDepth): WavBitDepth => {
 	switch (bitDepth) {
@@ -40,8 +46,46 @@ export const assertRiffDataSize = (dataSize: number): void => {
 	}
 };
 
+const hexPad = (value: number, width: number): string => value.toString(16).padStart(width, "0");
+
+const subFormatGuidOf = (formatData: Buffer): string => {
+	if (formatData.length >= SUBFORMAT_GUID_OFFSET + SUBFORMAT_GUID_SIZE) {
+		const firstField = formatData.readUInt32LE(SUBFORMAT_GUID_OFFSET);
+		const secondField = formatData.readUInt16LE(SUBFORMAT_GUID_OFFSET + 4);
+		const thirdField = formatData.readUInt16LE(SUBFORMAT_GUID_OFFSET + 6);
+		const remainingBytes = formatData.subarray(SUBFORMAT_GUID_OFFSET + 8, SUBFORMAT_GUID_OFFSET + 16);
+		const remainingHex = remainingBytes.toString("hex");
+
+		return `${hexPad(firstField, 8)}-${hexPad(secondField, 4)}-${hexPad(thirdField, 4)}-${remainingHex.slice(0, 4)}-${remainingHex.slice(4)}`;
+	}
+
+	return hexPad(formatData.readUInt32LE(SUBFORMAT_GUID_OFFSET), 8);
+};
+
+const resolvedAudioFormatOf = (formatData: Buffer, audioFormat: number, bitsPerSample: number): number => {
+	if (audioFormat !== WAVE_FORMAT_EXTENSIBLE) {
+		return audioFormat;
+	}
+
+	const cbSize = formatData.length >= 18 ? formatData.readUInt16LE(16) : 0;
+
+	if (cbSize < WAVE_FORMAT_EXTENSIBLE_EXTENSION_SIZE || formatData.length < SUBFORMAT_GUID_OFFSET + 4) {
+		throw new Error("Invalid WAV file: WAVE_FORMAT_EXTENSIBLE fmt chunk is too short to read the SubFormat GUID");
+	}
+
+	const subFormatFirstField = formatData.readUInt32LE(SUBFORMAT_GUID_OFFSET);
+
+	if (subFormatFirstField === WAVE_FORMAT_PCM || subFormatFirstField === WAVE_FORMAT_IEEE_FLOAT) {
+		return subFormatFirstField;
+	}
+
+	throw new Error(
+		`Unsupported WAV format: audioFormat ${audioFormat}, SubFormat GUID ${subFormatGuidOf(formatData)}, bitsPerSample ${bitsPerSample}`,
+	);
+};
+
 const sourceBitDepthOf = (audioFormat: number, bitsPerSample: number): SourceBitDepth => {
-	if (audioFormat === 3) {
+	if (audioFormat === WAVE_FORMAT_IEEE_FLOAT) {
 		if (bitsPerSample === 32) {
 			return "32f";
 		}
@@ -51,7 +95,7 @@ const sourceBitDepthOf = (audioFormat: number, bitsPerSample: number): SourceBit
 		}
 	}
 
-	if (audioFormat === 1) {
+	if (audioFormat === WAVE_FORMAT_PCM) {
 		if (bitsPerSample === 8) {
 			return "8";
 		}
@@ -125,11 +169,12 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 			const sampleRate = formatData.readUInt32LE(4);
 			const blockAlign = formatData.readUInt16LE(12);
 			const bitsPerSample = formatData.readUInt16LE(14);
+			const resolvedAudioFormat = resolvedAudioFormatOf(formatData, audioFormat, bitsPerSample);
 
 			formatFields = {
 				sampleRate,
 				channelCount,
-				bitDepth: sourceBitDepthOf(audioFormat, bitsPerSample),
+				bitDepth: sourceBitDepthOf(resolvedAudioFormat, bitsPerSample),
 				blockAlign,
 			};
 		} else if (chunkId === "data") {

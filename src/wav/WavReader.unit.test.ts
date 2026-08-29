@@ -155,6 +155,57 @@ const writeRf64Wav = async (
 	await writeFile(path, file);
 };
 
+const PCM_SUBFORMAT_GUID = Buffer.from([
+	0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+]);
+
+const IEEE_FLOAT_SUBFORMAT_GUID = Buffer.from([
+	0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+]);
+
+const writeExtensibleWav = async (
+	path: string,
+	options: {
+		sampleRate: number;
+		channelCount: number;
+		bitDepth: SourceBitDepth;
+		channels: ReadonlyArray<Float64Array>;
+		subFormatGuid?: Buffer;
+		cbSize?: number;
+	},
+): Promise<void> => {
+	const data = encodePlanar(options.channels, options.bitDepth);
+	const headerSize = 68;
+	const file = Buffer.alloc(headerSize + data.length);
+	const bytesPerSample = bytesPerSampleOf(options.bitDepth);
+	const blockAlign = options.channelCount * bytesPerSample;
+	const bitsPerSample = bytesPerSample * 8;
+	const isFloat = options.bitDepth === "32f" || options.bitDepth === "64f";
+	const subFormatGuid = options.subFormatGuid ?? (isFloat ? IEEE_FLOAT_SUBFORMAT_GUID : PCM_SUBFORMAT_GUID);
+	const cbSize = options.cbSize ?? 22;
+
+	file.write("RIFF", 0);
+	file.writeUInt32LE(headerSize - 8 + data.length, 4);
+	file.write("WAVE", 8);
+	file.write("fmt ", 12);
+	file.writeUInt32LE(40, 16);
+	file.writeUInt16LE(0xfffe, 20);
+	file.writeUInt16LE(options.channelCount, 22);
+	file.writeUInt32LE(options.sampleRate, 24);
+	file.writeUInt32LE(options.sampleRate * blockAlign, 28);
+	file.writeUInt16LE(blockAlign, 32);
+	file.writeUInt16LE(bitsPerSample, 34);
+	file.writeUInt16LE(cbSize, 36);
+	file.writeUInt16LE(bitsPerSample, 38);
+	file.writeUInt32LE((1 << options.channelCount) - 1, 40);
+	subFormatGuid.copy(file, 44, 0, Math.min(subFormatGuid.length, 16));
+	file.write("data", 60);
+	file.writeUInt32LE(data.length, 64);
+	data.copy(file, headerSize);
+
+	await writeFile(path, file);
+};
+
 describe("WavReader", () => {
 	let workingDirectory: string;
 
@@ -315,6 +366,82 @@ describe("WavReader", () => {
 		for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
 			expect(merged[0]?.[frameIndex]).toBe(Math.fround(channels[0]?.[frameIndex] ?? 0));
 		}
+	});
+
+	it.each([
+		{ bitDepth: "16" as const, frameCount: 48, channelCount: 1 },
+		{ bitDepth: "24" as const, frameCount: 32, channelCount: 2 },
+		{ bitDepth: "32f" as const, frameCount: 16, channelCount: 1 },
+	])(
+		"decodes WAVE_FORMAT_EXTENSIBLE $bitDepth identically to a plain-tag twin",
+		async ({ bitDepth, frameCount, channelCount }) => {
+			const channels = createRamp(frameCount, channelCount);
+			const plainPath = join(workingDirectory, `plain-${bitDepth}.wav`);
+			const extensiblePath = join(workingDirectory, `extensible-${bitDepth}.wav`);
+
+			await writeRiffWav(plainPath, {
+				sampleRate: SAMPLE_RATE,
+				channelCount,
+				bitDepth,
+				channels,
+			});
+			await writeExtensibleWav(extensiblePath, {
+				sampleRate: SAMPLE_RATE,
+				channelCount,
+				bitDepth,
+				channels,
+			});
+
+			const plain = await readAll(plainPath);
+			const extensible = await readAll(extensiblePath);
+
+			expect(extensible.format.bitDepth).toBe(bitDepth);
+			expect(extensible.format.bitDepth).toBe(plain.format.bitDepth);
+			expect(extensible.format.frameCount).toBe(frameCount);
+			expect(extensible.format.channelCount).toBe(channelCount);
+			expect(extensible.channels.length).toBe(plain.channels.length);
+
+			for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
+				expect(Array.from(extensible.channels[channelIndex] ?? [])).toEqual(
+					Array.from(plain.channels[channelIndex] ?? []),
+				);
+			}
+		},
+	);
+
+	it("rejects WAVE_FORMAT_EXTENSIBLE with an unknown SubFormat GUID naming the GUID", async () => {
+		const path = join(workingDirectory, "unknown-guid.wav");
+		const unknownGuid = Buffer.from([
+			0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+		]);
+
+		await writeExtensibleWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: createRamp(8, 1),
+			subFormatGuid: unknownGuid,
+		});
+
+		await expect(WavReader.open(path)).rejects.toThrow(
+			/Unsupported WAV format: audioFormat 65534, SubFormat GUID 00000004-0000-0010-8000-00aa00389b71, bitsPerSample 16/,
+		);
+	});
+
+	it("rejects WAVE_FORMAT_EXTENSIBLE when the fmt chunk is too short to read the SubFormat GUID", async () => {
+		const path = join(workingDirectory, "short-extensible.wav");
+
+		await writeExtensibleWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: createRamp(8, 1),
+			cbSize: 10,
+		});
+
+		await expect(WavReader.open(path)).rejects.toThrow(
+			/Invalid WAV file: WAVE_FORMAT_EXTENSIBLE fmt chunk is too short to read the SubFormat GUID/,
+		);
 	});
 
 	it("leaves no temporary files after reading", async () => {
