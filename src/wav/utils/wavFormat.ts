@@ -1,3 +1,4 @@
+import { bytesPerSampleOf } from "./sampleCodec";
 import type { FileHandle } from "node:fs/promises";
 
 export type WavBitDepth = "16" | "24" | "32" | "32f";
@@ -21,6 +22,8 @@ const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
 const WAVE_FORMAT_EXTENSIBLE_EXTENSION_SIZE = 22;
 const SUBFORMAT_GUID_OFFSET = 24;
 const SUBFORMAT_GUID_SIZE = 16;
+const FORMAT_READ_SIZE_LIMIT = 64;
+const STREAMING_DATA_SIZE_SENTINEL = 0xffffffff;
 
 export const nearestWritableBitDepth = (bitDepth: SourceBitDepth): WavBitDepth => {
 	switch (bitDepth) {
@@ -160,9 +163,10 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 				throw new Error("WAV fmt chunk too small");
 			}
 
-			const formatData = Buffer.alloc(chunkSize);
+			const formatReadSize = Math.min(chunkSize, FORMAT_READ_SIZE_LIMIT);
+			const formatData = Buffer.alloc(formatReadSize);
 
-			await fileHandle.read(formatData, 0, chunkSize, offset + 8);
+			await fileHandle.read(formatData, 0, formatReadSize, offset + 8);
 
 			const audioFormat = formatData.readUInt16LE(0);
 			const channelCount = formatData.readUInt16LE(2);
@@ -170,11 +174,26 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 			const blockAlign = formatData.readUInt16LE(12);
 			const bitsPerSample = formatData.readUInt16LE(14);
 			const resolvedAudioFormat = resolvedAudioFormatOf(formatData, audioFormat, bitsPerSample);
+			const bitDepth = sourceBitDepthOf(resolvedAudioFormat, bitsPerSample);
+
+			if (channelCount < 1) {
+				throw new Error(`Invalid WAV file: channelCount ${channelCount}`);
+			}
+
+			if (sampleRate < 1) {
+				throw new Error(`Invalid WAV file: sampleRate ${sampleRate}`);
+			}
+
+			const expectedBlockAlign = channelCount * bytesPerSampleOf(bitDepth);
+
+			if (blockAlign !== expectedBlockAlign) {
+				throw new Error(`Invalid WAV file: blockAlign ${blockAlign}`);
+			}
 
 			formatFields = {
 				sampleRate,
 				channelCount,
-				bitDepth: sourceBitDepthOf(resolvedAudioFormat, bitsPerSample),
+				bitDepth,
 				blockAlign,
 			};
 		} else if (chunkId === "data") {
@@ -182,15 +201,17 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 				throw new Error("WAV file has data chunk before fmt chunk");
 			}
 
-			if (formatFields.blockAlign === 0) {
-				throw new Error(`Invalid WAV file: "${path}"`);
-			}
-
-			const dataSize = isRf64 && ds64DataSize !== undefined ? ds64DataSize : chunkSize;
+			const dataOffset = offset + 8;
+			const availableBytes = fileSize - dataOffset;
+			const declaredSize = isRf64 && ds64DataSize !== undefined ? ds64DataSize : chunkSize;
+			const isStreamingSentinel =
+				!(isRf64 && ds64DataSize !== undefined) &&
+				(declaredSize === 0 || declaredSize === STREAMING_DATA_SIZE_SENTINEL);
+			const dataSize = isStreamingSentinel ? availableBytes : Math.min(declaredSize, availableBytes);
 
 			return {
 				...formatFields,
-				dataOffset: offset + 8,
+				dataOffset,
 				dataSize,
 			};
 		}

@@ -83,6 +83,8 @@ const writeRiffWav = async (
 		bitDepth: SourceBitDepth;
 		channels: ReadonlyArray<Float64Array>;
 		extraChunk?: Buffer;
+		declaredDataSize?: number;
+		blockAlign?: number;
 	},
 ): Promise<void> => {
 	const data = encodePlanar(options.channels, options.bitDepth);
@@ -90,9 +92,10 @@ const writeRiffWav = async (
 	const headerSize = 44 + extraChunk.length;
 	const file = Buffer.alloc(headerSize + data.length);
 	const bytesPerSample = bytesPerSampleOf(options.bitDepth);
-	const blockAlign = options.channelCount * bytesPerSample;
+	const blockAlign = options.blockAlign ?? options.channelCount * bytesPerSample;
 	const bitsPerSample = bytesPerSample * 8;
 	const audioFormat = options.bitDepth === "32f" || options.bitDepth === "64f" ? 3 : 1;
+	const declaredDataSize = options.declaredDataSize ?? data.length;
 
 	file.write("RIFF", 0);
 	file.writeUInt32LE(headerSize - 8 + data.length, 4);
@@ -107,7 +110,7 @@ const writeRiffWav = async (
 	file.writeUInt16LE(bitsPerSample, 34);
 	extraChunk.copy(file, 36);
 	file.write("data", 36 + extraChunk.length);
-	file.writeUInt32LE(data.length, 40 + extraChunk.length);
+	file.writeUInt32LE(declaredDataSize, 40 + extraChunk.length);
 	data.copy(file, headerSize);
 
 	await writeFile(path, file);
@@ -426,6 +429,73 @@ describe("WavReader", () => {
 		await expect(WavReader.open(path)).rejects.toThrow(
 			/Unsupported WAV format: audioFormat 65534, SubFormat GUID 00000004-0000-0010-8000-00aa00389b71, bitsPerSample 16/,
 		);
+	});
+
+	it("reports the true duration of a plain RIFF file whose data size is the 0xFFFFFFFF streaming sentinel", async () => {
+		const path = join(workingDirectory, "sentinel-ffffffff.wav");
+		const frameCount = SAMPLE_RATE * 2;
+
+		await writeRiffWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: createRamp(frameCount, 1),
+			declaredDataSize: 0xffffffff,
+		});
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(frameCount);
+		expect(read.format.frameCount / read.format.sampleRate).toBe(2);
+	});
+
+	it("measures the real content of a file whose data size is the 0 streaming sentinel", async () => {
+		const path = join(workingDirectory, "sentinel-zero.wav");
+		const frameCount = 47;
+
+		await writeRiffWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: createRamp(frameCount, 1),
+			declaredDataSize: 0,
+		});
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(frameCount);
+	});
+
+	it("reports the truncated frame count when the declared data size exceeds the bytes present", async () => {
+		const path = join(workingDirectory, "truncated.wav");
+		const frameCount = 25;
+		const bytesPerSample = bytesPerSampleOf("16");
+
+		await writeRiffWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: createRamp(frameCount, 1),
+			declaredDataSize: 1000 * bytesPerSample,
+		});
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(frameCount);
+	});
+
+	it("rejects a stereo 16-bit file whose blockAlign is 2 with a named Invalid WAV file error", async () => {
+		const path = join(workingDirectory, "bad-block-align.wav");
+
+		await writeRiffWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 2,
+			bitDepth: "16",
+			channels: createRamp(8, 2),
+			blockAlign: 2,
+		});
+
+		await expect(WavReader.open(path)).rejects.toThrow(/Invalid WAV file: blockAlign 2/);
 	});
 
 	it("rejects WAVE_FORMAT_EXTENSIBLE when the fmt chunk is too short to read the SubFormat GUID", async () => {
