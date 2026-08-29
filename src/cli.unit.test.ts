@@ -10,8 +10,8 @@ describe("cli", () => {
 		expect(createProgram().version()).toBe("0.1.0");
 	});
 
-	it("registers no commands", () => {
-		expect(createProgram().commands.map((command) => command.name())).toEqual([]);
+	it("registers stats and tp-norm", () => {
+		expect(createProgram().commands.map((command) => command.name())).toEqual(["stats", "tp-norm"]);
 	});
 
 	it("prints extra-argument failures as one-line errors", async () => {

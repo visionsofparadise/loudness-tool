@@ -2,6 +2,8 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { CommanderError, Command } from "commander";
+import { addStatsCommand } from "./commands/stats";
+import { addTpNormCommand } from "./commands/tpNorm";
 
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
 	version: string;
@@ -11,6 +13,9 @@ export const createProgram = (): Command => {
 	const program = new Command();
 
 	program.name("loudness-tool").description("WAV loudness processing").version(packageJson.version);
+
+	addStatsCommand(program);
+	addTpNormCommand(program);
 
 	return program;
 };

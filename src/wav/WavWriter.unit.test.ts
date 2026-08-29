@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WavReader, type AudioBlock } from "./WavReader";
 import { WavWriter } from "./WavWriter";
-import { createNoise, createSine } from "./utils/testSignals";
+import { createNoise, createSine } from "../utils/testSignals";
 import { assertRiffDataSize, type WavBitDepth } from "./utils/wavFormat";
 
 const SAMPLE_RATE = 48000;
@@ -152,7 +152,7 @@ describe("WavWriter", () => {
 		const path = join(workingDirectory, "output.wav");
 		const writer = await WavWriter.create(path, { sampleRate: SAMPLE_RATE, channelCount: 1, bitDepth: "16" });
 
-		await writer.write(createSine(64, 1, SAMPLE_RATE, 440));
+		await writer.write(createSine(64, 1, SAMPLE_RATE, 440, 0.75));
 
 		expect(existsSync(path)).toBe(false);
 		expect(await temporaryNamesOf(workingDirectory)).toHaveLength(1);
@@ -176,7 +176,7 @@ describe("WavWriter", () => {
 
 	it("supports in-place processing: original readable until close, output correct after", async () => {
 		const path = join(workingDirectory, "inplace.wav");
-		const original = createSine(128, 2, SAMPLE_RATE, 220);
+		const original = createSine(128, 2, SAMPLE_RATE, 220, 0.75);
 		const replacement = createNoise(128, 2, 21);
 		const originalWriter = await WavWriter.create(path, {
 			sampleRate: SAMPLE_RATE,
@@ -222,7 +222,7 @@ describe("WavWriter", () => {
 
 	it("abort during in-place processing leaves the original intact and no temporary file", async () => {
 		const path = join(workingDirectory, "inplace-abort.wav");
-		const original = createSine(64, 1, SAMPLE_RATE, 330);
+		const original = createSine(64, 1, SAMPLE_RATE, 330, 0.75);
 		const originalWriter = await WavWriter.create(path, {
 			sampleRate: SAMPLE_RATE,
 			channelCount: 1,

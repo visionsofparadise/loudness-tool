@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BLOCK_FRAMES, WavReader, type AudioBlock } from "./WavReader";
 import { WavWriter } from "./WavWriter";
 import { bytesPerSampleOf, encodeSample } from "./utils/sampleCodec";
-import { createNoise, createRamp } from "./utils/testSignals";
+import { createNoise, createRamp } from "../utils/testSignals";
 import { nearestWritableBitDepth, type SourceBitDepth, type WavBitDepth } from "./utils/wavFormat";
 
 const SAMPLE_RATE = 48000;
