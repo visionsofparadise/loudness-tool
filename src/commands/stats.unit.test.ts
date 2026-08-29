@@ -79,6 +79,7 @@ describe("stats", () => {
 		expect(stdout).toMatch(/duration\s+0\.100 s/);
 		expect(stdout).toMatch(/true peak\s+-?\d/);
 		expect(stdout).toMatch(/integrated\s+n\/a/);
+		expect(stdout).toMatch(/loudness range\s+n\/a/);
 	});
 
 	it("prints one group per file for multiple inputs", async () => {
@@ -122,7 +123,7 @@ describe("stats", () => {
 			"durationSeconds",
 			"truePeakDb",
 		]);
-		expect(Object.keys(entry ?? {})).toEqual([
+		expect(Object.keys(entry ?? {}).slice(0, 7)).toEqual([
 			"path",
 			"sampleRate",
 			"channelCount",
@@ -131,6 +132,16 @@ describe("stats", () => {
 			"truePeakDb",
 			"integratedLufs",
 		]);
+		expect(Object.keys(entry ?? {})).toEqual([
+			"path",
+			"sampleRate",
+			"channelCount",
+			"bitDepth",
+			"durationSeconds",
+			"truePeakDb",
+			"integratedLufs",
+			"loudnessRange",
+		]);
 		expect(entry?.path).toBe(inputPath);
 		expect(entry?.sampleRate).toBe(SAMPLE_RATE);
 		expect(entry?.channelCount).toBe(2);
@@ -138,6 +149,7 @@ describe("stats", () => {
 		expect(entry?.durationSeconds).toBe(frameCount / SAMPLE_RATE);
 		expect(typeof entry?.truePeakDb).toBe("number");
 		expect(entry?.integratedLufs).toBeNull();
+		expect(entry?.loudnessRange).toBeNull();
 	});
 
 	it("reports truePeakDb null and human n/a for a zero-frame file", async () => {
@@ -155,16 +167,19 @@ describe("stats", () => {
 		expect(human.exitCode).toBeUndefined();
 		expect(human.stdout).toMatch(/true peak\s+n\/a/);
 		expect(human.stdout).toMatch(/integrated\s+n\/a/);
+		expect(human.stdout).toMatch(/loudness range\s+n\/a/);
 
 		const json = await capture(() => stats([inputPath], { json: true }));
 		const parsed = JSON.parse(json.stdout) as Array<{
 			truePeakDb: number | null;
 			integratedLufs: number | null;
+			loudnessRange: number | null;
 			durationSeconds: number;
 		}>;
 
 		expect(parsed[0]?.truePeakDb).toBeNull();
 		expect(parsed[0]?.integratedLufs).toBeNull();
+		expect(parsed[0]?.loudnessRange).toBeNull();
 		expect(parsed[0]?.durationSeconds).toBe(0);
 	});
 
@@ -188,10 +203,30 @@ describe("stats", () => {
 		await writeWav(inputPath, createSine(SAMPLE_RATE * 5, 1, SAMPLE_RATE, 997, 1));
 
 		const { stdout } = await capture(() => stats([inputPath], { json: true }));
-		const parsed = JSON.parse(stdout) as Array<{ integratedLufs: number | null }>;
+		const parsed = JSON.parse(stdout) as Array<{ integratedLufs: number | null; loudnessRange: number | null }>;
 
 		expect(parsed[0]?.integratedLufs).toEqual(expect.any(Number));
 		expect(Math.abs((parsed[0]?.integratedLufs ?? 0) - -3.01)).toBeLessThanOrEqual(0.05);
+		expect(parsed[0]?.loudnessRange).toEqual(expect.any(Number));
+	});
+
+	it("reports loudnessRange 0 for silence long enough to close short-term windows", async () => {
+		const inputPath = join(workingDirectory, "silence.wav");
+		const writer = await WavWriter.create(inputPath, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "32f",
+		});
+
+		await writer.write([new Float64Array(SAMPLE_RATE * 4)]);
+		await writer.close();
+
+		const human = await capture(() => stats([inputPath], {}));
+		const json = await capture(() => stats([inputPath], { json: true }));
+		const parsed = JSON.parse(json.stdout) as Array<{ loudnessRange: number | null }>;
+
+		expect(human.stdout).toMatch(/loudness range\s+0\.00 LU/);
+		expect(parsed[0]?.loudnessRange).toBe(0);
 	});
 
 	it("errors naming an unreadable file, measures the rest, and exits non-zero", async () => {

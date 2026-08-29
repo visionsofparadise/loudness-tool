@@ -1,4 +1,6 @@
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
+import { computeLoudnessRange } from "../measurement/loudnessRange";
+import { ShortTermLoudnessAccumulator } from "../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
 import { linearToDb } from "../utils/db";
 import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
@@ -13,19 +15,21 @@ interface StatsJson {
 	readonly durationSeconds: number;
 	readonly truePeakDb: number | null;
 	readonly integratedLufs: number | null;
+	readonly loudnessRange: number | null;
 }
 
 interface StatsOptions {
 	readonly json?: boolean;
 }
 
-const LABEL_WIDTH = 11;
+const LABEL_WIDTH = 14;
 
 const alignedLine = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}    ${value}`;
 
 const formatHuman = (result: StatsJson): string => {
 	const truePeak = result.truePeakDb === null ? "n/a" : `${result.truePeakDb.toFixed(2)} dBTP`;
 	const integrated = result.integratedLufs === null ? "n/a" : `${result.integratedLufs.toFixed(2)} LUFS`;
+	const loudnessRange = result.loudnessRange === null ? "n/a" : `${result.loudnessRange.toFixed(2)} LU`;
 
 	return `${[
 		result.path,
@@ -35,6 +39,7 @@ const formatHuman = (result: StatsJson): string => {
 		alignedLine("duration", `${result.durationSeconds.toFixed(3)} s`),
 		alignedLine("true peak", truePeak),
 		alignedLine("integrated", integrated),
+		alignedLine("loudness range", loudnessRange),
 	].join("\n")}\n`;
 };
 
@@ -49,11 +54,13 @@ const measureStats = async (inputPath: string): Promise<StatsJson> =>
 		const { sampleRate, channelCount, bitDepth, frameCount } = reader.format;
 		const truePeakAccumulator = new TruePeakAccumulator(channelCount);
 		const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
+		const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, channelCount);
 
-		await pushWavBlocks(reader, [truePeakAccumulator, lufsAccumulator]);
+		await pushWavBlocks(reader, [truePeakAccumulator, lufsAccumulator, shortTermAccumulator]);
 
 		const truePeak = truePeakAccumulator.finalize();
 		const integrated = lufsAccumulator.finalize();
+		const shortTerm = shortTermAccumulator.finalize();
 
 		return {
 			path: inputPath,
@@ -63,6 +70,7 @@ const measureStats = async (inputPath: string): Promise<StatsJson> =>
 			durationSeconds: sampleRate === 0 ? 0 : frameCount / sampleRate,
 			truePeakDb: frameCount === 0 ? null : linearToDb(truePeak),
 			integratedLufs: Number.isFinite(integrated) ? integrated : null,
+			loudnessRange: shortTerm.length === 0 ? null : computeLoudnessRange(shortTerm),
 		};
 	});
 
@@ -101,7 +109,7 @@ export const stats = async (inputs: Array<string>, options: StatsOptions): Promi
 export const addStatsCommand = (program: Command): void => {
 	program
 		.command("stats")
-		.description("Report true-peak and integrated loudness of WAV files")
+		.description("Report true-peak, integrated loudness, and loudness range of WAV files")
 		.argument("<inputs...>", "input WAV paths")
 		.option("--json", "print JSON")
 		.action(stats);
