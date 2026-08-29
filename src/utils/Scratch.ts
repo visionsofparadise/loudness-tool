@@ -64,6 +64,7 @@ export class Scratch {
 
 	readonly directory: string;
 
+	private readonly liveLabels = new Set<string>();
 	private disposed = false;
 
 	private constructor(directory: string) {
@@ -72,6 +73,18 @@ export class Scratch {
 
 	filePath(label: string): string {
 		return join(this.directory, label);
+	}
+
+	claimLabel(label: string): void {
+		if (this.liveLabels.has(label)) {
+			throw new Error(`Scratch: label "${label}" is already live`);
+		}
+
+		this.liveLabels.add(label);
+	}
+
+	releaseLabel(label: string): void {
+		this.liveLabels.delete(label);
 	}
 
 	async dispose(): Promise<void> {

@@ -523,7 +523,7 @@ export const iterateForTargets = async (args: {
 			isLegalAttempt(winningAttempt.outputLufs, winningAttempt.outputTruePeakDb, targetLufs, effectiveTargetTp) &&
 			Math.abs(grainedDb(winningAttempt.lufsErr)) < tolerance;
 
-		return {
+		const result: IterateResult = {
 			bestSmoothedEnvelope: winningEnvelope ?? (await SampleFile.create(scratch, "empty-envelope")),
 			bestB: bestBoost,
 			bestLimitDb: currentLimit,
@@ -534,7 +534,12 @@ export const iterateForTargets = async (args: {
 			winnerOutputTruePeakDb,
 			winnerOutputLra,
 		};
+
+		winningEnvelope = undefined;
+
+		return result;
 	} finally {
 		await detectionEnvelope.close();
+		await winningEnvelope?.close();
 	}
 };

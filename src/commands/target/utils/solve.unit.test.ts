@@ -1,12 +1,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dbToLinear, linearToDb } from "../../../utils/db";
+import { SampleFile } from "../../../utils/SampleFile";
 import { createSine } from "../../../utils/testSignals";
 import { Scratch } from "../../../utils/Scratch";
 import { WavWriter } from "../../../wav/WavWriter";
 import { type Anchors, gainDbAt } from "./curve";
+import * as envelope from "./envelope";
 import { measureSource, type DetectionHistogram } from "./measureSource";
 import {
 	assignPeakGainDb,
@@ -270,6 +272,8 @@ describe("iterateForTargets", () => {
 	});
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
+
 		if (scratch !== undefined) {
 			await scratch.dispose();
 			scratch = undefined;
@@ -429,5 +433,72 @@ describe("iterateForTargets", () => {
 		expect(result.winnerOutputLufs ?? -Infinity).toBeGreaterThan(targetLufs);
 
 		await result.bestSmoothedEnvelope.close();
+	}, 30_000);
+
+	it("closes the elected envelope when a later attempt throws", async () => {
+		scratch = await Scratch.create();
+
+		const inputPath = join(workingDirectory, "throw-after-winner.wav");
+
+		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+		const originalCreate = SampleFile.create.bind(SampleFile);
+		let electedClose: ReturnType<typeof vi.spyOn> | undefined;
+		let renderCount = 0;
+
+		vi.spyOn(SampleFile, "create").mockImplementation(async (createScratch, label) => {
+			const file = await originalCreate(createScratch, label);
+
+			if (label === "envelope-0") {
+				electedClose = vi.spyOn(file, "close");
+			}
+
+			return file;
+		});
+		vi.spyOn(envelope, "renderEnvelope").mockImplementation(async ({ dest }) => {
+			renderCount += 1;
+
+			if (renderCount > 1) {
+				throw new Error("injected later-attempt failure");
+			}
+
+			const samples = new Float64Array(measurement.frameCount).fill(1);
+
+			await dest.append(samples, samples.length);
+		});
+
+		await expect(
+			iterateForTargets({
+				inputPath,
+				scratch,
+				sampleRate: measurement.sampleRate,
+				channelCount: measurement.channelCount,
+				frameCount: measurement.frameCount,
+				anchorBase: {
+					floorDb: null,
+					pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+				},
+				smoothingMs: 1,
+				targetLufs: measurement.integratedLufs - 0.5,
+				targetTp: measurement.truePeakDb - 20,
+				limitAutoDb: measurement.limitAutoDb,
+				sourceLufs: measurement.integratedLufs,
+				sourcePeakDb: measurement.truePeakDb,
+				maxAttempts: 2,
+				tolerance: 0.01,
+				neverExpand: false,
+				histogram: measurement.detectionHistogram,
+				detectionEnvelope: measurement.detectionEnvelope,
+			}),
+		).rejects.toThrow(/injected later-attempt failure/);
+
+		expect(electedClose).toBeDefined();
+		expect(electedClose).toHaveBeenCalled();
 	}, 30_000);
 });

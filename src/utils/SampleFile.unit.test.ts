@@ -197,6 +197,26 @@ describe("SampleFile", () => {
 
 		await expect(file.append(Float64Array.from([1]), 1)).rejects.toThrow(/after close/);
 	});
+
+	it("throws on a duplicate live label", async () => {
+		scratch = await Scratch.create();
+
+		const file = await SampleFile.create(scratch, "shared");
+
+		await expect(SampleFile.create(scratch, "shared")).rejects.toThrow(/already live/);
+
+		await file.close();
+
+		const reused = await SampleFile.create(scratch, "shared");
+
+		await reused.close();
+	});
+
+	it("throws on a label that escapes the directory", async () => {
+		scratch = await Scratch.create();
+
+		await expect(SampleFile.create(scratch, "../escaped")).rejects.toThrow(/must match/);
+	});
 });
 
 describe("Scratch plus SampleFile", () => {

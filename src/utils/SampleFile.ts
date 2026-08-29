@@ -4,20 +4,38 @@ import type { Scratch } from "./Scratch";
 const SAMPLE_FILE_BLOCK_FRAMES = 65536;
 const BYTES_PER_SAMPLE = 8;
 
+const LABEL_PATTERN = /^[A-Za-z0-9-]+$/;
+
 export class SampleFile {
 	static async create(scratch: Scratch, label: string): Promise<SampleFile> {
-		const path = scratch.filePath(label);
-		const fileHandle = await open(path, "w+");
+		if (!LABEL_PATTERN.test(label)) {
+			throw new Error(`SampleFile: label "${label}" must match /^[A-Za-z0-9-]+$/`);
+		}
 
-		return new SampleFile(path, fileHandle);
+		scratch.claimLabel(label);
+
+		try {
+			const path = scratch.filePath(label);
+			const fileHandle = await open(path, "w+");
+
+			return new SampleFile(scratch, label, path, fileHandle);
+		} catch (error) {
+			scratch.releaseLabel(label);
+
+			throw error;
+		}
 	}
 
+	private readonly scratch: Scratch;
+	private readonly label: string;
 	private readonly path: string;
 	private readonly fileHandle: FileHandle;
 	private writtenFrames = 0;
 	private isClosed = false;
 
-	private constructor(path: string, fileHandle: FileHandle) {
+	private constructor(scratch: Scratch, label: string, path: string, fileHandle: FileHandle) {
+		this.scratch = scratch;
+		this.label = label;
 		this.path = path;
 		this.fileHandle = fileHandle;
 	}
@@ -92,6 +110,7 @@ export class SampleFile {
 		}
 
 		this.isClosed = true;
+		this.scratch.releaseLabel(this.label);
 
 		await this.fileHandle.close();
 		await unlink(this.path).catch(() => undefined);
