@@ -2,8 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getLraConsideredStats } from "../../../measurement/loudnessRange";
+import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { dbToLinear } from "../../../utils/db";
-import { createSine } from "../../../utils/testSignals";
+import { createLevelSegments, createSine } from "../../../utils/testSignals";
 import { Scratch } from "../../../utils/Scratch";
 import { WavWriter } from "../../../wav/WavWriter";
 import { computeLimitAutoDb, measureSource } from "./measureSource";
@@ -140,6 +142,42 @@ describe("measureSource", () => {
 		expect(Number.isFinite(measurement.floorAutoDb)).toBe(true);
 		expect(measurement.floorAutoDb).toBeLessThan(measurement.pivotAutoDb);
 		expect(measurement.lra).toBeGreaterThan(0);
+
+		await measurement.detectionEnvelope.close();
+	});
+
+	it("derives floorAutoDb from source-only windows when the source ends on a quiet segment", async () => {
+		scratch = await Scratch.create();
+
+		const channels = createLevelSegments(
+			[
+				{ seconds: 5, frequency: 1000, db: -20 },
+				{ seconds: 3, frequency: 1000, db: -35 },
+			],
+			SAMPLE_RATE,
+			1,
+		);
+		const inputPath = join(workingDirectory, "quiet-ending.wav");
+
+		await writeWav(inputPath, channels);
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
+
+		accumulator.push(channels, channels[0]?.length ?? 0);
+
+		const shortTermSeries = accumulator.finalize();
+		const sourceOnly = getLraConsideredStats(shortTermSeries.subarray(0, accumulator.sourceWindowCount));
+		const tailIncluded = getLraConsideredStats(shortTermSeries);
+
+		expect(measurement.floorAutoDb).toBeCloseTo(sourceOnly.minimum, 5);
+		expect(sourceOnly.minimum).not.toBe(tailIncluded.minimum);
+		expect(Math.abs(measurement.floorAutoDb - tailIncluded.minimum)).toBeGreaterThan(0.01);
 
 		await measurement.detectionEnvelope.close();
 	});

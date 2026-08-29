@@ -112,4 +112,19 @@ describe("ShortTermLoudnessAccumulator", () => {
 			"ShortTermLoudnessAccumulator: channelCount must be positive, got 0",
 		);
 	});
+
+	it("sourceWindowCount matches the closed-window formula at a boundary length", () => {
+		const blockSize = Math.round(3 * SAMPLE_RATE);
+		const blockStep = Math.round(0.1 * SAMPLE_RATE);
+		const sourceFrames = blockSize + blockStep - 1;
+		const channels = createSine(sourceFrames, 1, SAMPLE_RATE, 1000, 0.1);
+		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
+
+		accumulator.push(channels, sourceFrames);
+		accumulator.finalize();
+
+		expect(accumulator.sourceWindowCount).toBe(
+			sourceFrames < blockSize ? 0 : Math.floor((sourceFrames - blockSize) / blockStep) + 1,
+		);
+	});
 });

@@ -13,6 +13,7 @@ const POWER_FLOOR = 1e-10;
 
 export class ShortTermLoudnessAccumulator {
 	private readonly blockSize: number;
+	private readonly blockStep: number;
 	private readonly channelCount: number;
 	private readonly tailFrames: number;
 	private readonly weightedSquaredSum: KWeightedSquaredSum;
@@ -20,6 +21,7 @@ export class ShortTermLoudnessAccumulator {
 
 	private outputBuffer: Float64Array = new Float64Array(0);
 	private finalizedResult: Float64Array | undefined;
+	private sourceFrames = 0;
 
 	constructor(sampleRate: number, channelCount: number) {
 		if (channelCount <= 0) {
@@ -27,10 +29,11 @@ export class ShortTermLoudnessAccumulator {
 		}
 
 		this.blockSize = Math.round(BLOCK_DURATION_SECONDS * sampleRate);
+		this.blockStep = Math.round(BLOCK_STEP_SECONDS * sampleRate);
 		this.channelCount = channelCount;
 		this.tailFrames = Math.round(FILE_LRA_TAIL_SECONDS * sampleRate);
 		this.weightedSquaredSum = new KWeightedSquaredSum(sampleRate, channelCount);
-		this.blocks = new BlockSumAccumulator(this.blockSize, Math.round(BLOCK_STEP_SECONDS * sampleRate));
+		this.blocks = new BlockSumAccumulator(this.blockSize, this.blockStep);
 	}
 
 	push(channels: ReadonlyArray<Float64Array>, frameCount: number): void {
@@ -38,7 +41,17 @@ export class ShortTermLoudnessAccumulator {
 			throw new Error("ShortTermLoudnessAccumulator: push after finalize");
 		}
 
+		if (frameCount > 0) {
+			this.sourceFrames += frameCount;
+		}
+
 		this.pushWeighted(channels, frameCount);
+	}
+
+	get sourceWindowCount(): number {
+		return this.sourceFrames < this.blockSize
+			? 0
+			: Math.floor((this.sourceFrames - this.blockSize) / this.blockStep) + 1;
 	}
 
 	finalize(): Float64Array {

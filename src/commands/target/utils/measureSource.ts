@@ -229,7 +229,7 @@ export const measureSource = async (args: {
 
 		const histogramResult = histogram.finalize();
 		const shortTermSeries = shortTerm.finalize();
-		const stats = getLraConsideredStats(shortTermSeries);
+		const stats = getLraConsideredStats(shortTermSeries.subarray(0, shortTerm.sourceWindowCount));
 		const totalSamples = totalSamplesOf(histogramResult.buckets);
 
 		return {
