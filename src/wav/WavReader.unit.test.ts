@@ -471,6 +471,59 @@ describe("WavReader", () => {
 		expect(read.format.frameCount).toBe(frameCount);
 	});
 
+	it("reads 0 frames from an empty data chunk followed by a LIST chunk", async () => {
+		const path = join(workingDirectory, "empty-data-list.wav");
+		const listPayloadSize = 16;
+		const listChunkSize = 8 + listPayloadSize;
+		const dataChunkOffset = 36;
+		const listChunkOffset = dataChunkOffset + 8;
+		const fileSize = listChunkOffset + listChunkSize;
+		const file = Buffer.alloc(fileSize);
+		const blockAlign = bytesPerSampleOf("16");
+
+		file.write("RIFF", 0);
+		file.writeUInt32LE(fileSize - 8, 4);
+		file.write("WAVE", 8);
+		file.write("fmt ", 12);
+		file.writeUInt32LE(16, 16);
+		file.writeUInt16LE(1, 20);
+		file.writeUInt16LE(1, 22);
+		file.writeUInt32LE(SAMPLE_RATE, 24);
+		file.writeUInt32LE(SAMPLE_RATE * blockAlign, 28);
+		file.writeUInt16LE(blockAlign, 32);
+		file.writeUInt16LE(16, 34);
+		file.write("data", dataChunkOffset);
+		file.writeUInt32LE(0, dataChunkOffset + 4);
+		file.write("LIST", listChunkOffset);
+		file.writeUInt32LE(listPayloadSize, listChunkOffset + 4);
+		file.write("INFO", listChunkOffset + 8);
+		file.write("INAM", listChunkOffset + 12);
+		file.writeUInt32LE(4, listChunkOffset + 16);
+		file.write("test", listChunkOffset + 20);
+
+		await writeFile(path, file);
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(0);
+	});
+
+	it("reads 0 frames from an empty data chunk that is the file's last chunk", async () => {
+		const path = join(workingDirectory, "empty-last.wav");
+
+		await writeRiffWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: [new Float64Array(0)],
+			declaredDataSize: 0,
+		});
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(0);
+	});
+
 	it("reports the truncated frame count when the declared data size exceeds the bytes present", async () => {
 		const path = join(workingDirectory, "truncated.wav");
 		const frameCount = 25;
