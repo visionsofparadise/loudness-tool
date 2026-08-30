@@ -272,6 +272,24 @@ describe("SampleFile", () => {
 
 		await reused.close();
 	});
+
+	it("releases the label and unlinks when the handle close rejects", async () => {
+		scratch = await Scratch.create();
+
+		const file = await SampleFile.create(scratch, "close-fail");
+		const path = scratch.filePath("close-fail");
+		const closeError = new Error("handle close failed");
+		const fileHandle = (file as unknown as { readonly fileHandle: { close: () => Promise<void> } }).fileHandle;
+
+		vi.spyOn(fileHandle, "close").mockRejectedValueOnce(closeError);
+
+		await expect(file.close()).rejects.toThrow(/handle close failed/);
+		expect(fsPromises.unlink).toHaveBeenCalledWith(path);
+
+		const reused = await SampleFile.create(scratch, "close-fail");
+
+		await reused.close();
+	});
 });
 
 describe("Scratch plus SampleFile", () => {

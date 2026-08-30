@@ -111,9 +111,12 @@ export class SampleFile {
 
 		this.isClosed = true;
 
-		await this.fileHandle.close();
-		await unlink(this.path).catch(() => undefined);
-		this.scratch.releaseLabel(this.label);
+		try {
+			await this.fileHandle.close();
+		} finally {
+			await unlink(this.path).catch(() => undefined);
+			this.scratch.releaseLabel(this.label);
+		}
 	}
 
 	private assertOpen(): void {
