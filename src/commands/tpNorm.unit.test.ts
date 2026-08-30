@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,8 @@ import { createSine } from "../utils/testSignals";
 import { WavReader, type AudioBlock } from "../wav/WavReader";
 import { WavWriter } from "../wav/WavWriter";
 import { tpNorm } from "./tpNorm";
+
+vi.mock("node:fs/promises", { spy: true });
 
 const SAMPLE_RATE = 48000;
 
@@ -251,6 +254,28 @@ describe("tp-norm", () => {
 		expect(Array.from(output[0] ?? [])).toEqual(Array.from(silence[0] ?? []));
 		expect(await measureFileIndependent(outputPath)).toBe(0);
 		expect(Buffer.compare(await readFile(inputPath), await readFile(outputPath))).toBe(0);
+	});
+
+	it("leaves destination file bytes untouched when the silence pass-through rename fails", async () => {
+		const inputPath = join(workingDirectory, "silence.wav");
+		const outputPath = join(workingDirectory, "existing.wav");
+
+		await writeWav(inputPath, [new Float64Array(64)]);
+		await writeFile(outputPath, "original-bytes");
+
+		const unlinkSpy = vi.spyOn(fsPromises, "unlink");
+		const renameSpy = vi.spyOn(fsPromises, "rename").mockRejectedValueOnce(new Error("rename failed"));
+
+		try {
+			await expect(tpNorm(inputPath, { output: outputPath, tp: -1 })).rejects.toThrow("rename failed");
+
+			expect(await readFile(outputPath, "utf8")).toBe("original-bytes");
+			expect(unlinkSpy.mock.calls.some((call) => call[0] === outputPath)).toBe(false);
+			expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
+		} finally {
+			renameSpy.mockRestore();
+			unlinkSpy.mockRestore();
+		}
 	});
 
 	it("copies a silent 8-bit source byte-identically", async () => {
