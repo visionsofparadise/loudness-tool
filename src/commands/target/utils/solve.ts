@@ -415,8 +415,6 @@ export const iterateForTargets = async (args: {
 	let winnerOutputTruePeakDb: number | null = null;
 	let winnerOutputLra: number | null = null;
 	let winningEnvelope: SampleFile | undefined;
-	let result: IterateResult | undefined;
-	const errors: Array<unknown> = [];
 
 	try {
 		for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex++) {
@@ -527,7 +525,7 @@ export const iterateForTargets = async (args: {
 			isLegalAttempt(winningAttempt.outputLufs, winningAttempt.outputTruePeakDb, targetLufs, effectiveTargetTp) &&
 			Math.abs(grainedDb(winningAttempt.lufsErr)) < tolerance;
 
-		result = {
+		const result: IterateResult = {
 			bestSmoothedEnvelope: winningEnvelope ?? (await SampleFile.create(scratch, "empty-envelope")),
 			bestB: bestBoost,
 			bestLimitDb: currentLimit,
@@ -540,29 +538,13 @@ export const iterateForTargets = async (args: {
 		};
 
 		winningEnvelope = undefined;
-	} catch (error: unknown) {
-		errors.push(error);
+
+		return result;
 	} finally {
 		try {
 			await winningEnvelope?.close();
-		} catch (error: unknown) {
-			errors.push(error);
-		}
-
-		try {
+		} finally {
 			await detectionEnvelope.close();
-		} catch (error: unknown) {
-			errors.push(error);
 		}
 	}
-
-	if (errors.length === 1) {
-		throw errors[0];
-	}
-
-	if (errors.length > 1 || result === undefined) {
-		throw new AggregateError(errors, "Iteration and cleanup failed");
-	}
-
-	return result;
 };

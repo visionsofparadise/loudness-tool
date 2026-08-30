@@ -590,37 +590,31 @@ describe("iterateForTargets", () => {
 			await dest.append(samples, samples.length);
 		});
 
-		const thrown: unknown = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs: measurement.integratedLufs - 0.5,
-			targetTp: measurement.truePeakDb - 20,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 2,
-			tolerance: 0.01,
-			neverExpand: false,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		}).then(
-			() => undefined,
-			(error: unknown) => error,
-		);
+		await expect(
+			iterateForTargets({
+				inputPath,
+				scratch,
+				sampleRate: measurement.sampleRate,
+				channelCount: measurement.channelCount,
+				frameCount: measurement.frameCount,
+				anchorBase: {
+					floorDb: null,
+					pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+				},
+				smoothingMs: 1,
+				targetLufs: measurement.integratedLufs - 0.5,
+				targetTp: measurement.truePeakDb - 20,
+				limitAutoDb: measurement.limitAutoDb,
+				sourceLufs: measurement.integratedLufs,
+				sourcePeakDb: measurement.truePeakDb,
+				maxAttempts: 2,
+				tolerance: 0.01,
+				neverExpand: false,
+				histogram: measurement.detectionHistogram,
+				detectionEnvelope: measurement.detectionEnvelope,
+			}),
+		).rejects.toThrow(/detection close failed/);
 
-		expect(thrown).toBeInstanceOf(AggregateError);
-
-		const messages = (thrown as AggregateError).errors.map((error: Error) => error.message);
-
-		expect(messages).toEqual(["injected later-attempt failure", "detection close failed"]);
 		expect(electedClose).toBeDefined();
 		expect(electedClose).toHaveBeenCalled();
 	}, 30_000);
