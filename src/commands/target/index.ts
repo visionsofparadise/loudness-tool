@@ -31,6 +31,7 @@ const DEFAULT_SMOOTHING_MS = 1;
 const DEFAULT_TOLERANCE = 0.5;
 const FLOOR_PIVOT_EPSILON_DB = 0.01;
 const PIVOT_FALLBACK_DB = -40;
+const TARGET_LUFS_STEP = 0.1;
 
 const alignedLine = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}    ${value}`;
 
@@ -44,8 +45,33 @@ const parseFinite = (name: string, value: string, isValid: (parsed: number) => b
 	return parsed;
 };
 
-const parseLufs = (value: string): number =>
-	parseFinite("lufs", value, (parsed) => parsed >= -50 && parsed <= 0, "must be in [-50, 0]");
+const assertBounded = (
+	name: string,
+	value: number | undefined,
+	isValid: (parsed: number) => boolean,
+	message: string,
+): void => {
+	if (value !== undefined && !isValid(value)) {
+		throw new InvalidArgumentError(`${name} ${message}, received ${value}`);
+	}
+};
+
+const isMultipleOf = (value: number, step: number): boolean => {
+	const valueDecimals = (value.toString().split(".")[1] ?? "").length;
+	const stepDecimals = (step.toString().split(".")[1] ?? "").length;
+	const decimals = valueDecimals > stepDecimals ? valueDecimals : stepDecimals;
+	const scaledValue = Number.parseInt(value.toFixed(decimals).replace(".", ""), 10);
+	const scaledStep = Number.parseInt(step.toFixed(decimals).replace(".", ""), 10);
+
+	return scaledValue % scaledStep === 0;
+};
+
+const LUFS_RANGE = `must be in [-50, 0] in steps of ${TARGET_LUFS_STEP}`;
+
+const isLufs = (value: number): boolean =>
+	Number.isFinite(value) && value >= -50 && value <= 0 && isMultipleOf(value, TARGET_LUFS_STEP);
+
+const parseLufs = (value: string): number => parseFinite("lufs", value, isLufs, LUFS_RANGE);
 
 const isBoundedNegativeDb = (value: number, lowerBound: number): boolean =>
 	Number.isFinite(value) && value >= lowerBound && value < 0;
@@ -57,20 +83,27 @@ const parseNegativeDb =
 	(value: string): number =>
 		parseFinite(name, value, (parsed) => isBoundedNegativeDb(parsed, lowerBound), boundedNegativeDbRange(lowerBound));
 
-const assertBoundedNegativeDb = (name: string, lowerBound: number, value: number | undefined): void => {
-	if (value !== undefined && !isBoundedNegativeDb(value, lowerBound)) {
-		throw new InvalidArgumentError(`${name} ${boundedNegativeDbRange(lowerBound)}, received ${value}`);
-	}
-};
+const assertBoundedNegativeDb = (name: string, lowerBound: number, value: number | undefined): void =>
+	assertBounded(name, value, (parsed) => isBoundedNegativeDb(parsed, lowerBound), boundedNegativeDbRange(lowerBound));
+
+const LIMIT_PERCENTILE_RANGE = "must be in [0.5, 1.0]";
+
+const isLimitPercentile = (value: number): boolean => Number.isFinite(value) && value >= 0.5 && value <= 1;
 
 const parseLimitPercentile = (value: string): number =>
-	parseFinite("limit-percentile", value, (parsed) => parsed >= 0.5 && parsed <= 1, "must be in [0.5, 1.0]");
+	parseFinite("limit-percentile", value, isLimitPercentile, LIMIT_PERCENTILE_RANGE);
 
-const parseSmoothing = (value: string): number =>
-	parseFinite("smoothing", value, (parsed) => parsed >= 0.01 && parsed <= 200, "must be in [0.01, 200]");
+const SMOOTHING_RANGE = "must be in [0.01, 200]";
 
-const parseTolerance = (value: string): number =>
-	parseFinite("tolerance", value, (parsed) => parsed > 0, "must be > 0");
+const isSmoothing = (value: number): boolean => Number.isFinite(value) && value >= 0.01 && value <= 200;
+
+const parseSmoothing = (value: string): number => parseFinite("smoothing", value, isSmoothing, SMOOTHING_RANGE);
+
+const TOLERANCE_RANGE = "must be in (0, 6]";
+
+const isTolerance = (value: number): boolean => Number.isFinite(value) && value > 0 && value <= 6;
+
+const parseTolerance = (value: string): number => parseFinite("tolerance", value, isTolerance, TOLERANCE_RANGE);
 
 const formatAttempt = (attempt: IterationAttempt, attemptIndex: number): string =>
 	[
@@ -115,10 +148,14 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE;
 	const neverExpand = options.neverExpand === true;
 
+	assertBounded("lufs", options.lufs, isLufs, LUFS_RANGE);
 	assertBoundedNegativeDb("tp", -24, options.tp);
 	assertBoundedNegativeDb("pivot", -80, options.pivot);
 	assertBoundedNegativeDb("floor", -100, options.floor);
 	assertBoundedNegativeDb("limit-db", -60, options.limitDb);
+	assertBounded("limit-percentile", options.limitPercentile, isLimitPercentile, LIMIT_PERCENTILE_RANGE);
+	assertBounded("smoothing", options.smoothing, isSmoothing, SMOOTHING_RANGE);
+	assertBounded("tolerance", options.tolerance, isTolerance, TOLERANCE_RANGE);
 
 	if (options.floor !== undefined && options.pivot !== undefined && options.floor >= options.pivot) {
 		throw new InvalidArgumentError("floor must be < pivot when both are supplied");

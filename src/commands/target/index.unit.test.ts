@@ -163,7 +163,7 @@ describe("target", () => {
 			/smoothing must be in \[0.01, 200\]/,
 		);
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--tolerance", "0"])).rejects.toThrow(
-			/tolerance must be > 0/,
+			/tolerance must be in \(0, 6\]/,
 		);
 	});
 
@@ -191,6 +191,33 @@ describe("target", () => {
 		);
 		await expect(target("in.wav", { output: "out.wav", limitDb: -61 })).rejects.toThrow(
 			"limit-db must be in [-60, 0), received -61",
+		);
+	});
+
+	it("rejects each remaining donor bound at the CLI parser and the exported function", async () => {
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--lufs", "-16.15"])).rejects.toThrow(
+			/lufs must be in \[-50, 0\] in steps of 0\.1, received -16\.15/,
+		);
+		await expect(target("in.wav", { output: "out.wav", lufs: -16.15 })).rejects.toThrow(
+			"lufs must be in [-50, 0] in steps of 0.1, received -16.15",
+		);
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--tolerance", "6.5"])).rejects.toThrow(
+			/tolerance must be in \(0, 6\], received 6\.5/,
+		);
+		await expect(target("in.wav", { output: "out.wav", tolerance: 6.5 })).rejects.toThrow(
+			"tolerance must be in (0, 6], received 6.5",
+		);
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--smoothing", "200.5"])).rejects.toThrow(
+			/smoothing must be in \[0\.01, 200\], received 200\.5/,
+		);
+		await expect(target("in.wav", { output: "out.wav", smoothing: 200.5 })).rejects.toThrow(
+			"smoothing must be in [0.01, 200], received 200.5",
+		);
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--limit-percentile", "1.5"])).rejects.toThrow(
+			/limit-percentile must be in \[0\.5, 1\.0\], received 1\.5/,
+		);
+		await expect(target("in.wav", { output: "out.wav", limitPercentile: 1.5 })).rejects.toThrow(
+			"limit-percentile must be in [0.5, 1.0], received 1.5",
 		);
 	});
 
@@ -224,6 +251,45 @@ describe("target", () => {
 				pivot: -80,
 				floor: -100,
 				limitDb: -60,
+			}),
+		);
+
+		expect(cli.exitCode).toBeUndefined();
+		expect(direct.exitCode).toBeUndefined();
+		expect(cli.stderr).toMatch(/no measurable loudness/);
+		expect(direct.stderr).toMatch(/no measurable loudness/);
+	});
+
+	it("accepts each remaining donor edge", async () => {
+		const inputPath = join(workingDirectory, "edge-silent.wav");
+		const cliOutputPath = join(workingDirectory, "edge-silent-cli.wav");
+		const functionOutputPath = join(workingDirectory, "edge-silent-fn.wav");
+
+		await writeWav(inputPath, [new Float64Array(64)]);
+
+		const cli = await capture(async () => {
+			await parseProgram([
+				"target",
+				inputPath,
+				"-o",
+				cliOutputPath,
+				"--lufs",
+				"-16.1",
+				"--limit-percentile",
+				"0.5",
+				"--smoothing",
+				"0.01",
+				"--tolerance",
+				"6",
+			]);
+		});
+		const direct = await capture(() =>
+			target(inputPath, {
+				output: functionOutputPath,
+				lufs: -50,
+				limitPercentile: 1,
+				smoothing: 200,
+				tolerance: 6,
 			}),
 		);
 
