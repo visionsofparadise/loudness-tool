@@ -146,6 +146,39 @@ describe("measureSource", () => {
 		await measurement.detectionEnvelope.close();
 	});
 
+	it("returns empty source-only stats for a source shorter than one short-term window", async () => {
+		scratch = await Scratch.create();
+
+		const frameCount = SAMPLE_RATE * 2;
+		const channels = createSine(frameCount, 1, SAMPLE_RATE, 1000, 0.1);
+		const inputPath = join(workingDirectory, "short.wav");
+
+		await writeWav(inputPath, channels);
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
+
+		accumulator.push(channels, frameCount);
+
+		const shortTermSeries = accumulator.finalize();
+		const sourceOnly = getLraConsideredStats(shortTermSeries.subarray(0, accumulator.sourceWindowCount));
+		const tailIncluded = getLraConsideredStats(shortTermSeries);
+
+		expect(accumulator.sourceWindowCount).toBe(0);
+		expect(sourceOnly.minimum).toBe(Number.POSITIVE_INFINITY);
+		expect(measurement.floorAutoDb).toBe(Number.POSITIVE_INFINITY);
+		expect(measurement.pivotAutoDb).toBe(Number.POSITIVE_INFINITY);
+		expect(Number.isFinite(measurement.integratedLufs)).toBe(true);
+		expect(Number.isFinite(tailIncluded.minimum)).toBe(true);
+
+		await measurement.detectionEnvelope.close();
+	});
+
 	it("derives floorAutoDb from source-only windows when the source ends on a quiet segment", async () => {
 		scratch = await Scratch.create();
 

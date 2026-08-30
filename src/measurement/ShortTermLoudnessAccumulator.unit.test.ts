@@ -113,18 +113,29 @@ describe("ShortTermLoudnessAccumulator", () => {
 		);
 	});
 
-	it("sourceWindowCount matches the closed-window formula at a boundary length", () => {
+	it("sourceWindowCount follows source length at window boundaries", () => {
 		const blockSize = Math.round(3 * SAMPLE_RATE);
 		const blockStep = Math.round(0.1 * SAMPLE_RATE);
-		const sourceFrames = blockSize + blockStep - 1;
-		const channels = createSine(sourceFrames, 1, SAMPLE_RATE, 1000, 0.1);
-		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
+		const windowsOf = (sourceFrames: number): { sourceWindowCount: number; seriesLength: number } => {
+			const channels = createSine(sourceFrames, 1, SAMPLE_RATE, 1000, 0.1);
+			const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
 
-		accumulator.push(channels, sourceFrames);
-		accumulator.finalize();
+			accumulator.push(channels, sourceFrames);
 
-		expect(accumulator.sourceWindowCount).toBe(
-			sourceFrames < blockSize ? 0 : Math.floor((sourceFrames - blockSize) / blockStep) + 1,
-		);
+			const series = accumulator.finalize();
+
+			return { sourceWindowCount: accumulator.sourceWindowCount, seriesLength: series.length };
+		};
+		const justShort = windowsOf(blockSize - 1);
+		const oneWindow = windowsOf(blockSize);
+		const twoWindows = windowsOf(blockSize + blockStep);
+		const justShortTail = justShort.seriesLength - justShort.sourceWindowCount;
+
+		expect(justShort.sourceWindowCount).toBe(0);
+		expect(oneWindow.sourceWindowCount).toBe(1);
+		expect(twoWindows.sourceWindowCount).toBe(2);
+		expect(justShortTail).toBeGreaterThan(0);
+		expect(oneWindow.seriesLength - oneWindow.sourceWindowCount).toBe(justShortTail);
+		expect(twoWindows.seriesLength - twoWindows.sourceWindowCount).toBe(justShortTail);
 	});
 });
