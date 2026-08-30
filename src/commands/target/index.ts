@@ -1,4 +1,5 @@
 import { InvalidArgumentError, type Command } from "commander";
+import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
 import { WavReader } from "../../wav/WavReader";
 import { copyUnchanged } from "../utils/copyUnchanged";
@@ -54,16 +55,6 @@ const assertBounded = (
 	if (value !== undefined && !isValid(value)) {
 		throw new InvalidArgumentError(`${name} ${message}, received ${value}`);
 	}
-};
-
-const isMultipleOf = (value: number, step: number): boolean => {
-	const valueDecimals = (value.toString().split(".")[1] ?? "").length;
-	const stepDecimals = (step.toString().split(".")[1] ?? "").length;
-	const decimals = valueDecimals > stepDecimals ? valueDecimals : stepDecimals;
-	const scaledValue = Number.parseInt(value.toFixed(decimals).replace(".", ""), 10);
-	const scaledStep = Number.parseInt(step.toFixed(decimals).replace(".", ""), 10);
-
-	return scaledValue % scaledStep === 0;
 };
 
 const LUFS_RANGE = `must be in [-50, 0] in steps of ${TARGET_LUFS_STEP}`;

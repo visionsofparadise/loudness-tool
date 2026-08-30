@@ -2,6 +2,7 @@ import { InvalidArgumentError, type Command } from "commander";
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
 import { dbToLinear } from "../utils/db";
+import { isMultipleOf } from "../utils/multipleOf";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { copyUnchanged } from "./utils/copyUnchanged";
 import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
@@ -16,11 +17,14 @@ const DEFAULT_TARGET_LUFS = -16;
 
 const alignedLine = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}    ${value}`;
 
-const isTargetLufsInRange = (target: number): boolean => Number.isFinite(target) && target >= -50 && target <= 0;
+const TARGET_LUFS_STEP = 0.1;
+
+const isTargetLufsInRange = (target: number): boolean =>
+	Number.isFinite(target) && target >= -50 && target <= 0 && isMultipleOf(target, TARGET_LUFS_STEP);
 
 const assertTargetLufs = (target: number, received: string | number): void => {
 	if (!isTargetLufsInRange(target)) {
-		throw new InvalidArgumentError(`lufs must be in [-50, 0], received ${received}`);
+		throw new InvalidArgumentError(`lufs must be in [-50, 0] in steps of ${TARGET_LUFS_STEP}, received ${received}`);
 	}
 };
 

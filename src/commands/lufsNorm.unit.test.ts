@@ -333,6 +333,23 @@ describe("lufs-norm", () => {
 		);
 	});
 
+	it("rejects a target off the 0.1 step at both entry points", async () => {
+		await expect(parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--lufs", "-16.15"])).rejects.toThrow(
+			/lufs must be in \[-50, 0\] in steps of 0\.1, received -16\.15/,
+		);
+		await expect(lufsNorm("in.wav", { output: "out.wav", lufs: -16.15 })).rejects.toThrow(
+			/lufs must be in \[-50, 0\] in steps of 0\.1, received -16\.15/,
+		);
+	});
+
+	it("accepts a target on the 0.1 step", async () => {
+		const parsed = await parseProgram(["lufs-norm", "in.wav", "-o", "out.wav", "--lufs", "-16.1"]).catch(
+			(error: unknown) => error,
+		);
+
+		expect(String(parsed)).not.toMatch(/lufs must be in/);
+	});
+
 	it("rejects a target outside [-50, 0] at the exported function", async () => {
 		await expect(lufsNorm("in.wav", { output: "out.wav", lufs: 6 })).rejects.toThrow(/lufs must be in \[-50, 0\]/);
 		await expect(lufsNorm("in.wav", { output: "out.wav", lufs: -51 })).rejects.toThrow(/lufs must be in \[-50, 0\]/);
