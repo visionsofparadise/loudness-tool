@@ -2,12 +2,14 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Scratch } from "./Scratch";
 
 const scratchDirectories: Array<string> = [];
 
 afterEach(async () => {
+	vi.restoreAllMocks();
+
 	for (const directory of scratchDirectories) {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -34,14 +36,14 @@ const absentProcessIdOf = (): number => {
 };
 
 describe("Scratch", () => {
-	it("creates a unique directory under the default namespaced root", async () => {
+	it("creates a unique directory under the node temp folder", async () => {
 		const scratch = await Scratch.create();
 
 		scratchDirectories.push(scratch.directory);
 
 		expect(existsSync(scratch.directory)).toBe(true);
-		expect(dirname(scratch.directory)).toBe(join(tmpdir(), "loudness-tool"));
-		expect(basename(scratch.directory)).toMatch(new RegExp(`^scratch-${process.pid}-`));
+		expect(dirname(scratch.directory)).toBe(tmpdir());
+		expect(basename(scratch.directory)).toMatch(new RegExp(`^loudness-tool-${process.pid}-`));
 
 		await scratch.dispose();
 	});
@@ -56,7 +58,7 @@ describe("Scratch", () => {
 		const scratch = await Scratch.create(baseDirectory);
 
 		expect(dirname(scratch.directory)).toBe(baseDirectory);
-		expect(basename(scratch.directory)).toMatch(new RegExp(`^scratch-${process.pid}-`));
+		expect(basename(scratch.directory)).toMatch(new RegExp(`^loudness-tool-${process.pid}-`));
 
 		await scratch.dispose();
 		expect(existsSync(scratch.directory)).toBe(false);
@@ -82,8 +84,8 @@ describe("Scratch", () => {
 
 		await mkdir(rootDirectory, { recursive: true });
 
-		const deadDirectory = join(rootDirectory, `scratch-${absentProcessIdOf()}-stale`);
-		const liveDirectory = join(rootDirectory, `scratch-${process.pid}-keep`);
+		const deadDirectory = join(rootDirectory, `loudness-tool-${absentProcessIdOf()}-stale`);
+		const liveDirectory = join(rootDirectory, `loudness-tool-${process.pid}-keep`);
 
 		await mkdir(deadDirectory);
 		await mkdir(liveDirectory);
@@ -99,6 +101,58 @@ describe("Scratch", () => {
 
 		expect(existsSync(scratch.directory)).toBe(false);
 		expect(existsSync(liveDirectory)).toBe(true);
+	});
+
+	it("leaves a non-matching sibling in a user-supplied root", async () => {
+		const rootDirectory = join(tmpdir(), `loudness-tool-scratch-unrelated-${Date.now()}`);
+
+		scratchDirectories.push(rootDirectory);
+
+		await mkdir(rootDirectory, { recursive: true });
+
+		const unrelatedDirectory = join(rootDirectory, "scratch-4242-backup");
+
+		await mkdir(unrelatedDirectory);
+		await writeFile(join(unrelatedDirectory, "keep-me.bin"), "payload");
+
+		const scratch = await Scratch.create(rootDirectory);
+
+		expect(existsSync(unrelatedDirectory)).toBe(true);
+		expect(existsSync(join(unrelatedDirectory, "keep-me.bin"))).toBe(true);
+
+		await scratch.dispose();
+
+		expect(existsSync(unrelatedDirectory)).toBe(true);
+	});
+
+	it("retains a matching directory when the PID probe throws EPERM", async () => {
+		const rootDirectory = join(tmpdir(), `loudness-tool-scratch-eperm-${Date.now()}`);
+
+		scratchDirectories.push(rootDirectory);
+
+		await mkdir(rootDirectory, { recursive: true });
+
+		const uncertainProcessId = 4242;
+		const uncertainDirectory = join(rootDirectory, `loudness-tool-${uncertainProcessId}-uncertain`);
+
+		await mkdir(uncertainDirectory);
+		await writeFile(join(uncertainDirectory, "payload.bin"), "payload");
+
+		const originalKill = process.kill.bind(process);
+
+		vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+			if (pid === uncertainProcessId) {
+				throw Object.assign(new Error("denied"), { code: "EPERM" });
+			}
+
+			return originalKill(pid, signal);
+		});
+
+		const scratch = await Scratch.create(rootDirectory);
+
+		expect(existsSync(uncertainDirectory)).toBe(true);
+
+		await scratch.dispose();
 	});
 
 	it("joins labels onto the directory", async () => {

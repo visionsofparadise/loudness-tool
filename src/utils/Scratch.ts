@@ -2,9 +2,7 @@ import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const defaultRootDirectory = join(tmpdir(), "loudness-tool");
-
-function processIsAbsent(processId: number): boolean {
+const processIsAbsent = (processId: number): boolean => {
 	try {
 		process.kill(processId, 0);
 
@@ -12,9 +10,9 @@ function processIsAbsent(processId: number): boolean {
 	} catch (error) {
 		return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
 	}
-}
+};
 
-async function scavengeDeadScratchDirectories(rootDirectory: string): Promise<void> {
+const scavengeDeadScratchDirectories = async (rootDirectory: string): Promise<void> => {
 	let entries;
 
 	try {
@@ -32,7 +30,7 @@ async function scavengeDeadScratchDirectories(rootDirectory: string): Promise<vo
 			continue;
 		}
 
-		const match = /^scratch-(\d+)-.+$/.exec(entry.name);
+		const match = /^loudness-tool-(\d+)-.+$/.exec(entry.name);
 
 		if (match === null) {
 			continue;
@@ -48,16 +46,16 @@ async function scavengeDeadScratchDirectories(rootDirectory: string): Promise<vo
 			continue;
 		}
 	}
-}
+};
 
 export class Scratch {
 	static async create(baseDirectory?: string): Promise<Scratch> {
-		const rootDirectory = baseDirectory ?? defaultRootDirectory;
+		const rootDirectory = baseDirectory ?? tmpdir();
 
 		await mkdir(rootDirectory, { recursive: true });
 		await scavengeDeadScratchDirectories(rootDirectory);
 
-		const directory = await mkdtemp(join(rootDirectory, `scratch-${process.pid}-`));
+		const directory = await mkdtemp(join(rootDirectory, `loudness-tool-${process.pid}-`));
 
 		return new Scratch(directory);
 	}
