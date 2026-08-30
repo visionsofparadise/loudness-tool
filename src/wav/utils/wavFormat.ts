@@ -51,43 +51,6 @@ export const assertRiffDataSize = (dataSize: number): void => {
 
 const hexPad = (value: number, width: number): string => value.toString(16).padStart(width, "0");
 
-const isPrintableAsciiChunkId = (header: Buffer): boolean =>
-	header.subarray(0, 4).every((byte) => byte >= 0x20 && byte <= 0x7e);
-
-const trailingBytesAreChunkSequence = async (
-	fileHandle: FileHandle,
-	dataOffset: number,
-	fileSize: number,
-): Promise<boolean> => {
-	const chunkHeader = Buffer.alloc(8);
-	let cursor = dataOffset;
-
-	while (cursor + 8 <= fileSize) {
-		await fileHandle.read(chunkHeader, 0, 8, cursor);
-
-		if (!isPrintableAsciiChunkId(chunkHeader)) {
-			return false;
-		}
-
-		const chunkSize = chunkHeader.readUInt32LE(4);
-		const unpaddedEnd = cursor + 8 + chunkSize;
-
-		if (unpaddedEnd === fileSize) {
-			return true;
-		}
-
-		const nextOffset = unpaddedEnd + (chunkSize % 2);
-
-		if (nextOffset > fileSize) {
-			return false;
-		}
-
-		cursor = nextOffset;
-	}
-
-	return cursor === fileSize;
-};
-
 const subFormatGuidOf = (formatData: Buffer): string => {
 	if (formatData.length >= SUBFORMAT_GUID_OFFSET + SUBFORMAT_GUID_SIZE) {
 		const firstField = formatData.readUInt32LE(SUBFORMAT_GUID_OFFSET);
@@ -242,17 +205,8 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 			const availableBytes = fileSize - dataOffset;
 			const declaredSize = isRf64 && ds64DataSize !== undefined ? ds64DataSize : chunkSize;
 			const isStreamingSentinel =
-				!(isRf64 && ds64DataSize !== undefined) &&
-				(declaredSize === 0 || declaredSize === STREAMING_DATA_SIZE_SENTINEL);
-			const zeroSentinelIsEmptyChunk =
-				isStreamingSentinel &&
-				declaredSize === 0 &&
-				(await trailingBytesAreChunkSequence(fileHandle, dataOffset, fileSize));
-			const dataSize = zeroSentinelIsEmptyChunk
-				? 0
-				: isStreamingSentinel
-					? availableBytes
-					: Math.min(declaredSize, availableBytes);
+				!(isRf64 && ds64DataSize !== undefined) && declaredSize === STREAMING_DATA_SIZE_SENTINEL;
+			const dataSize = isStreamingSentinel ? availableBytes : Math.min(declaredSize, availableBytes);
 
 			return {
 				...formatFields,

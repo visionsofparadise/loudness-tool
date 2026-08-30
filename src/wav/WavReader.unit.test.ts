@@ -116,41 +116,6 @@ const writeRiffWav = async (
 	await writeFile(path, file);
 };
 
-const chunkBytes = (id: string, payload: Buffer, options: { padded: boolean }): Buffer => {
-	const padSize = options.padded ? payload.length % 2 : 0;
-	const chunk = Buffer.alloc(8 + payload.length + padSize);
-
-	chunk.write(id, 0);
-	chunk.writeUInt32LE(payload.length, 4);
-	payload.copy(chunk, 8);
-
-	return chunk;
-};
-
-const writeEmptyDataWav = async (path: string, trailingBytes: Buffer): Promise<void> => {
-	const dataChunkOffset = 36;
-	const fileSize = dataChunkOffset + 8 + trailingBytes.length;
-	const file = Buffer.alloc(fileSize);
-	const blockAlign = bytesPerSampleOf("16");
-
-	file.write("RIFF", 0);
-	file.writeUInt32LE(fileSize - 8, 4);
-	file.write("WAVE", 8);
-	file.write("fmt ", 12);
-	file.writeUInt32LE(16, 16);
-	file.writeUInt16LE(1, 20);
-	file.writeUInt16LE(1, 22);
-	file.writeUInt32LE(SAMPLE_RATE, 24);
-	file.writeUInt32LE(SAMPLE_RATE * blockAlign, 28);
-	file.writeUInt16LE(blockAlign, 32);
-	file.writeUInt16LE(16, 34);
-	file.write("data", dataChunkOffset);
-	file.writeUInt32LE(0, dataChunkOffset + 4);
-	trailingBytes.copy(file, dataChunkOffset + 8);
-
-	await writeFile(path, file);
-};
-
 const writeRf64Wav = async (
 	path: string,
 	options: {
@@ -489,82 +454,14 @@ describe("WavReader", () => {
 		expect(read.format.frameCount / read.format.sampleRate).toBe(2);
 	});
 
-	it("measures the real content of a file whose data size is the 0 streaming sentinel", async () => {
-		const path = join(workingDirectory, "sentinel-zero.wav");
-		const frameCount = 47;
+	it("reads 0 frames from a data chunk declaring 0 even when audio bytes follow it", async () => {
+		const path = join(workingDirectory, "declared-zero.wav");
 
 		await writeRiffWav(path, {
 			sampleRate: SAMPLE_RATE,
 			channelCount: 1,
 			bitDepth: "16",
-			channels: createRamp(frameCount, 1),
-			declaredDataSize: 0,
-		});
-
-		const read = await readAll(path);
-
-		expect(read.format.frameCount).toBe(frameCount);
-	});
-
-	it("reads 0 frames from an empty data chunk followed by a LIST chunk", async () => {
-		const path = join(workingDirectory, "empty-data-list.wav");
-		const listPayload = Buffer.alloc(16);
-
-		listPayload.write("INFO", 0);
-		listPayload.write("INAM", 4);
-		listPayload.writeUInt32LE(4, 8);
-		listPayload.write("test", 12);
-
-		await writeEmptyDataWav(path, chunkBytes("LIST", listPayload, { padded: true }));
-
-		const read = await readAll(path);
-
-		expect(read.format.frameCount).toBe(0);
-	});
-
-	it("reads 0 frames from an empty data chunk followed by an odd-payload LIST chunk carrying its pad byte", async () => {
-		const path = join(workingDirectory, "empty-data-odd-list-padded.wav");
-
-		await writeEmptyDataWav(path, chunkBytes("LIST", Buffer.from("INFOx"), { padded: true }));
-
-		const read = await readAll(path);
-
-		expect(read.format.frameCount).toBe(0);
-	});
-
-	it("reads 0 frames when the file's last chunk has an odd payload and omits its pad byte", async () => {
-		const path = join(workingDirectory, "empty-data-odd-list-unpadded.wav");
-
-		await writeEmptyDataWav(path, chunkBytes("LIST", Buffer.from("INFOx"), { padded: false }));
-
-		const read = await readAll(path);
-
-		expect(read.format.frameCount).toBe(0);
-	});
-
-	it("keeps the streaming sentinel when a mid-sequence odd chunk omits its pad byte", async () => {
-		const path = join(workingDirectory, "empty-data-unpadded-middle.wav");
-		const trailingBytes = Buffer.concat([
-			chunkBytes("LIST", Buffer.from("INFOx"), { padded: false }),
-			chunkBytes("id3 ", Buffer.from("TAGyz"), { padded: false }),
-		]);
-
-		await writeEmptyDataWav(path, trailingBytes);
-
-		const read = await readAll(path);
-
-		expect(trailingBytes).toHaveLength(26);
-		expect(read.format.frameCount).toBe(13);
-	});
-
-	it("reads 0 frames from an empty data chunk that is the file's last chunk", async () => {
-		const path = join(workingDirectory, "empty-last.wav");
-
-		await writeRiffWav(path, {
-			sampleRate: SAMPLE_RATE,
-			channelCount: 1,
-			bitDepth: "16",
-			channels: [new Float64Array(0)],
+			channels: createRamp(47, 1),
 			declaredDataSize: 0,
 		});
 
