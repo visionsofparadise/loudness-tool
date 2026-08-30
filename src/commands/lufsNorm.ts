@@ -71,7 +71,7 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 
 	const gainDb = target - measurement.integratedLufs;
 	const gain = dbToLinear(gainDb);
-	const sourceTpDb = 20 * Math.log10(Math.max(measurement.truePeak, 0));
+	const sourceTpDb = 20 * Math.log10(measurement.truePeak);
 	const outputTruePeakDb = sourceTpDb + gainDb;
 
 	await applyUniformGain(inputPath, options.output, gain);

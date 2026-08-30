@@ -210,6 +210,37 @@ describe("stats", () => {
 		expect(parsed[0]?.loudnessRange).toEqual(expect.any(Number));
 	});
 
+	it("reports an unfloored true peak for a 1e-12-peak 32f source", async () => {
+		const inputPath = join(workingDirectory, "tiny.wav");
+		const tiny = new Float64Array(256).fill(1e-12);
+
+		await writeWav(inputPath, [tiny]);
+
+		const human = await capture(() => stats([inputPath], {}));
+		const json = await capture(() => stats([inputPath], { json: true }));
+		const parsed = JSON.parse(json.stdout) as Array<{ truePeakDb: number | null }>;
+		const reported = human.stdout.match(/true peak\s+(-?\d+\.\d+) dBTP/);
+
+		expect(parsed[0]?.truePeakDb).toEqual(expect.any(Number));
+		expect(parsed[0]?.truePeakDb).toBeLessThan(-220);
+		expect(human.stdout).not.toMatch(/-200\.00 dBTP/);
+		expect(Number(reported?.[1])).toBeLessThan(-220);
+	});
+
+	it("reports truePeakDb null and human n/a for a nonempty silent file", async () => {
+		const inputPath = join(workingDirectory, "silent.wav");
+
+		await writeWav(inputPath, [new Float64Array(64)]);
+
+		const human = await capture(() => stats([inputPath], {}));
+		const json = await capture(() => stats([inputPath], { json: true }));
+		const parsed = JSON.parse(json.stdout) as Array<{ truePeakDb: number | null; durationSeconds: number }>;
+
+		expect(human.stdout).toMatch(/true peak\s+n\/a/);
+		expect(parsed[0]?.truePeakDb).toBeNull();
+		expect(parsed[0]?.durationSeconds).toBeGreaterThan(0);
+	});
+
 	it("reports loudnessRange 0 for silence long enough to close short-term windows", async () => {
 		const inputPath = join(workingDirectory, "silence.wav");
 		const writer = await WavWriter.create(inputPath, {

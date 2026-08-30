@@ -259,7 +259,7 @@ describe("lufs-norm", () => {
 		expect(Math.abs(measured - target)).toBeLessThan(0.1);
 		expect(stdout).toMatch(/source integrated/);
 		expect(stdout).toMatch(/target\s+-16\.00 LUFS/);
-		expect(stdout).toMatch(/output true peak/);
+		expect(stdout).toMatch(/output true peak\s+-?\d+\.\d+ dBTP/);
 		expect(stdout).toContain(outputPath);
 	});
 
