@@ -187,6 +187,9 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 				effectivePivotDb = measurement.pivotAutoDb;
 			} else {
 				effectivePivotDb = PIVOT_FALLBACK_DB;
+				process.stderr.write(
+					`pivot auto-derivation produced no considered LRA blocks; falling back to ${PIVOT_FALLBACK_DB} dB. Supply --pivot explicitly for tighter control on short or near-silent sources\n`,
+				);
 			}
 
 			let effectiveFloorDb: number | null;

@@ -331,6 +331,24 @@ describe("target", () => {
 		expect(await readdir(scratchDir)).toEqual([]);
 	}, 30_000);
 
+	it("warns when pivot auto-derivation falls back", async () => {
+		const inputPath = join(workingDirectory, "short-source.wav");
+		const fallbackOutputPath = join(workingDirectory, "short-source-fallback.wav");
+		const pivotOutputPath = join(workingDirectory, "short-source-pivot.wav");
+
+		await writeWav(inputPath, createSine(SAMPLE_RATE * 2, 1, SAMPLE_RATE, 1000, 0.1));
+
+		const fallback = await capture(() => target(inputPath, { output: fallbackOutputPath, lufs: -16 }));
+		const explicit = await capture(() => target(inputPath, { output: pivotOutputPath, lufs: -16, pivot: -40 }));
+
+		expect(fallback.exitCode).toBeUndefined();
+		expect(fallback.stdout).toMatch(/output integrated/);
+		expect(fallback.stderr).toMatch(
+			/pivot auto-derivation produced no considered LRA blocks; falling back to -40 dB\. Supply --pivot explicitly for tighter control on short or near-silent sources/,
+		);
+		expect(explicit.stderr).not.toMatch(/pivot auto-derivation/);
+	}, 60_000);
+
 	it("rejects a 4-channel source", async () => {
 		const inputPath = join(workingDirectory, "quad.wav");
 		const outputPath = join(workingDirectory, "quad-out.wav");
