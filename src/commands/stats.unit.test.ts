@@ -210,7 +210,7 @@ describe("stats", () => {
 		expect(parsed[0]?.loudnessRange).toEqual(expect.any(Number));
 	});
 
-	it("reports an unfloored true peak for a 1e-12-peak 32f source", async () => {
+	it("reports the floored true peak for a 1e-12-peak 32f source", async () => {
 		const inputPath = join(workingDirectory, "tiny.wav");
 		const tiny = new Float64Array(256).fill(1e-12);
 
@@ -219,15 +219,13 @@ describe("stats", () => {
 		const human = await capture(() => stats([inputPath], {}));
 		const json = await capture(() => stats([inputPath], { json: true }));
 		const parsed = JSON.parse(json.stdout) as Array<{ truePeakDb: number | null }>;
-		const reported = human.stdout.match(/true peak\s+(-?\d+\.\d+) dBTP/);
 
 		expect(parsed[0]?.truePeakDb).toEqual(expect.any(Number));
-		expect(parsed[0]?.truePeakDb).toBeLessThan(-220);
-		expect(human.stdout).not.toMatch(/-200\.00 dBTP/);
-		expect(Number(reported?.[1])).toBeLessThan(-220);
+		expect(parsed[0]?.truePeakDb ?? 0).toBeCloseTo(-200, 6);
+		expect(human.stdout).toMatch(/true peak\s+-200\.00 dBTP/);
 	});
 
-	it("reports truePeakDb null and human n/a for a nonempty silent file", async () => {
+	it("reports the floored true peak for a nonempty silent file", async () => {
 		const inputPath = join(workingDirectory, "silent.wav");
 
 		await writeWav(inputPath, [new Float64Array(64)]);
@@ -236,8 +234,9 @@ describe("stats", () => {
 		const json = await capture(() => stats([inputPath], { json: true }));
 		const parsed = JSON.parse(json.stdout) as Array<{ truePeakDb: number | null; durationSeconds: number }>;
 
-		expect(human.stdout).toMatch(/true peak\s+n\/a/);
-		expect(parsed[0]?.truePeakDb).toBeNull();
+		expect(human.stdout).toMatch(/true peak\s+-200\.00 dBTP/);
+		expect(parsed[0]?.truePeakDb).toEqual(expect.any(Number));
+		expect(parsed[0]?.truePeakDb ?? 0).toBeCloseTo(-200, 6);
 		expect(parsed[0]?.durationSeconds).toBeGreaterThan(0);
 	});
 

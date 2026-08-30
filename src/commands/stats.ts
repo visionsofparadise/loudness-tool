@@ -2,6 +2,7 @@ import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumula
 import { computeLoudnessRange } from "../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
+import { linearToDb } from "../utils/db";
 import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
 import type { SourceBitDepth } from "../wav/utils/wavFormat";
 import type { Command } from "commander";
@@ -74,7 +75,7 @@ const measureStats = async (inputPath: string): Promise<StatsJson> =>
 			channelCount,
 			bitDepth,
 			durationSeconds: sampleRate === 0 ? 0 : frameCount / sampleRate,
-			truePeakDb: !(truePeak > 0) ? null : 20 * Math.log10(truePeak),
+			truePeakDb: frameCount === 0 ? null : linearToDb(truePeak),
 			integratedLufs: Number.isFinite(integrated) ? integrated : null,
 			loudnessRange: shortTerm.length === 0 ? null : computeLoudnessRange(shortTerm),
 		};

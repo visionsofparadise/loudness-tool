@@ -435,7 +435,7 @@ describe("iterateForTargets", () => {
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
-	it("reports an attempt's true peak unfloored", async () => {
+	it("reports an attempt's true peak floored", async () => {
 		scratch = await Scratch.create();
 
 		const inputPath = join(workingDirectory, "tiny-peak.wav");
@@ -478,8 +478,8 @@ describe("iterateForTargets", () => {
 			detectionEnvelope: measurement.detectionEnvelope,
 		});
 
-		expect(result.attempts[0]?.outputTruePeakDb).toBeLessThan(-220);
-		expect(result.winnerOutputTruePeakDb ?? 0).toBeLessThan(-220);
+		expect(result.attempts[0]?.outputTruePeakDb ?? 0).toBeCloseTo(-200, 6);
+		expect(result.winnerOutputTruePeakDb ?? 0).toBeCloseTo(-200, 6);
 
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);

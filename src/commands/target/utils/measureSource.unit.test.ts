@@ -113,7 +113,7 @@ describe("measureSource", () => {
 		await measurement.detectionEnvelope.close();
 	});
 
-	it("returns an unfloored truePeakDb for a 1e-12-peak source", async () => {
+	it("returns the floored truePeakDb for a 1e-12-peak source", async () => {
 		scratch = await Scratch.create();
 
 		const inputPath = join(workingDirectory, "tiny.wav");
@@ -127,8 +127,7 @@ describe("measureSource", () => {
 			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
 		});
 
-		expect(measurement.truePeakDb).toBeLessThan(-220);
-		expect(measurement.truePeakDb).toBeGreaterThan(-260);
+		expect(measurement.truePeakDb).toBeCloseTo(-200, 6);
 
 		await measurement.detectionEnvelope.close();
 	});
