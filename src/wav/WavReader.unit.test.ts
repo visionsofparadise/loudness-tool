@@ -602,6 +602,25 @@ describe("WavReader", () => {
 		expect(read.format.frameCount).toBe(ds64Frames);
 	});
 
+	it("reports the truncated frame count when rf64 ds64 exceeds the bytes present", async () => {
+		const path = join(workingDirectory, "rf64-ds64-oversize.wav");
+		const frameCount = 32;
+		const bytesPerFrame = 2 * bytesPerSampleOf("16");
+		const ds64Frames = 64;
+
+		await writeRf64Wav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 2,
+			bitDepth: "16",
+			channels: createRamp(frameCount, 2),
+			ds64DataSize: ds64Frames * bytesPerFrame,
+		});
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(frameCount);
+	});
+
 	it("caps the fmt read at 64 bytes", async () => {
 		const path = join(workingDirectory, "large-fmt.wav");
 		const channels = createRamp(8, 1);
