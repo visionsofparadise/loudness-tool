@@ -116,6 +116,41 @@ const writeRiffWav = async (
 	await writeFile(path, file);
 };
 
+const chunkBytes = (id: string, payload: Buffer, options: { padded: boolean }): Buffer => {
+	const padSize = options.padded ? payload.length % 2 : 0;
+	const chunk = Buffer.alloc(8 + payload.length + padSize);
+
+	chunk.write(id, 0);
+	chunk.writeUInt32LE(payload.length, 4);
+	payload.copy(chunk, 8);
+
+	return chunk;
+};
+
+const writeEmptyDataWav = async (path: string, trailingBytes: Buffer): Promise<void> => {
+	const dataChunkOffset = 36;
+	const fileSize = dataChunkOffset + 8 + trailingBytes.length;
+	const file = Buffer.alloc(fileSize);
+	const blockAlign = bytesPerSampleOf("16");
+
+	file.write("RIFF", 0);
+	file.writeUInt32LE(fileSize - 8, 4);
+	file.write("WAVE", 8);
+	file.write("fmt ", 12);
+	file.writeUInt32LE(16, 16);
+	file.writeUInt16LE(1, 20);
+	file.writeUInt16LE(1, 22);
+	file.writeUInt32LE(SAMPLE_RATE, 24);
+	file.writeUInt32LE(SAMPLE_RATE * blockAlign, 28);
+	file.writeUInt16LE(blockAlign, 32);
+	file.writeUInt16LE(16, 34);
+	file.write("data", dataChunkOffset);
+	file.writeUInt32LE(0, dataChunkOffset + 4);
+	trailingBytes.copy(file, dataChunkOffset + 8);
+
+	await writeFile(path, file);
+};
+
 const writeRf64Wav = async (
 	path: string,
 	options: {
@@ -473,39 +508,53 @@ describe("WavReader", () => {
 
 	it("reads 0 frames from an empty data chunk followed by a LIST chunk", async () => {
 		const path = join(workingDirectory, "empty-data-list.wav");
-		const listPayloadSize = 16;
-		const listChunkSize = 8 + listPayloadSize;
-		const dataChunkOffset = 36;
-		const listChunkOffset = dataChunkOffset + 8;
-		const fileSize = listChunkOffset + listChunkSize;
-		const file = Buffer.alloc(fileSize);
-		const blockAlign = bytesPerSampleOf("16");
+		const listPayload = Buffer.alloc(16);
 
-		file.write("RIFF", 0);
-		file.writeUInt32LE(fileSize - 8, 4);
-		file.write("WAVE", 8);
-		file.write("fmt ", 12);
-		file.writeUInt32LE(16, 16);
-		file.writeUInt16LE(1, 20);
-		file.writeUInt16LE(1, 22);
-		file.writeUInt32LE(SAMPLE_RATE, 24);
-		file.writeUInt32LE(SAMPLE_RATE * blockAlign, 28);
-		file.writeUInt16LE(blockAlign, 32);
-		file.writeUInt16LE(16, 34);
-		file.write("data", dataChunkOffset);
-		file.writeUInt32LE(0, dataChunkOffset + 4);
-		file.write("LIST", listChunkOffset);
-		file.writeUInt32LE(listPayloadSize, listChunkOffset + 4);
-		file.write("INFO", listChunkOffset + 8);
-		file.write("INAM", listChunkOffset + 12);
-		file.writeUInt32LE(4, listChunkOffset + 16);
-		file.write("test", listChunkOffset + 20);
+		listPayload.write("INFO", 0);
+		listPayload.write("INAM", 4);
+		listPayload.writeUInt32LE(4, 8);
+		listPayload.write("test", 12);
 
-		await writeFile(path, file);
+		await writeEmptyDataWav(path, chunkBytes("LIST", listPayload, { padded: true }));
 
 		const read = await readAll(path);
 
 		expect(read.format.frameCount).toBe(0);
+	});
+
+	it("reads 0 frames from an empty data chunk followed by an odd-payload LIST chunk carrying its pad byte", async () => {
+		const path = join(workingDirectory, "empty-data-odd-list-padded.wav");
+
+		await writeEmptyDataWav(path, chunkBytes("LIST", Buffer.from("INFOx"), { padded: true }));
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(0);
+	});
+
+	it("reads 0 frames when the file's last chunk has an odd payload and omits its pad byte", async () => {
+		const path = join(workingDirectory, "empty-data-odd-list-unpadded.wav");
+
+		await writeEmptyDataWav(path, chunkBytes("LIST", Buffer.from("INFOx"), { padded: false }));
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(0);
+	});
+
+	it("keeps the streaming sentinel when a mid-sequence odd chunk omits its pad byte", async () => {
+		const path = join(workingDirectory, "empty-data-unpadded-middle.wav");
+		const trailingBytes = Buffer.concat([
+			chunkBytes("LIST", Buffer.from("INFOx"), { padded: false }),
+			chunkBytes("id3 ", Buffer.from("TAGyz"), { padded: false }),
+		]);
+
+		await writeEmptyDataWav(path, trailingBytes);
+
+		const read = await readAll(path);
+
+		expect(trailingBytes).toHaveLength(26);
+		expect(read.format.frameCount).toBe(13);
 	});
 
 	it("reads 0 frames from an empty data chunk that is the file's last chunk", async () => {

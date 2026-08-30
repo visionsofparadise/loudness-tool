@@ -52,17 +52,13 @@ export const assertRiffDataSize = (dataSize: number): void => {
 const hexPad = (value: number, width: number): string => value.toString(16).padStart(width, "0");
 
 const isPrintableAsciiChunkId = (header: Buffer): boolean =>
-	header.length >= 4 && header.subarray(0, 4).every((byte) => byte >= 0x20 && byte <= 0x7e);
+	header.subarray(0, 4).every((byte) => byte >= 0x20 && byte <= 0x7e);
 
 const trailingBytesAreChunkSequence = async (
 	fileHandle: FileHandle,
 	dataOffset: number,
 	fileSize: number,
 ): Promise<boolean> => {
-	if (dataOffset === fileSize) {
-		return true;
-	}
-
 	const chunkHeader = Buffer.alloc(8);
 	let cursor = dataOffset;
 
@@ -74,10 +70,15 @@ const trailingBytesAreChunkSequence = async (
 		}
 
 		const chunkSize = chunkHeader.readUInt32LE(4);
-		const paddedSize = chunkSize + (chunkSize % 2);
-		const nextOffset = cursor + 8 + paddedSize;
+		const unpaddedEnd = cursor + 8 + chunkSize;
 
-		if (nextOffset > fileSize || nextOffset < cursor + 8) {
+		if (unpaddedEnd === fileSize) {
+			return true;
+		}
+
+		const nextOffset = unpaddedEnd + (chunkSize % 2);
+
+		if (nextOffset > fileSize) {
 			return false;
 		}
 
