@@ -110,7 +110,7 @@ describe("Scratch", () => {
 
 		await mkdir(rootDirectory, { recursive: true });
 
-		const unrelatedDirectory = join(rootDirectory, "scratch-4242-backup");
+		const unrelatedDirectory = join(rootDirectory, `scratch-${absentProcessIdOf()}-backup`);
 
 		await mkdir(unrelatedDirectory);
 		await writeFile(join(unrelatedDirectory, "keep-me.bin"), "payload");
