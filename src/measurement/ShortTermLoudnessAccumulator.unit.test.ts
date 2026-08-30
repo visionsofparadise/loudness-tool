@@ -128,14 +128,17 @@ describe("ShortTermLoudnessAccumulator", () => {
 		};
 		const justShort = windowsOf(blockSize - 1);
 		const oneWindow = windowsOf(blockSize);
+		const partWayToTwo = windowsOf(blockSize + blockStep - 1);
 		const twoWindows = windowsOf(blockSize + blockStep);
 		const justShortTail = justShort.seriesLength - justShort.sourceWindowCount;
 
 		expect(justShort.sourceWindowCount).toBe(0);
 		expect(oneWindow.sourceWindowCount).toBe(1);
+		expect(partWayToTwo.sourceWindowCount).toBe(1);
 		expect(twoWindows.sourceWindowCount).toBe(2);
 		expect(justShortTail).toBeGreaterThan(0);
 		expect(oneWindow.seriesLength - oneWindow.sourceWindowCount).toBe(justShortTail);
+		expect(partWayToTwo.seriesLength - partWayToTwo.sourceWindowCount).toBe(justShortTail);
 		expect(twoWindows.seriesLength - twoWindows.sourceWindowCount).toBe(justShortTail);
 	});
 });
