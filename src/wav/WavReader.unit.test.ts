@@ -47,14 +47,20 @@ const readAll = async (path: string): Promise<{ format: WavReader["format"]; cha
 	return { format: reader.format, channels: mergeBlocks(blocks) };
 };
 
-const encodePlanar = (channels: ReadonlyArray<Float64Array>, bitDepth: SourceBitDepth): Buffer => {
+const encodePlanar = (
+	channels: ReadonlyArray<Float64Array>,
+	bitDepth: SourceBitDepth,
+	frameStride?: number,
+): Buffer => {
 	const frameCount = channels[0]?.length ?? 0;
 	const channelCount = channels.length;
 	const bytesPerSample = bytesPerSampleOf(bitDepth);
-	const buffer = Buffer.alloc(frameCount * channelCount * bytesPerSample);
-	let offset = 0;
+	const stride = frameStride ?? channelCount * bytesPerSample;
+	const buffer = Buffer.alloc(frameCount * stride);
 
 	for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+		let offset = frameIndex * stride;
+
 		for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
 			const sample = channels[channelIndex]?.[frameIndex] ?? 0;
 
@@ -85,9 +91,10 @@ const writeRiffWav = async (
 		extraChunk?: Buffer;
 		declaredDataSize?: number;
 		blockAlign?: number;
+		frameStride?: number;
 	},
 ): Promise<void> => {
-	const data = encodePlanar(options.channels, options.bitDepth);
+	const data = encodePlanar(options.channels, options.bitDepth, options.frameStride);
 	const extraChunk = options.extraChunk ?? Buffer.alloc(0);
 	const headerSize = 44 + extraChunk.length;
 	const file = Buffer.alloc(headerSize + data.length);
@@ -488,18 +495,43 @@ describe("WavReader", () => {
 		expect(read.format.frameCount).toBe(frameCount);
 	});
 
-	it("rejects a stereo 16-bit file whose blockAlign is 2 with a named Invalid WAV file error", async () => {
-		const path = join(workingDirectory, "bad-block-align.wav");
+	it("reads a padded-stride file at its declared blockAlign", async () => {
+		const path = join(workingDirectory, "padded-stride.wav");
+		const frameCount = 8;
+		const channels = createRamp(frameCount, 1);
+
+		await writeRiffWav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels,
+			blockAlign: 4,
+			frameStride: 4,
+		});
+
+		const read = await readAll(path);
+
+		expect(read.format.frameCount).toBe(frameCount);
+
+		for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+			expect(Math.abs((read.channels[0]?.[frameIndex] ?? 0) - (channels[0]?.[frameIndex] ?? 0))).toBeLessThanOrEqual(
+				1.5 / 0x8000,
+			);
+		}
+	});
+
+	it("rejects a file whose blockAlign is 0 with a named Invalid WAV file error", async () => {
+		const path = join(workingDirectory, "zero-block-align.wav");
 
 		await writeRiffWav(path, {
 			sampleRate: SAMPLE_RATE,
 			channelCount: 2,
 			bitDepth: "16",
 			channels: createRamp(8, 2),
-			blockAlign: 2,
+			blockAlign: 0,
 		});
 
-		await expect(WavReader.open(path)).rejects.toThrow(/Invalid WAV file: blockAlign 2/);
+		await expect(WavReader.open(path)).rejects.toThrow(/Invalid WAV file: blockAlign 0/);
 	});
 
 	it("rejects a file whose channelCount is 0 with a named Invalid WAV file error", async () => {

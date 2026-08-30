@@ -1,4 +1,3 @@
-import { bytesPerSampleOf } from "./sampleCodec";
 import type { FileHandle } from "node:fs/promises";
 
 export type WavBitDepth = "16" | "24" | "32" | "32f";
@@ -184,9 +183,7 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 				throw new Error(`Invalid WAV file: sampleRate ${sampleRate}`);
 			}
 
-			const expectedBlockAlign = channelCount * bytesPerSampleOf(bitDepth);
-
-			if (blockAlign !== expectedBlockAlign) {
+			if (blockAlign < 1) {
 				throw new Error(`Invalid WAV file: blockAlign ${blockAlign}`);
 			}
 
