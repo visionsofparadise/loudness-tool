@@ -49,7 +49,7 @@ loudness-tool lufs-norm input.wav -o output.wav
 loudness-tool lufs-norm input.wav -o output.wav --lufs -16
 ```
 
-`--lufs` must be in [-50, 0]. `-o` is an alias for `--output`. In-place processing is supported by passing the input path as the output.
+`--lufs` must be in [-50, 0] in steps of 0.1. `-o` is an alias for `--output`. In-place processing is supported by passing the input path as the output.
 
 A source with no measurable loudness is copied to the output unchanged, and the reason is printed on stderr. Files with more than two channels are refused; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting.
 
@@ -76,7 +76,7 @@ loudness-tool target input.wav -o output.wav --lufs -16 --tp -1
 loudness-tool target input.wav -o output.wav --never-expand --scratch-dir /tmp/lt
 ```
 
-`--lufs` defaults to -16 and must be in [-50, 0]. `--tp` defaults to the source true peak and must be in [-24, 0) when supplied. `--pivot` and `--floor` default to the Tech 3342 considered-set median and minimum and must be in [-80, 0) and [-100, 0) when supplied; when both are supplied, floor must be below pivot. `--limit-percentile` defaults to 0.995; `--limit-db` overrides that derivation and must be in [-60, 0). `--smoothing` defaults to 1 ms. `--tolerance` defaults to 0.5 dB. Files with more than two channels are refused; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting.
+`--lufs` defaults to -16 and must be in [-50, 0] in steps of 0.1. `--tp` defaults to the source true peak and must be in [-24, 0) when supplied. `--pivot` and `--floor` default to the Tech 3342 considered-set median and minimum and must be in [-80, 0) and [-100, 0) when supplied; when both are supplied, floor must be below pivot. `--limit-percentile` defaults to 0.995 and must be in [0.5, 1.0]; `--limit-db` overrides that derivation and must be in [-60, 0). `--smoothing` defaults to 1 ms and must be in [0.01, 200]. `--tolerance` defaults to 0.5 dB and must be in (0, 6]. A source that yields no considered LRA blocks falls back to a -40 dB pivot, and the reason is printed on stderr. Files with more than two channels are refused; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting.
 
 Output never exceeds either target on a 0.01 dB grain. When the pair is infeasible the ceiling wins and the solve reports non-convergence.
 
