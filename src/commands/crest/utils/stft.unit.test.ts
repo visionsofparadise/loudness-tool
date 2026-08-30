@@ -17,6 +17,7 @@ const sourceOf = (channels: ReadonlyArray<Float64Array>): LatticeAnalysisSource 
 
 describe("stft geometry", () => {
 	it("uses 75% overlap", () => {
+		expect(hopSizeOf(2 ** 32)).toBe(2 ** 30);
 		expect(hopSizeOf(2048)).toBe(512);
 		expect(hopSizeOf(4)).toBe(1);
 		expect(hopSizeOf(2)).toBe(0);

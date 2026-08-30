@@ -21,7 +21,7 @@ export interface ItemSevenSearchParams {
 	readonly lambda: number;
 }
 
-export const hopSizeOf = (frameSize: number): number => frameSize >> 2;
+export const hopSizeOf = (frameSize: number): number => Math.floor(frameSize / 4);
 
 export const stftFrameCount = (signalLength: number, frameSize: number, hopSize: number): number => {
 	if (signalLength < frameSize || hopSize <= 0) {
