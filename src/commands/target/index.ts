@@ -47,10 +47,21 @@ const parseFinite = (name: string, value: string, isValid: (parsed: number) => b
 const parseLufs = (value: string): number =>
 	parseFinite("lufs", value, (parsed) => parsed >= -50 && parsed <= 0, "must be in [-50, 0]");
 
+const isBoundedNegativeDb = (value: number, lowerBound: number): boolean =>
+	Number.isFinite(value) && value >= lowerBound && value < 0;
+
+const boundedNegativeDbRange = (lowerBound: number): string => `must be in [${lowerBound}, 0)`;
+
 const parseNegativeDb =
-	(name: string) =>
+	(name: string, lowerBound: number) =>
 	(value: string): number =>
-		parseFinite(name, value, (parsed) => parsed < 0, "must be < 0");
+		parseFinite(name, value, (parsed) => isBoundedNegativeDb(parsed, lowerBound), boundedNegativeDbRange(lowerBound));
+
+const assertBoundedNegativeDb = (name: string, lowerBound: number, value: number | undefined): void => {
+	if (value !== undefined && !isBoundedNegativeDb(value, lowerBound)) {
+		throw new InvalidArgumentError(`${name} ${boundedNegativeDbRange(lowerBound)}, received ${value}`);
+	}
+};
 
 const parseLimitPercentile = (value: string): number =>
 	parseFinite("limit-percentile", value, (parsed) => parsed >= 0.5 && parsed <= 1, "must be in [0.5, 1.0]");
@@ -103,6 +114,11 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	const smoothingMs = options.smoothing ?? DEFAULT_SMOOTHING_MS;
 	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE;
 	const neverExpand = options.neverExpand === true;
+
+	assertBoundedNegativeDb("tp", -24, options.tp);
+	assertBoundedNegativeDb("pivot", -80, options.pivot);
+	assertBoundedNegativeDb("floor", -100, options.floor);
+	assertBoundedNegativeDb("limit-db", -60, options.limitDb);
 
 	if (options.floor !== undefined && options.pivot !== undefined && options.floor >= options.pivot) {
 		throw new InvalidArgumentError("floor must be < pivot when both are supplied");
@@ -210,16 +226,16 @@ export const addTargetCommand = (program: Command): void => {
 	command.argument("<input>", "input WAV path");
 	command.requiredOption("-o, --output <path>", "output WAV path");
 	command.option("--lufs <n>", "target integrated loudness in LUFS", parseLufs, DEFAULT_TARGET_LUFS);
-	command.option("--tp <dBTP>", "target true peak in dBTP", parseNegativeDb("tp"));
-	command.option("--pivot <dB>", "body-anchor level in dB", parseNegativeDb("pivot"));
-	command.option("--floor <dB>", "noise-gate level in dB", parseNegativeDb("floor"));
+	command.option("--tp <dBTP>", "target true peak in dBTP", parseNegativeDb("tp", -24));
+	command.option("--pivot <dB>", "body-anchor level in dB", parseNegativeDb("pivot", -80));
+	command.option("--floor <dB>", "noise-gate level in dB", parseNegativeDb("floor", -100));
 	command.option(
 		"--limit-percentile <p>",
 		"top 1-p fraction of detection samples to brick-wall",
 		parseLimitPercentile,
 		DEFAULT_LIMIT_PERCENTILE,
 	);
-	command.option("--limit-db <dB>", "limit-anchor override in dB", parseNegativeDb("limit-db"));
+	command.option("--limit-db <dB>", "limit-anchor override in dB", parseNegativeDb("limit-db", -60));
 	command.option("--smoothing <ms>", "envelope time constant in milliseconds", parseSmoothing, DEFAULT_SMOOTHING_MS);
 	command.option("--never-expand", "keep the upper arm flat or compressive");
 	command.option("--tolerance <dB>", "LUFS exit threshold in dB", parseTolerance, DEFAULT_TOLERANCE);

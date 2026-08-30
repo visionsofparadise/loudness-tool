@@ -123,18 +123,20 @@ describe("target", () => {
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--lufs", "0.1"])).rejects.toThrow(
 			/lufs must be in \[-50, 0\]/,
 		);
-		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--tp", "0"])).rejects.toThrow(/tp must be < 0/);
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--tp", "0"])).rejects.toThrow(
+			/tp must be in \[-24, 0\)/,
+		);
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--pivot", "1"])).rejects.toThrow(
-			/pivot must be < 0/,
+			/pivot must be in \[-80, 0\)/,
 		);
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--floor", "0"])).rejects.toThrow(
-			/floor must be < 0/,
+			/floor must be in \[-100, 0\)/,
 		);
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--limit-percentile", "0.4"])).rejects.toThrow(
 			/limit-percentile must be in \[0.5, 1.0\]/,
 		);
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--limit-db", "0"])).rejects.toThrow(
-			/limit-db must be < 0/,
+			/limit-db must be in \[-60, 0\)/,
 		);
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--smoothing", "0"])).rejects.toThrow(
 			/smoothing must be in \[0.01, 200\]/,
@@ -142,6 +144,72 @@ describe("target", () => {
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--tolerance", "0"])).rejects.toThrow(
 			/tolerance must be > 0/,
 		);
+	});
+
+	it("rejects each donor bound at the CLI parser and the exported function", async () => {
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--tp", "-400"])).rejects.toThrow(
+			/tp must be in \[-24, 0\), received -400/,
+		);
+		await expect(target("in.wav", { output: "out.wav", tp: -400 })).rejects.toThrow(
+			"tp must be in [-24, 0), received -400",
+		);
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--pivot", "-90"])).rejects.toThrow(
+			/pivot must be in \[-80, 0\), received -90/,
+		);
+		await expect(target("in.wav", { output: "out.wav", pivot: -90 })).rejects.toThrow(
+			"pivot must be in [-80, 0), received -90",
+		);
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--floor", "-101"])).rejects.toThrow(
+			/floor must be in \[-100, 0\), received -101/,
+		);
+		await expect(target("in.wav", { output: "out.wav", floor: -101 })).rejects.toThrow(
+			"floor must be in [-100, 0), received -101",
+		);
+		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--limit-db", "-61"])).rejects.toThrow(
+			/limit-db must be in \[-60, 0\), received -61/,
+		);
+		await expect(target("in.wav", { output: "out.wav", limitDb: -61 })).rejects.toThrow(
+			"limit-db must be in [-60, 0), received -61",
+		);
+	});
+
+	it("accepts each donor lower edge", async () => {
+		const inputPath = join(workingDirectory, "bound-silent.wav");
+		const cliOutputPath = join(workingDirectory, "bound-silent-cli.wav");
+		const functionOutputPath = join(workingDirectory, "bound-silent-fn.wav");
+
+		await writeWav(inputPath, [new Float64Array(64)]);
+
+		const cli = await capture(async () => {
+			await parseProgram([
+				"target",
+				inputPath,
+				"-o",
+				cliOutputPath,
+				"--tp",
+				"-24",
+				"--pivot",
+				"-80",
+				"--floor",
+				"-100",
+				"--limit-db",
+				"-60",
+			]);
+		});
+		const direct = await capture(() =>
+			target(inputPath, {
+				output: functionOutputPath,
+				tp: -24,
+				pivot: -80,
+				floor: -100,
+				limitDb: -60,
+			}),
+		);
+
+		expect(cli.exitCode).toBeUndefined();
+		expect(direct.exitCode).toBeUndefined();
+		expect(cli.stderr).toMatch(/no measurable loudness/);
+		expect(direct.stderr).toMatch(/no measurable loudness/);
 	});
 
 	it("rejects floor >= pivot when both are supplied", async () => {
