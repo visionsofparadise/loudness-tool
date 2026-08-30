@@ -125,6 +125,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	}
 
 	const scratch = await Scratch.create(options.scratchDir);
+	const errors: Array<unknown> = [];
 	let winningEnvelope: SampleFile | undefined;
 
 	try {
@@ -140,82 +141,96 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 		if (!Number.isFinite(measurement.integratedLufs)) {
 			await copyUnchanged(inputPath, options.output);
 			process.stderr.write("source has no measurable loudness; passed through unchanged\n");
-
-			return;
-		}
-
-		let effectivePivotDb: number;
-
-		if (options.pivot !== undefined) {
-			effectivePivotDb = options.pivot;
-		} else if (Number.isFinite(measurement.pivotAutoDb)) {
-			effectivePivotDb = measurement.pivotAutoDb;
 		} else {
-			effectivePivotDb = PIVOT_FALLBACK_DB;
+			let effectivePivotDb: number;
+
+			if (options.pivot !== undefined) {
+				effectivePivotDb = options.pivot;
+			} else if (Number.isFinite(measurement.pivotAutoDb)) {
+				effectivePivotDb = measurement.pivotAutoDb;
+			} else {
+				effectivePivotDb = PIVOT_FALLBACK_DB;
+			}
+
+			let effectiveFloorDb: number | null;
+
+			if (options.floor !== undefined) {
+				effectiveFloorDb = options.floor;
+			} else if (Number.isFinite(measurement.floorAutoDb)) {
+				effectiveFloorDb = measurement.floorAutoDb;
+			} else {
+				effectiveFloorDb = null;
+			}
+
+			if (effectiveFloorDb !== null && effectiveFloorDb >= effectivePivotDb) {
+				effectiveFloorDb = effectivePivotDb - FLOOR_PIVOT_EPSILON_DB;
+			}
+
+			const result = await iterateForTargets({
+				inputPath,
+				scratch,
+				sampleRate: measurement.sampleRate,
+				channelCount: measurement.channelCount,
+				frameCount: measurement.frameCount,
+				anchorBase: { floorDb: effectiveFloorDb, pivotDb: effectivePivotDb },
+				smoothingMs,
+				targetLufs,
+				targetTp: options.tp,
+				limitDbOverride: options.limitDb,
+				limitAutoDb: measurement.limitAutoDb,
+				sourceLufs: measurement.integratedLufs,
+				sourcePeakDb: measurement.truePeakDb,
+				tolerance,
+				neverExpand,
+				histogram: measurement.detectionHistogram,
+				detectionEnvelope: measurement.detectionEnvelope,
+				onAttempt: (attempt, attemptIndex) => {
+					process.stderr.write(`${formatAttempt(attempt, attemptIndex)}\n`);
+				},
+			});
+
+			winningEnvelope = result.bestSmoothedEnvelope;
+
+			await applyEnvelopeAndWrite(inputPath, options.output, result.bestSmoothedEnvelope);
+
+			const outputLufs = result.winnerOutputLufs;
+			const outputTruePeak = result.winnerOutputTruePeakDb;
+			const outputLra = result.winnerOutputLra;
+
+			process.stdout.write(
+				`${[
+					alignedLine("output integrated", outputLufs === null ? "n/a" : `${outputLufs.toFixed(2)} LUFS`),
+					alignedLine("output true peak", outputTruePeak === null ? "n/a" : `${outputTruePeak.toFixed(2)} dBTP`),
+					alignedLine("loudness range", outputLra === null ? "n/a" : `${outputLra.toFixed(2)} LU`),
+					alignedLine("B", `${result.bestB.toFixed(4)} dB`),
+					alignedLine("peakGainDb", `${result.bestPeakGainDb.toFixed(4)} dB`),
+					alignedLine("converged", String(result.converged)),
+					alignedLine("output", options.output),
+				].join("\n")}\n`,
+			);
 		}
-
-		let effectiveFloorDb: number | null;
-
-		if (options.floor !== undefined) {
-			effectiveFloorDb = options.floor;
-		} else if (Number.isFinite(measurement.floorAutoDb)) {
-			effectiveFloorDb = measurement.floorAutoDb;
-		} else {
-			effectiveFloorDb = null;
-		}
-
-		if (effectiveFloorDb !== null && effectiveFloorDb >= effectivePivotDb) {
-			effectiveFloorDb = effectivePivotDb - FLOOR_PIVOT_EPSILON_DB;
-		}
-
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			frameCount: measurement.frameCount,
-			anchorBase: { floorDb: effectiveFloorDb, pivotDb: effectivePivotDb },
-			smoothingMs,
-			targetLufs,
-			targetTp: options.tp,
-			limitDbOverride: options.limitDb,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			tolerance,
-			neverExpand,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-			onAttempt: (attempt, attemptIndex) => {
-				process.stderr.write(`${formatAttempt(attempt, attemptIndex)}\n`);
-			},
-		});
-
-		winningEnvelope = result.bestSmoothedEnvelope;
-
-		await applyEnvelopeAndWrite(inputPath, options.output, result.bestSmoothedEnvelope);
-
-		const outputLufs = result.winnerOutputLufs;
-		const outputTruePeak = result.winnerOutputTruePeakDb;
-		const outputLra = result.winnerOutputLra;
-
-		process.stdout.write(
-			`${[
-				alignedLine("output integrated", outputLufs === null ? "n/a" : `${outputLufs.toFixed(2)} LUFS`),
-				alignedLine("output true peak", outputTruePeak === null ? "n/a" : `${outputTruePeak.toFixed(2)} dBTP`),
-				alignedLine("loudness range", outputLra === null ? "n/a" : `${outputLra.toFixed(2)} LU`),
-				alignedLine("B", `${result.bestB.toFixed(4)} dB`),
-				alignedLine("peakGainDb", `${result.bestPeakGainDb.toFixed(4)} dB`),
-				alignedLine("converged", String(result.converged)),
-				alignedLine("output", options.output),
-			].join("\n")}\n`,
-		);
+	} catch (error: unknown) {
+		errors.push(error);
 	} finally {
 		try {
 			await winningEnvelope?.close();
-		} finally {
-			await scratch.dispose();
+		} catch (error: unknown) {
+			errors.push(error);
 		}
+
+		try {
+			await scratch.dispose();
+		} catch (error: unknown) {
+			errors.push(error);
+		}
+	}
+
+	if (errors.length === 1) {
+		throw errors[0];
+	}
+
+	if (errors.length > 1) {
+		throw new AggregateError(errors, "Target and cleanup failed");
 	}
 };
 

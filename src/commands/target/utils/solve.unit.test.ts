@@ -435,6 +435,55 @@ describe("iterateForTargets", () => {
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
+	it("reports an attempt's true peak unfloored", async () => {
+		scratch = await Scratch.create();
+
+		const inputPath = join(workingDirectory, "tiny-peak.wav");
+
+		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+
+		vi.spyOn(envelope, "renderEnvelope").mockImplementation(async ({ dest }) => {
+			const samples = new Float64Array(measurement.frameCount).fill(1e-12);
+
+			await dest.append(samples, samples.length);
+		});
+
+		const result = await iterateForTargets({
+			inputPath,
+			scratch,
+			sampleRate: measurement.sampleRate,
+			channelCount: measurement.channelCount,
+			frameCount: measurement.frameCount,
+			anchorBase: {
+				floorDb: null,
+				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+			},
+			smoothingMs: 1,
+			targetLufs: measurement.integratedLufs,
+			targetTp: measurement.truePeakDb,
+			limitAutoDb: measurement.limitAutoDb,
+			sourceLufs: measurement.integratedLufs,
+			sourcePeakDb: measurement.truePeakDb,
+			maxAttempts: 1,
+			tolerance: 0.5,
+			neverExpand: false,
+			histogram: measurement.detectionHistogram,
+			detectionEnvelope: measurement.detectionEnvelope,
+		});
+
+		expect(result.attempts[0]?.outputTruePeakDb).toBeLessThan(-220);
+		expect(result.winnerOutputTruePeakDb ?? 0).toBeLessThan(-220);
+
+		await result.bestSmoothedEnvelope.close();
+	}, 30_000);
+
 	it("closes the elected envelope when a later attempt throws", async () => {
 		scratch = await Scratch.create();
 
@@ -541,31 +590,37 @@ describe("iterateForTargets", () => {
 			await dest.append(samples, samples.length);
 		});
 
-		await expect(
-			iterateForTargets({
-				inputPath,
-				scratch,
-				sampleRate: measurement.sampleRate,
-				channelCount: measurement.channelCount,
-				frameCount: measurement.frameCount,
-				anchorBase: {
-					floorDb: null,
-					pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-				},
-				smoothingMs: 1,
-				targetLufs: measurement.integratedLufs - 0.5,
-				targetTp: measurement.truePeakDb - 20,
-				limitAutoDb: measurement.limitAutoDb,
-				sourceLufs: measurement.integratedLufs,
-				sourcePeakDb: measurement.truePeakDb,
-				maxAttempts: 2,
-				tolerance: 0.01,
-				neverExpand: false,
-				histogram: measurement.detectionHistogram,
-				detectionEnvelope: measurement.detectionEnvelope,
-			}),
-		).rejects.toThrow(/detection close failed/);
+		const thrown: unknown = await iterateForTargets({
+			inputPath,
+			scratch,
+			sampleRate: measurement.sampleRate,
+			channelCount: measurement.channelCount,
+			frameCount: measurement.frameCount,
+			anchorBase: {
+				floorDb: null,
+				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+			},
+			smoothingMs: 1,
+			targetLufs: measurement.integratedLufs - 0.5,
+			targetTp: measurement.truePeakDb - 20,
+			limitAutoDb: measurement.limitAutoDb,
+			sourceLufs: measurement.integratedLufs,
+			sourcePeakDb: measurement.truePeakDb,
+			maxAttempts: 2,
+			tolerance: 0.01,
+			neverExpand: false,
+			histogram: measurement.detectionHistogram,
+			detectionEnvelope: measurement.detectionEnvelope,
+		}).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
 
+		expect(thrown).toBeInstanceOf(AggregateError);
+
+		const messages = (thrown as AggregateError).errors.map((error: Error) => error.message);
+
+		expect(messages).toEqual(["injected later-attempt failure", "detection close failed"]);
 		expect(electedClose).toBeDefined();
 		expect(electedClose).toHaveBeenCalled();
 	}, 30_000);

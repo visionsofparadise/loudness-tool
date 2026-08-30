@@ -7,6 +7,7 @@ import { createProgram } from "../../cli";
 import { IntegratedLufsAccumulator } from "../../measurement/IntegratedLufsAccumulator";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
 import { dbToLinear, linearToDb } from "../../utils/db";
+import { SampleFile } from "../../utils/SampleFile";
 import { createSine } from "../../utils/testSignals";
 import { WavWriter } from "../../wav/WavWriter";
 import { pushWavBlocks, withWavReader } from "../utils/withWavReader";
@@ -84,6 +85,26 @@ const capture = async (
 		writeErr.mockRestore();
 		process.exitCode = previousExitCode;
 	}
+};
+
+const ENVELOPE_CLOSE_FAILURE = "injected envelope close failure";
+
+const spyRejectingDetectionClose = () => {
+	const originalCreate = SampleFile.create.bind(SampleFile);
+
+	return vi.spyOn(SampleFile, "create").mockImplementation(async (createScratch, label) => {
+		const file = await originalCreate(createScratch, label);
+
+		if (label === "detection") {
+			vi.spyOn(file, "close").mockImplementation(async () => {
+				await SampleFile.prototype.close.call(file);
+
+				throw new Error(ENVELOPE_CLOSE_FAILURE);
+			});
+		}
+
+		return file;
+	});
 };
 
 const parseProgram = (argv: Array<string>) => {
@@ -292,5 +313,35 @@ describe("target", () => {
 		await expect(capture(() => target(inputPath, { output: outputPath, lufs: -16, scratchDir }))).rejects.toThrow();
 
 		expect(await readdir(scratchDir)).toEqual([]);
+	});
+
+	it("aggregates a rejecting close with the primary failure", async () => {
+		const inputPath = join(workingDirectory, "aggregate.wav");
+		const outputPath = join(workingDirectory, "missing", "aggregate-out.wav");
+		const scratchDir = join(workingDirectory, "scratch-aggregate");
+
+		await mkdir(scratchDir, { recursive: true });
+		await writeWav(inputPath, [new Float64Array(SAMPLE_RATE)]);
+
+		const createSpy = spyRejectingDetectionClose();
+
+		try {
+			const thrown: unknown = await capture(() =>
+				target(inputPath, { output: outputPath, lufs: -16, scratchDir }),
+			).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+
+			expect(thrown).toBeInstanceOf(AggregateError);
+
+			const messages = (thrown as AggregateError).errors.map((error: Error) => error.message);
+
+			expect(messages.some((message) => message.includes("ENOENT"))).toBe(true);
+			expect(messages).toContain(ENVELOPE_CLOSE_FAILURE);
+			expect(await readdir(scratchDir)).toEqual([]);
+		} finally {
+			createSpy.mockRestore();
+		}
 	});
 });
