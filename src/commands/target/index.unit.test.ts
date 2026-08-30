@@ -344,4 +344,25 @@ describe("target", () => {
 			createSpy.mockRestore();
 		}
 	});
+
+	it("disposes the scratch when the winning envelope's close rejects", async () => {
+		const inputPath = join(workingDirectory, "close-reject.wav");
+		const outputPath = join(workingDirectory, "close-reject-out.wav");
+		const scratchDir = join(workingDirectory, "scratch-close-reject");
+
+		await mkdir(scratchDir, { recursive: true });
+		await writeWav(inputPath, [new Float64Array(SAMPLE_RATE)]);
+
+		const createSpy = spyRejectingDetectionClose();
+
+		try {
+			await expect(capture(() => target(inputPath, { output: outputPath, lufs: -16, scratchDir }))).rejects.toThrow(
+				ENVELOPE_CLOSE_FAILURE,
+			);
+
+			expect(await readdir(scratchDir)).toEqual([]);
+		} finally {
+			createSpy.mockRestore();
+		}
+	});
 });
