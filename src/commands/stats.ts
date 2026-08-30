@@ -74,7 +74,7 @@ const measureStats = async (inputPath: string): Promise<StatsJson> =>
 			channelCount,
 			bitDepth,
 			durationSeconds: sampleRate === 0 ? 0 : frameCount / sampleRate,
-			truePeakDb: frameCount === 0 || !(truePeak > 0) ? null : 20 * Math.log10(truePeak),
+			truePeakDb: !(truePeak > 0) ? null : 20 * Math.log10(truePeak),
 			integratedLufs: Number.isFinite(integrated) ? integrated : null,
 			loudnessRange: shortTerm.length === 0 ? null : computeLoudnessRange(shortTerm),
 		};

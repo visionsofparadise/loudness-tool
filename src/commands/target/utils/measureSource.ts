@@ -235,7 +235,7 @@ export const measureSource = async (args: {
 		return {
 			integratedLufs: integrated.finalize(),
 			lra: shortTermSeries.length === 0 ? 0 : computeLoudnessRange(shortTermSeries),
-			truePeakDb: linearToDb(truePeak.finalize()),
+			truePeakDb: 20 * Math.log10(truePeak.finalize()),
 			pivotAutoDb: stats.median,
 			floorAutoDb: stats.minimum,
 			limitAutoDb: computeLimitAutoDb(

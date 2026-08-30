@@ -394,6 +394,35 @@ describe("crest", () => {
 		expect(existsSync(inputPath)).toBe(true);
 	});
 
+	it("reports an unfloored true peak for a 1e-12-peak 32f source", async () => {
+		const inputPath = join(workingDirectory, "tiny.wav");
+		const outputPath = join(workingDirectory, "tiny-out.wav");
+		const tiny = new Float64Array(6000).fill(1e-12);
+
+		await writeWav(inputPath, [tiny]);
+
+		const { stdout } = await capture(() => crest(inputPath, { output: outputPath }));
+		const sourceReported = stdout.match(/source true peak\s+(-?\d+\.\d+) dBTP/);
+		const outputReported = stdout.match(/output true peak\s+(-?\d+\.\d+) dBTP/);
+
+		expect(stdout).not.toMatch(/-200\.00 dBTP/);
+		expect(Number(sourceReported?.[1])).toBeLessThan(-220);
+		expect(Number(outputReported?.[1])).toBeLessThan(-220);
+	});
+
+	it("reports n/a for source peak, output peak, and delta on digital silence", async () => {
+		const inputPath = join(workingDirectory, "silence.wav");
+		const outputPath = join(workingDirectory, "silence-out.wav");
+
+		await writeWav(inputPath, [new Float64Array(6000)]);
+
+		const { stdout } = await capture(() => crest(inputPath, { output: outputPath }));
+
+		expect(stdout).toMatch(/source true peak\s+n\/a/);
+		expect(stdout).toMatch(/output true peak\s+n\/a/);
+		expect(stdout).toMatch(/delta\s+n\/a/);
+	});
+
 	it("passes a short file through unchanged", async () => {
 		const inputPath = join(workingDirectory, "short.wav");
 		const outputPath = join(workingDirectory, "short-out.wav");

@@ -1,6 +1,5 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
-import { linearToDb } from "../../utils/db";
 import { copyUnchanged } from "../utils/copyUnchanged";
 import { pushWavBlocks, withWavReader } from "../utils/withWavReader";
 import { withWavWriter } from "../utils/withWavWriter";
@@ -61,14 +60,20 @@ const analysisSourceOf = (reader: WavReader): LatticeAnalysisSource => ({
 	},
 });
 
+const formatDb = (value: number, unit: string): string =>
+	Number.isFinite(value) ? `${value.toFixed(2)} ${unit}` : "n/a";
+
 const printReport = (sourceTruePeakDb: number, outputTruePeakDb: number, outputPath: string): void => {
-	const delta = outputTruePeakDb - sourceTruePeakDb;
+	const delta =
+		Number.isFinite(sourceTruePeakDb) && Number.isFinite(outputTruePeakDb)
+			? outputTruePeakDb - sourceTruePeakDb
+			: Number.NaN;
 
 	process.stdout.write(
 		`${[
-			alignedLine("source true peak", `${sourceTruePeakDb.toFixed(2)} dBTP`),
-			alignedLine("output true peak", `${outputTruePeakDb.toFixed(2)} dBTP`),
-			alignedLine("delta", `${delta.toFixed(2)} dB`),
+			alignedLine("source true peak", formatDb(sourceTruePeakDb, "dBTP")),
+			alignedLine("output true peak", formatDb(outputTruePeakDb, "dBTP")),
+			alignedLine("delta", formatDb(delta, "dB")),
 			alignedLine("output", outputPath),
 		].join("\n")}\n`,
 	);
@@ -87,7 +92,7 @@ const measureSourcePeak = async (
 		const { sampleRate, channelCount, frameCount } = reader.format;
 
 		if (channelCount <= 0) {
-			return { sampleRate, channelCount, frameCount, truePeakDb: linearToDb(0), peakInputSample: 0 };
+			return { sampleRate, channelCount, frameCount, truePeakDb: Number.NEGATIVE_INFINITY, peakInputSample: 0 };
 		}
 
 		const argmax = new TruePeakArgmaxAccumulator(channelCount);
@@ -99,7 +104,7 @@ const measureSourcePeak = async (
 			sampleRate,
 			channelCount,
 			frameCount,
-			truePeakDb: linearToDb(truePeak.finalize()),
+			truePeakDb: 20 * Math.log10(truePeak.finalize()),
 			peakInputSample: argmax.finalize().peakInputSample,
 		};
 	});
@@ -162,7 +167,7 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 			await writer.write(block.channels);
 		}
 
-		outputTruePeakDb = linearToDb(outputPeak.finalize());
+		outputTruePeakDb = 20 * Math.log10(outputPeak.finalize());
 	});
 
 	printReport(source.truePeakDb, outputTruePeakDb, options.output);

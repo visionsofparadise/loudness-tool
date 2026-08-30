@@ -3,7 +3,6 @@ import { IntegratedLufsAccumulator } from "../../../measurement/IntegratedLufsAc
 import { computeLoudnessRange } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
-import { linearToDb } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
 import { forEachEnvelopedBlock } from "./apply";
 import { gainDbAt } from "./curve";
@@ -316,7 +315,7 @@ const measureAttemptOutput = async (args: {
 	return {
 		outputLufs: lufsAccumulator.finalize(),
 		outputLra: shortTerm.length === 0 ? 0 : computeLoudnessRange(shortTerm),
-		outputTruePeakDb: linearToDb(truePeakAccumulator.finalize()),
+		outputTruePeakDb: 20 * Math.log10(truePeakAccumulator.finalize()),
 	};
 };
 
