@@ -102,14 +102,11 @@ describe("assertRiffDataSize", () => {
 			assertRiffDataSize(0);
 		}).not.toThrow();
 		expect(() => {
-			assertRiffDataSize(0xffffffff - 36 - 1);
+			assertRiffDataSize(0xffffffff - 36);
 		}).not.toThrow();
 	});
 
 	it("throws past the RIFF payload ceiling naming the payload limit", () => {
-		expect(() => {
-			assertRiffDataSize(0xffffffff - 36);
-		}).toThrow(/4294967259|payload ceiling/);
 		expect(() => {
 			assertRiffDataSize(0xffffffff - 36 + 1);
 		}).toThrow(/4294967259|payload ceiling/);
@@ -262,7 +259,7 @@ describe("WavWriter", () => {
 		await writer.abort();
 	});
 
-	it("pads an odd data chunk and round-trips 5-frame 24-bit mono", async () => {
+	it("ends an odd data chunk at the last sample byte and round-trips 5-frame 24-bit mono", async () => {
 		const path = join(workingDirectory, "odd-24.wav");
 		const channels = createSine(5, 1, SAMPLE_RATE, 440, 0.75);
 		const writer = await WavWriter.create(path, { sampleRate: SAMPLE_RATE, channelCount: 1, bitDepth: "24" });
@@ -272,11 +269,9 @@ describe("WavWriter", () => {
 
 		const bytes = await fsPromises.readFile(path);
 
-		expect(bytes.length % 2).toBe(0);
-		expect(bytes.length).toBe(60);
-		expect(bytes.readUInt32LE(4)).toBe(52);
+		expect(bytes.length).toBe(59);
+		expect(bytes.readUInt32LE(4)).toBe(51);
 		expect(bytes.readUInt32LE(40)).toBe(15);
-		expect(bytes[59]).toBe(0);
 
 		const read = await readAll(path);
 

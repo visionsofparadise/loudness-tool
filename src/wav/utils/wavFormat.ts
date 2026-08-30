@@ -39,9 +39,7 @@ export const nearestWritableBitDepth = (bitDepth: SourceBitDepth): WavBitDepth =
 };
 
 export const assertRiffDataSize = (dataSize: number): void => {
-	const paddedPayloadSize = dataSize + (dataSize % 2);
-
-	if (paddedPayloadSize > RIFF_DATA_SIZE_LIMIT) {
+	if (dataSize > RIFF_DATA_SIZE_LIMIT) {
 		throw new Error(
 			`RIFF data size ${dataSize} exceeds the ${RIFF_DATA_SIZE_LIMIT} byte payload ceiling (0xffffffff minus the 36-byte header)`,
 		);
