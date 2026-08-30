@@ -476,11 +476,13 @@ export const iterateForTargets = async (args: {
 				winnerOutputTruePeakDb = measured.outputTruePeakDb;
 				winnerOutputLra = measured.outputLra;
 
-				if (winningEnvelope !== undefined) {
-					await winningEnvelope.close();
-				}
+				const previousWinner = winningEnvelope;
 
 				winningEnvelope = dest;
+
+				if (previousWinner !== undefined) {
+					await previousWinner.close();
+				}
 			} else {
 				await dest.close();
 			}

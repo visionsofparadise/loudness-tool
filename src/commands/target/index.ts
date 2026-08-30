@@ -195,8 +195,11 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 			].join("\n")}\n`,
 		);
 	} finally {
-		await winningEnvelope?.close();
-		await scratch.dispose();
+		try {
+			await winningEnvelope?.close();
+		} finally {
+			await scratch.dispose();
+		}
 	}
 };
 
