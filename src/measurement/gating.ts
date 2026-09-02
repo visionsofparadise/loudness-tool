@@ -1,9 +1,13 @@
 const LUFS_OFFSET = -0.691;
 const ABSOLUTE_GATE_LUFS = -70;
 const RELATIVE_GATE_OFFSET_LU = -10;
+const GATE_EQUALITY_TOLERANCE = 1e-9;
 
 // eslint-disable-next-line comment-rules/no-restricted-comments
 // Two-stage gating of overlapping 400 ms blocks follows ITU-R BS.1770-5 Annex 1.
+
+const clearsGate = (power: number, thresholdPower: number): boolean =>
+	power > thresholdPower * (1 + GATE_EQUALITY_TOLERANCE);
 
 export const applyBs1770Gating = (blockSums: Float64Array, blockSize: number): number => {
 	const blockCount = blockSums.length;
@@ -19,7 +23,7 @@ export const applyBs1770Gating = (blockSums: Float64Array, blockSize: number): n
 	for (let blockIndex = 0; blockIndex < blockCount; blockIndex++) {
 		const power = (blockSums[blockIndex] ?? 0) / blockSize;
 
-		if (power > absoluteThresholdPower) {
+		if (clearsGate(power, absoluteThresholdPower)) {
 			absoluteSum += power;
 			absoluteSurvivorCount++;
 		}
@@ -38,7 +42,7 @@ export const applyBs1770Gating = (blockSums: Float64Array, blockSize: number): n
 	for (let blockIndex = 0; blockIndex < blockCount; blockIndex++) {
 		const power = (blockSums[blockIndex] ?? 0) / blockSize;
 
-		if (power > absoluteThresholdPower && power > relativeThresholdPower) {
+		if (clearsGate(power, absoluteThresholdPower) && clearsGate(power, relativeThresholdPower)) {
 			relativeSum += power;
 			relativeSurvivorCount++;
 		}
