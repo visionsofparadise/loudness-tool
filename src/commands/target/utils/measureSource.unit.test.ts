@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getLraConsideredStats } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { dbToLinear } from "../../../utils/db";
-import { createLevelSegments, createSine } from "../../../utils/testSignals";
+import { createLevelSegments, createNoise, createSine } from "../../../utils/testSignals";
 import { Scratch } from "../../../utils/Scratch";
+import { BLOCK_FRAMES } from "../../../wav/WavReader";
 import { WavWriter } from "../../../wav/WavWriter";
+import type { SampleFile } from "../../../utils/SampleFile";
 import { computeLimitAutoDb, measureSource } from "./measureSource";
 import { windowSamplesFromMs } from "./window";
 
@@ -22,6 +24,18 @@ const writeWav = async (path: string, channels: Array<Float64Array>): Promise<vo
 
 	await writer.write(channels);
 	await writer.close();
+};
+
+const readEnvelope = async (sampleFile: SampleFile): Promise<Float64Array> => {
+	const envelope = new Float64Array(sampleFile.frameCount);
+	let offset = 0;
+
+	for await (const chunk of sampleFile.blocks()) {
+		envelope.set(chunk, offset);
+		offset += chunk.length;
+	}
+
+	return envelope;
 };
 
 describe("computeLimitAutoDb", () => {
@@ -237,18 +251,23 @@ describe("measureSource", () => {
 	it("derives the limit from the per-frame detection, unmoved by smoothing", async () => {
 		scratch = await Scratch.create();
 
-		const channels = createLevelSegments(
-			[
-				{ seconds: 2, frequency: 1000, db: -20 },
-				{ seconds: 2, frequency: 440, db: -8 },
-				{ seconds: 2, frequency: 1000, db: -30 },
-			],
-			SAMPLE_RATE,
-			1,
-		);
-		const inputPath = join(workingDirectory, "segments.wav");
+		const bedDb = -30;
+		const burstDb = -6;
+		const burstFrames = windowSamplesFromMs(1, SAMPLE_RATE);
+		const burstCount = 8;
+		const [channel = new Float64Array(0)] = createSine(SAMPLE_RATE * 6, 1, SAMPLE_RATE, 1000, dbToLinear(bedDb));
 
-		await writeWav(inputPath, channels);
+		for (let burstIndex = 0; burstIndex < burstCount; burstIndex++) {
+			const burstStart = SAMPLE_RATE + (burstIndex * SAMPLE_RATE) / 2;
+
+			for (let offset = 0; offset < burstFrames; offset++) {
+				channel[burstStart + offset] = dbToLinear(burstDb) * Math.sin((2 * Math.PI * 1000 * offset) / SAMPLE_RATE);
+			}
+		}
+
+		const inputPath = join(workingDirectory, "bursts.wav");
+
+		await writeWav(inputPath, [channel]);
 
 		const narrow = await measureSource({
 			inputPath,
@@ -268,8 +287,11 @@ describe("measureSource", () => {
 
 		await wide.detectionEnvelope.close();
 
+		expect(burstCount * burstFrames).toBeLessThan(channel.length * 0.005);
+		expect(burstCount * windowSamplesFromMs(40, SAMPLE_RATE)).toBeGreaterThan(channel.length * 0.005);
 		expect(Number.isFinite(narrow.limitAutoDb)).toBe(true);
 		expect(wide.limitAutoDb).toBe(narrow.limitAutoDb);
+		expect(narrow.limitAutoDb).toBeLessThan((bedDb + burstDb) / 2);
 	});
 
 	it("keys held energy on the held level", async () => {
@@ -338,18 +360,68 @@ describe("measureSource", () => {
 		await writeWav(inputPath, [channel]);
 
 		const measurement = await measureSource({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 1 });
-		const envelope = new Float64Array(measurement.detectionEnvelope.frameCount);
-		let offset = 0;
-
-		for await (const chunk of measurement.detectionEnvelope.blocks()) {
-			envelope.set(chunk, offset);
-			offset += chunk.length;
-		}
+		const envelope = await readEnvelope(measurement.detectionEnvelope);
 
 		await measurement.detectionEnvelope.close();
 
 		return envelope;
 	};
+
+	it("keys held energy on the frame its held level measures across block boundaries", async () => {
+		scratch = await Scratch.create();
+
+		const frameCount = 2 * BLOCK_FRAMES + 8_000;
+		const channels = createNoise(frameCount, 2, 7).map((channel) =>
+			channel.map((sample, frameIndex) => sample * (0.3 + 0.25 * Math.sin((2 * Math.PI * frameIndex) / 3_001))),
+		);
+		const [left = new Float64Array(0)] = channels;
+
+		left[100] = 0.95;
+
+		const inputPath = join(workingDirectory, "multi-block.wav");
+
+		await writeWav(inputPath, channels);
+
+		const energies = new Float64Array(frameCount);
+
+		for (const channel of channels) {
+			for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+				const sample = Math.fround(channel[frameIndex] ?? 0);
+
+				energies[frameIndex] = (energies[frameIndex] ?? 0) + sample * sample;
+			}
+		}
+
+		for (const halfWidth of [0, 3, 48]) {
+			const measurement = await measureSource({ inputPath, scratch, limitPercentile: 0.995, halfWidth });
+			const levelsDb = await readEnvelope(measurement.detectionEnvelope);
+
+			await measurement.detectionEnvelope.close();
+
+			const { heldEnergy, heldBucketMax } = measurement.detectionHistogram;
+			const expected = new Float64Array(heldEnergy.length);
+			const scale = heldEnergy.length / heldBucketMax;
+			let totalEnergy = 0;
+
+			for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+				const bucketIndex = Math.min(
+					heldEnergy.length - 1,
+					Math.floor(dbToLinear(levelsDb[frameIndex] ?? 0) * scale),
+				);
+
+				expected[bucketIndex] = (expected[bucketIndex] ?? 0) + (energies[frameIndex] ?? 0);
+				totalEnergy += energies[frameIndex] ?? 0;
+			}
+
+			expect(levelsDb).toHaveLength(frameCount);
+
+			for (let bucketIndex = 0; bucketIndex < heldEnergy.length; bucketIndex++) {
+				expect(Math.abs((heldEnergy[bucketIndex] ?? 0) - (expected[bucketIndex] ?? 0))).toBeLessThan(
+					totalEnergy * 1e-12,
+				);
+			}
+		}
+	}, 30_000);
 
 	it("reads an impulse's peak at its own frame", async () => {
 		const envelope = await measureImpulseEnvelope(SAMPLE_RATE, 1000);
