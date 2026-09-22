@@ -35,6 +35,19 @@ const baseAnchors = (overrides: Partial<Anchors> = {}): Anchors => ({
 	...overrides,
 });
 
+const histogramOfCounts = (levelCounts: Float64Array, bucketMax: number, totalSamples: number): DetectionHistogram => {
+	const bucketWidth = bucketMax / levelCounts.length;
+	const heldEnergy = new Float64Array(levelCounts.length);
+
+	for (let bucketIndex = 0; bucketIndex < levelCounts.length; bucketIndex++) {
+		const centre = (bucketIndex + 0.5) * bucketWidth;
+
+		heldEnergy[bucketIndex] = (levelCounts[bucketIndex] ?? 0) * centre * centre;
+	}
+
+	return { levelCounts, levelBucketMax: bucketMax, heldEnergy, heldBucketMax: bucketMax, totalSamples };
+};
+
 const singleLevelHistogram = (
 	targetLevelDb: number,
 	totalSamples: number,
@@ -42,14 +55,14 @@ const singleLevelHistogram = (
 	bucketMaxDb = 0,
 ): DetectionHistogram => {
 	const bucketMax = dbToLinear(bucketMaxDb);
-	const buckets = new Uint32Array(bucketCount);
+	const levelCounts = new Float64Array(bucketCount);
 	const targetLinear = dbToLinear(targetLevelDb);
 	const bucketWidth = bucketMax / bucketCount;
 	const bucketIndex = Math.min(bucketCount - 1, Math.max(0, Math.floor(targetLinear / bucketWidth)));
 
-	buckets[bucketIndex] = totalSamples;
+	levelCounts[bucketIndex] = totalSamples;
 
-	return { buckets, bucketMax, totalSamples };
+	return histogramOfCounts(levelCounts, bucketMax, totalSamples);
 };
 
 const uniformDbRangeHistogram = (
@@ -60,7 +73,7 @@ const uniformDbRangeHistogram = (
 	bucketMaxDb = 0,
 ): DetectionHistogram => {
 	const bucketMax = dbToLinear(bucketMaxDb);
-	const buckets = new Uint32Array(bucketCount);
+	const levelCounts = new Float64Array(bucketCount);
 	const bucketWidth = bucketMax / bucketCount;
 	const lowLinear = dbToLinear(lowLevelDb);
 	const highLinear = dbToLinear(highLevelDb);
@@ -71,26 +84,26 @@ const uniformDbRangeHistogram = (
 	let placed = 0;
 
 	for (let bucketIndex = lowBucket; bucketIndex <= highBucket; bucketIndex++) {
-		buckets[bucketIndex] = perBucket;
+		levelCounts[bucketIndex] = perBucket;
 		placed += perBucket;
 	}
 
-	buckets[lowBucket] = (buckets[lowBucket] ?? 0) + (totalSamples - placed);
+	levelCounts[lowBucket] = (levelCounts[lowBucket] ?? 0) + (totalSamples - placed);
 
-	return { buckets, bucketMax, totalSamples };
+	return histogramOfCounts(levelCounts, bucketMax, totalSamples);
 };
 
 const referenceLufsShift = (anchors: Anchors, histogram: DetectionHistogram): number => {
-	const { buckets, bucketMax } = histogram;
-	const bucketCount = buckets.length;
-	const bucketWidth = bucketMax / bucketCount;
+	const { heldEnergy, heldBucketMax } = histogram;
+	const bucketCount = heldEnergy.length;
+	const bucketWidth = heldBucketMax / bucketCount;
 	let weightedGainEnergy = 0;
 	let weightedSourceEnergy = 0;
 
 	for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex++) {
-		const count = buckets[bucketIndex] ?? 0;
+		const energy = heldEnergy[bucketIndex] ?? 0;
 
-		if (count === 0) {
+		if (energy === 0) {
 			continue;
 		}
 
@@ -100,7 +113,6 @@ const referenceLufsShift = (anchors: Anchors, histogram: DetectionHistogram): nu
 			continue;
 		}
 
-		const energy = count * centreLinear * centreLinear;
 		const centreDb = linearToDb(centreLinear);
 		const gainDb = gainDbAt(centreDb, anchors);
 		const gainLinear = Math.pow(10, gainDb / 20);
@@ -144,7 +156,13 @@ const makeCrossAxis = (seconds: number): Float64Array => {
 describe("predictOutputLufs", () => {
 	it("returns -Infinity for an empty histogram", () => {
 		expect(
-			predictOutputLufs(-20, baseAnchors(), { buckets: new Uint32Array(0), bucketMax: 0, totalSamples: 0 }),
+			predictOutputLufs(-20, baseAnchors(), {
+				levelCounts: new Float64Array(0),
+				levelBucketMax: 0,
+				heldEnergy: new Float64Array(0),
+				heldBucketMax: 0,
+				totalSamples: 0,
+			}),
 		).toBe(-Infinity);
 	});
 

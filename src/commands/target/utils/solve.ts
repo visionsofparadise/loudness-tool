@@ -46,10 +46,10 @@ export interface IterateResult {
 }
 
 export const predictOutputLufs = (sourceLufs: number, anchors: Anchors, histogram: DetectionHistogram): number => {
-	const { buckets, bucketMax, totalSamples } = histogram;
-	const bucketCount = buckets.length;
+	const { heldEnergy, heldBucketMax, totalSamples } = histogram;
+	const bucketCount = heldEnergy.length;
 
-	if (bucketCount === 0 || bucketMax <= 0 || totalSamples === 0) {
+	if (bucketCount === 0 || heldBucketMax <= 0 || totalSamples === 0) {
 		return -Infinity;
 	}
 
@@ -57,14 +57,14 @@ export const predictOutputLufs = (sourceLufs: number, anchors: Anchors, histogra
 		return -Infinity;
 	}
 
-	const bucketWidth = bucketMax / bucketCount;
+	const bucketWidth = heldBucketMax / bucketCount;
 	let weightedGainEnergy = 0;
 	let weightedSourceEnergy = 0;
 
 	for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex++) {
-		const count = buckets[bucketIndex] ?? 0;
+		const energy = heldEnergy[bucketIndex] ?? 0;
 
-		if (count === 0) {
+		if (energy === 0) {
 			continue;
 		}
 
@@ -74,7 +74,6 @@ export const predictOutputLufs = (sourceLufs: number, anchors: Anchors, histogra
 			continue;
 		}
 
-		const energy = count * centreLinear * centreLinear;
 		const centreDb = 20 * Math.log10(centreLinear);
 		const gainDb = gainDbAt(centreDb, anchors);
 		const gainLinear = Math.pow(10, gainDb / 20);

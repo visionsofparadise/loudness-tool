@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AmplitudeHistogramAccumulator } from "./AmplitudeHistogramAccumulator";
 
-const sumBuckets = (buckets: Uint32Array): number => {
+const sumBuckets = (buckets: Float64Array): number => {
 	let total = 0;
 
 	for (let index = 0; index < buckets.length; index++) {
@@ -163,5 +163,44 @@ describe("AmplitudeHistogramAccumulator", () => {
 		expect(result.bucketMax).toBe(0);
 		expect(result.median).toBe(0);
 		expect(sumBuckets(result.buckets)).toBe(0);
+	});
+
+	it("sums weights per bucket when supplied", () => {
+		const accumulator = new AmplitudeHistogramAccumulator(4);
+
+		accumulator.push(Float64Array.from([0, 0]), 2, Float64Array.from([4, 1]));
+		accumulator.push(Float64Array.from([0.25, 0.25, 1]), 3, Float64Array.from([2, 3, 7]));
+
+		const result = accumulator.finalize();
+
+		expect(result.bucketMax).toBe(1);
+		expect(Array.from(result.buckets)).toEqual([5, 5, 0, 7]);
+		expect(result.median).toBeCloseTo(0.425, 12);
+	});
+
+	it("rebuckets weighted mass like counts", () => {
+		const bucketCount = 64;
+		const weighted = new AmplitudeHistogramAccumulator(bucketCount);
+		const repeated = new AmplitudeHistogramAccumulator(bucketCount);
+		const chunk1 = makeRamp(100, 0.3);
+		const chunk2 = makeRamp(200, 0.7);
+
+		weighted.push(chunk1, chunk1.length, new Float64Array(chunk1.length).fill(3));
+		weighted.push(chunk2, chunk2.length, new Float64Array(chunk2.length).fill(2));
+
+		for (let repeat = 0; repeat < 3; repeat++) {
+			repeated.push(chunk1, chunk1.length);
+		}
+
+		for (let repeat = 0; repeat < 2; repeat++) {
+			repeated.push(chunk2, chunk2.length);
+		}
+
+		const weightedResult = weighted.finalize();
+		const repeatedResult = repeated.finalize();
+
+		expect(weightedResult.bucketMax).toBe(repeatedResult.bucketMax);
+		expect(Array.from(weightedResult.buckets)).toEqual(Array.from(repeatedResult.buckets));
+		expect(weightedResult.median).toBeCloseTo(repeatedResult.median, 12);
 	});
 });

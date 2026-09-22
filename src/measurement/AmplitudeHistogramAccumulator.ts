@@ -1,20 +1,16 @@
-const histogramMedianOf = (
-	buckets: Uint32Array,
-	bucketCount: number,
-	totalSamples: number,
-	bucketMax: number,
-): number => {
-	const target = totalSamples / 2;
+const histogramMedianOf = (buckets: Float64Array, totalMass: number, bucketMax: number): number => {
+	const bucketCount = buckets.length;
+	const target = totalMass / 2;
 	const bucketWidth = bucketMax / bucketCount;
 	let cumulative = 0;
 	let median = 0;
 
 	for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex++) {
-		const count = buckets[bucketIndex] ?? 0;
-		const next = cumulative + count;
+		const mass = buckets[bucketIndex] ?? 0;
+		const next = cumulative + mass;
 
 		if (next >= target) {
-			const fraction = count > 0 ? (target - cumulative) / count : 0;
+			const fraction = mass > 0 ? (target - cumulative) / mass : 0;
 
 			median = (bucketIndex + fraction) * bucketWidth;
 
@@ -29,12 +25,13 @@ const histogramMedianOf = (
 
 export class AmplitudeHistogramAccumulator {
 	private readonly bucketCount: number;
-	private buckets: Uint32Array;
+	private buckets: Float64Array;
 	private currentBucketMax = 0;
 	private totalSamples = 0;
-	private pendingZeros = 0;
+	private totalMass = 0;
+	private pendingZeroMass = 0;
 	private finalized = false;
-	private cachedResult: { buckets: Uint32Array; bucketMax: number; median: number } | undefined;
+	private cachedResult: { buckets: Float64Array; bucketMax: number; median: number } | undefined;
 
 	constructor(bucketCount: number) {
 		if (!Number.isInteger(bucketCount) || bucketCount <= 0) {
@@ -44,10 +41,10 @@ export class AmplitudeHistogramAccumulator {
 		}
 
 		this.bucketCount = bucketCount;
-		this.buckets = new Uint32Array(bucketCount);
+		this.buckets = new Float64Array(bucketCount);
 	}
 
-	push(samples: Float64Array, count: number): void {
+	push(samples: Float64Array, count: number, weights?: Float64Array): void {
 		if (this.finalized) {
 			throw new Error("AmplitudeHistogramAccumulator: push() called after finalize()");
 		}
@@ -62,7 +59,14 @@ export class AmplitudeHistogramAccumulator {
 			);
 		}
 
+		if (weights !== undefined && weights.length < count) {
+			throw new Error(
+				`AmplitudeHistogramAccumulator: weights has ${weights.length} values, fewer than the requested ${count}`,
+			);
+		}
+
 		let chunkMax = 0;
+		let chunkMass = 0;
 
 		for (let index = 0; index < count; index++) {
 			const value = Math.abs(samples[index] ?? 0);
@@ -70,15 +74,19 @@ export class AmplitudeHistogramAccumulator {
 			if (value > chunkMax) {
 				chunkMax = value;
 			}
+
+			chunkMass += weights === undefined ? 1 : (weights[index] ?? 0);
 		}
+
+		this.totalSamples += count;
+		this.totalMass += chunkMass;
 
 		if (chunkMax > this.currentBucketMax) {
 			this.rebucket(chunkMax);
 		}
 
 		if (this.currentBucketMax === 0) {
-			this.pendingZeros += count;
-			this.totalSamples += count;
+			this.pendingZeroMass += chunkMass;
 
 			return;
 		}
@@ -96,12 +104,12 @@ export class AmplitudeHistogramAccumulator {
 				bucketIndex = lastBucket;
 			}
 
-			this.buckets[bucketIndex] = (this.buckets[bucketIndex] ?? 0) + 1;
-			this.totalSamples += 1;
+			this.buckets[bucketIndex] =
+				(this.buckets[bucketIndex] ?? 0) + (weights === undefined ? 1 : (weights[index] ?? 0));
 		}
 	}
 
-	finalize(): { buckets: Uint32Array; bucketMax: number; median: number } {
+	finalize(): { buckets: Float64Array; bucketMax: number; median: number } {
 		if (this.cachedResult !== undefined) {
 			return this.cachedResult;
 		}
@@ -114,7 +122,7 @@ export class AmplitudeHistogramAccumulator {
 			return this.cachedResult;
 		}
 
-		const median = histogramMedianOf(this.buckets, this.bucketCount, this.totalSamples, this.currentBucketMax);
+		const median = histogramMedianOf(this.buckets, this.totalMass, this.currentBucketMax);
 
 		this.cachedResult = { buckets: this.buckets, bucketMax: this.currentBucketMax, median };
 
@@ -123,9 +131,9 @@ export class AmplitudeHistogramAccumulator {
 
 	private rebucket(newMax: number): void {
 		if (this.currentBucketMax === 0) {
-			if (this.pendingZeros > 0) {
-				this.buckets[0] = (this.buckets[0] ?? 0) + this.pendingZeros;
-				this.pendingZeros = 0;
+			if (this.pendingZeroMass > 0) {
+				this.buckets[0] = (this.buckets[0] ?? 0) + this.pendingZeroMass;
+				this.pendingZeroMass = 0;
 			}
 
 			this.currentBucketMax = newMax;
@@ -135,15 +143,15 @@ export class AmplitudeHistogramAccumulator {
 
 		const oldBuckets = this.buckets;
 		const oldMax = this.currentBucketMax;
-		const newBuckets = new Uint32Array(this.bucketCount);
+		const newBuckets = new Float64Array(this.bucketCount);
 		const lastBucket = this.bucketCount - 1;
 		const oldWidth = oldMax / this.bucketCount;
 		const newScale = this.bucketCount / newMax;
 
 		for (let oldIndex = 0; oldIndex < this.bucketCount; oldIndex++) {
-			const count = oldBuckets[oldIndex] ?? 0;
+			const mass = oldBuckets[oldIndex] ?? 0;
 
-			if (count === 0) {
+			if (mass === 0) {
 				continue;
 			}
 
@@ -156,7 +164,7 @@ export class AmplitudeHistogramAccumulator {
 				newIndex = lastBucket;
 			}
 
-			newBuckets[newIndex] = (newBuckets[newIndex] ?? 0) + count;
+			newBuckets[newIndex] = (newBuckets[newIndex] ?? 0) + mass;
 		}
 
 		this.buckets = newBuckets;

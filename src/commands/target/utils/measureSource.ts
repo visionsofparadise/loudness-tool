@@ -7,7 +7,7 @@ import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
 import { TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
 import { dbToLinear, linearToDb } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
-import { WavReader } from "../../../wav/WavReader";
+import { BLOCK_FRAMES, WavReader } from "../../../wav/WavReader";
 import type { Scratch } from "../../../utils/Scratch";
 import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
@@ -16,8 +16,10 @@ const HISTOGRAM_BUCKETS = 1024;
 const PIVOT_FALLBACK_DB = -40;
 
 export interface DetectionHistogram {
-	readonly buckets: Uint32Array;
-	readonly bucketMax: number;
+	readonly levelCounts: Float64Array;
+	readonly levelBucketMax: number;
+	readonly heldEnergy: Float64Array;
+	readonly heldBucketMax: number;
 	readonly totalSamples: number;
 }
 
@@ -71,7 +73,26 @@ const writeMaxAcrossChannels = (
 	}
 };
 
-const totalSamplesOf = (buckets: Uint32Array): number => {
+const writeFrameEnergies = (
+	channels: ReadonlyArray<Float64Array>,
+	frames: number,
+	ring: Float64Array,
+	firstFrameIndex: number,
+): void => {
+	for (let frameOffset = 0; frameOffset < frames; frameOffset++) {
+		let energy = 0;
+
+		for (const channel of channels) {
+			const sample = channel[frameOffset] ?? 0;
+
+			energy += sample * sample;
+		}
+
+		ring[(firstFrameIndex + frameOffset) % ring.length] = energy;
+	}
+};
+
+const totalSamplesOf = (buckets: Float64Array): number => {
 	let totalSamples = 0;
 
 	for (let bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++) {
@@ -82,32 +103,32 @@ const totalSamplesOf = (buckets: Uint32Array): number => {
 };
 
 export const computeLimitAutoDb = (
-	buckets: Uint32Array,
-	bucketMax: number,
+	levelCounts: Float64Array,
+	levelBucketMax: number,
 	pivotAutoDb: number,
 	limitPercentile: number,
 ): number => {
-	if (bucketMax === 0) {
+	if (levelBucketMax === 0) {
 		return Number.POSITIVE_INFINITY;
 	}
 
-	const totalSamples = totalSamplesOf(buckets);
+	const totalSamples = totalSamplesOf(levelCounts);
 
 	if (totalSamples === 0) {
 		return Number.POSITIVE_INFINITY;
 	}
 
-	const bucketWidth = bucketMax / buckets.length;
+	const bucketWidth = levelBucketMax / levelCounts.length;
 	const effectivePivotDb = Number.isFinite(pivotAutoDb) ? pivotAutoDb : PIVOT_FALLBACK_DB;
 	const pivotLinear = dbToLinear(effectivePivotDb);
 	const rawStart = Math.floor(pivotLinear / bucketWidth);
-	const startBucket = Math.min(buckets.length - 1, Math.max(0, rawStart));
+	const startBucket = Math.min(levelCounts.length - 1, Math.max(0, rawStart));
 	const targetCount = totalSamples * (1 - limitPercentile);
 	let cumulative = 0;
 	let limitBucket = -1;
 
-	for (let bucketIndex = buckets.length - 1; bucketIndex >= startBucket; bucketIndex--) {
-		cumulative += buckets[bucketIndex] ?? 0;
+	for (let bucketIndex = levelCounts.length - 1; bucketIndex >= startBucket; bucketIndex--) {
+		cumulative += levelCounts[bucketIndex] ?? 0;
 
 		if (cumulative >= targetCount) {
 			limitBucket = bucketIndex;
@@ -146,8 +167,10 @@ export const measureSource = async (args: {
 		const truePeak = new TruePeakAccumulator(channelCount);
 		const integrated = new IntegratedLufsAccumulator(sampleRate, channelCount);
 		const shortTerm = new ShortTermLoudnessAccumulator(sampleRate, channelCount);
-		const histogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
+		const levelHistogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
+		const heldHistogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
 		const slidingWindow = new SlidingWindowMaxStream(halfWidth);
+		const energyRing = new Float64Array(BLOCK_FRAMES + halfWidth);
 		const upsamplers: Array<TruePeakUpsampler> = [];
 		const upsampleScratches: Array<Float64Array> = [];
 
@@ -159,13 +182,25 @@ export const measureSource = async (args: {
 		let levelsScratch = new Float64Array(0);
 		let baseScratch = new Float64Array(0);
 		let dbScratch = new Float64Array(0);
+		let energyScratch = new Float64Array(0);
+		let frameIndex = 0;
+		let emittedIndex = 0;
 
 		const persistPooled = async (pooled: Float64Array): Promise<void> => {
 			if (pooled.length === 0) {
 				return;
 			}
 
-			histogram.push(pooled, pooled.length);
+			if (energyScratch.length < pooled.length) {
+				energyScratch = new Float64Array(pooled.length);
+			}
+
+			for (let pooledIndex = 0; pooledIndex < pooled.length; pooledIndex++) {
+				energyScratch[pooledIndex] = energyRing[(emittedIndex + pooledIndex) % energyRing.length] ?? 0;
+			}
+
+			emittedIndex += pooled.length;
+			heldHistogram.push(pooled, pooled.length, energyScratch);
 
 			if (dbScratch.length < pooled.length) {
 				dbScratch = new Float64Array(pooled.length);
@@ -173,6 +208,11 @@ export const measureSource = async (args: {
 
 			writeLinearAsDb(pooled, dbScratch);
 			await detectionEnvelope.append(dbScratch, pooled.length);
+		};
+
+		const pushDetection = async (levels: Float64Array, frames: number): Promise<void> => {
+			levelHistogram.push(levels, frames);
+			await persistPooled(slidingWindow.push(levels, false));
 		};
 
 		for await (const block of reader.blocks()) {
@@ -221,16 +261,18 @@ export const measureSource = async (args: {
 
 			writeMaxAcrossChannels(upChannels, levelsScratch, upChunkLength);
 			collapseMaxOf4(levelsScratch, frames, baseScratch);
+			writeFrameEnergies(block.channels, frames, energyRing, frameIndex);
+			frameIndex += frames;
 
-			await persistPooled(slidingWindow.push(baseScratch.subarray(0, frames), false));
+			await pushDetection(baseScratch.subarray(0, frames), frames);
 		}
 
 		await persistPooled(slidingWindow.push(new Float64Array(0), true));
 
-		const histogramResult = histogram.finalize();
+		const levelResult = levelHistogram.finalize();
+		const heldResult = heldHistogram.finalize();
 		const shortTermSeries = shortTerm.finalize();
 		const stats = getLraConsideredStats(shortTermSeries.subarray(0, shortTerm.sourceWindowCount));
-		const totalSamples = totalSamplesOf(histogramResult.buckets);
 
 		return {
 			integratedLufs: integrated.finalize(),
@@ -238,16 +280,13 @@ export const measureSource = async (args: {
 			truePeakDb: linearToDb(truePeak.finalize()),
 			pivotAutoDb: stats.median,
 			floorAutoDb: stats.minimum,
-			limitAutoDb: computeLimitAutoDb(
-				histogramResult.buckets,
-				histogramResult.bucketMax,
-				stats.median,
-				limitPercentile,
-			),
+			limitAutoDb: computeLimitAutoDb(levelResult.buckets, levelResult.bucketMax, stats.median, limitPercentile),
 			detectionHistogram: {
-				buckets: histogramResult.buckets,
-				bucketMax: histogramResult.bucketMax,
-				totalSamples,
+				levelCounts: levelResult.buckets,
+				levelBucketMax: levelResult.bucketMax,
+				heldEnergy: heldResult.buckets,
+				heldBucketMax: heldResult.bucketMax,
+				totalSamples: totalSamplesOf(levelResult.buckets),
 			},
 			detectionEnvelope,
 			sampleRate,

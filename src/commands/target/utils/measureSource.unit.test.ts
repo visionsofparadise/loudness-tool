@@ -26,12 +26,12 @@ const writeWav = async (path: string, channels: Array<Float64Array>): Promise<vo
 
 describe("computeLimitAutoDb", () => {
 	it("returns +Infinity for an empty histogram", () => {
-		expect(computeLimitAutoDb(new Uint32Array(16), 0, -20, 0.995)).toBe(Number.POSITIVE_INFINITY);
-		expect(computeLimitAutoDb(new Uint32Array(16), 1, -20, 0.995)).toBe(Number.POSITIVE_INFINITY);
+		expect(computeLimitAutoDb(new Float64Array(16), 0, -20, 0.995)).toBe(Number.POSITIVE_INFINITY);
+		expect(computeLimitAutoDb(new Float64Array(16), 1, -20, 0.995)).toBe(Number.POSITIVE_INFINITY);
 	});
 
 	it("returns +Infinity when the post-pivot window is sparse", () => {
-		const buckets = new Uint32Array(16);
+		const buckets = new Float64Array(16);
 
 		buckets[0] = 10_000;
 		buckets[15] = 1;
@@ -40,7 +40,7 @@ describe("computeLimitAutoDb", () => {
 	});
 
 	it("lands in the upper portion of a populated post-pivot window", () => {
-		const buckets = new Uint32Array(16);
+		const buckets = new Float64Array(16);
 
 		buckets.fill(100);
 		buckets[14] = 200;
@@ -232,5 +232,97 @@ describe("measureSource", () => {
 		expect(Math.abs(measurement.floorAutoDb - tailIncluded.minimum)).toBeGreaterThan(0.01);
 
 		await measurement.detectionEnvelope.close();
+	});
+
+	it("derives the limit from the per-frame detection, unmoved by smoothing", async () => {
+		scratch = await Scratch.create();
+
+		const channels = createLevelSegments(
+			[
+				{ seconds: 2, frequency: 1000, db: -20 },
+				{ seconds: 2, frequency: 440, db: -8 },
+				{ seconds: 2, frequency: 1000, db: -30 },
+			],
+			SAMPLE_RATE,
+			1,
+		);
+		const inputPath = join(workingDirectory, "segments.wav");
+
+		await writeWav(inputPath, channels);
+
+		const narrow = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+
+		await narrow.detectionEnvelope.close();
+
+		const wide = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(40, SAMPLE_RATE),
+		});
+
+		await wide.detectionEnvelope.close();
+
+		expect(Number.isFinite(narrow.limitAutoDb)).toBe(true);
+		expect(wide.limitAutoDb).toBe(narrow.limitAutoDb);
+	});
+
+	it("keys held energy on the held level", async () => {
+		scratch = await Scratch.create();
+
+		const frameCount = SAMPLE_RATE;
+		const burstStart = SAMPLE_RATE / 2;
+		const burstFrames = windowSamplesFromMs(10, SAMPLE_RATE);
+		const bed = dbToLinear(-60);
+		const burst = dbToLinear(-6);
+		const channel = new Float64Array(frameCount);
+		let burstEnergy = 0;
+
+		for (let index = 0; index < frameCount; index++) {
+			const isBurst = index >= burstStart && index < burstStart + burstFrames;
+			const sample = (isBurst ? burst : bed) * Math.sin((2 * Math.PI * 1000 * index) / SAMPLE_RATE);
+
+			channel[index] = sample;
+
+			if (isBurst) {
+				burstEnergy += sample * sample;
+			}
+		}
+
+		const inputPath = join(workingDirectory, "burst.wav");
+
+		await writeWav(inputPath, [channel]);
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+
+		await measurement.detectionEnvelope.close();
+
+		const { levelCounts, levelBucketMax, heldEnergy, heldBucketMax } = measurement.detectionHistogram;
+		const threshold = dbToLinear(-30);
+		const massAbove = (buckets: Float64Array, bucketMax: number): number => {
+			const bucketWidth = bucketMax / buckets.length;
+			let mass = 0;
+
+			for (let bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++) {
+				if ((bucketIndex + 0.5) * bucketWidth > threshold) {
+					mass += buckets[bucketIndex] ?? 0;
+				}
+			}
+
+			return mass;
+		};
+
+		expect(Math.abs(massAbove(heldEnergy, heldBucketMax) / burstEnergy - 1)).toBeLessThan(0.01);
+		expect(Math.abs(massAbove(levelCounts, levelBucketMax) - burstFrames)).toBeLessThanOrEqual(12);
 	});
 });
