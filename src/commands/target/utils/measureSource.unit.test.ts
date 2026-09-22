@@ -325,4 +325,44 @@ describe("measureSource", () => {
 		expect(Math.abs(massAbove(heldEnergy, heldBucketMax) / burstEnergy - 1)).toBeLessThan(0.01);
 		expect(Math.abs(massAbove(levelCounts, levelBucketMax) - burstFrames)).toBeLessThanOrEqual(12);
 	});
+
+	const measureImpulseEnvelope = async (frameCount: number, impulseFrame: number): Promise<Float64Array> => {
+		scratch = await Scratch.create();
+
+		const channel = new Float64Array(frameCount);
+
+		channel[impulseFrame] = 1;
+
+		const inputPath = join(workingDirectory, "impulse.wav");
+
+		await writeWav(inputPath, [channel]);
+
+		const measurement = await measureSource({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 1 });
+		const envelope = new Float64Array(measurement.detectionEnvelope.frameCount);
+		let offset = 0;
+
+		for await (const chunk of measurement.detectionEnvelope.blocks()) {
+			envelope.set(chunk, offset);
+			offset += chunk.length;
+		}
+
+		await measurement.detectionEnvelope.close();
+
+		return envelope;
+	};
+
+	it("reads an impulse's peak at its own frame", async () => {
+		const envelope = await measureImpulseEnvelope(SAMPLE_RATE, 1000);
+
+		expect(Math.abs(envelope[999] ?? Number.NaN)).toBeLessThan(0.3);
+		expect(Math.abs(envelope[1000] ?? Number.NaN)).toBeLessThan(0.3);
+		expect(envelope[990]).toBeLessThan(-20);
+		expect(envelope[1010]).toBeLessThan(-20);
+	});
+
+	it("reads an impulse in the final frame", async () => {
+		const envelope = await measureImpulseEnvelope(SAMPLE_RATE, SAMPLE_RATE - 1);
+
+		expect(envelope[SAMPLE_RATE - 1]).toBeGreaterThan(-1);
+	});
 });

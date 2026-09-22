@@ -14,6 +14,8 @@ import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 const OVERSAMPLE_FACTOR = 4;
 const HISTOGRAM_BUCKETS = 1024;
 const PIVOT_FALLBACK_DB = -40;
+const DETECTION_DELAY_FRAMES = 6;
+const FLUSH_FRAMES = 11;
 
 export interface DetectionHistogram {
 	readonly levelCounts: Float64Array;
@@ -170,7 +172,7 @@ export const measureSource = async (args: {
 		const levelHistogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
 		const heldHistogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
 		const slidingWindow = new SlidingWindowMaxStream(halfWidth);
-		const energyRing = new Float64Array(BLOCK_FRAMES + halfWidth);
+		const energyRing = new Float64Array(BLOCK_FRAMES + halfWidth + DETECTION_DELAY_FRAMES);
 		const upsamplers: Array<TruePeakUpsampler> = [];
 		const upsampleScratches: Array<Float64Array> = [];
 
@@ -185,6 +187,8 @@ export const measureSource = async (args: {
 		let energyScratch = new Float64Array(0);
 		let frameIndex = 0;
 		let emittedIndex = 0;
+		let skipRemaining = DETECTION_DELAY_FRAMES * OVERSAMPLE_FACTOR;
+		let detectedFrames = 0;
 
 		const persistPooled = async (pooled: Float64Array): Promise<void> => {
 			if (pooled.length === 0) {
@@ -215,6 +219,27 @@ export const measureSource = async (args: {
 			await persistPooled(slidingWindow.push(levels, false));
 		};
 
+		const pushAlignedDetection = async (upLength: number): Promise<void> => {
+			const skipped = Math.min(skipRemaining, upLength);
+
+			skipRemaining -= skipped;
+
+			const frames = Math.min((upLength - skipped) / OVERSAMPLE_FACTOR, frameCount - detectedFrames);
+
+			if (frames <= 0) {
+				return;
+			}
+
+			if (baseScratch.length < frames) {
+				baseScratch = new Float64Array(frames);
+			}
+
+			collapseMaxOf4(levelsScratch.subarray(skipped), frames, baseScratch);
+			detectedFrames += frames;
+
+			await pushDetection(baseScratch.subarray(0, frames), frames);
+		};
+
 		for await (const block of reader.blocks()) {
 			const frames = block.channels[0]?.length ?? 0;
 
@@ -230,10 +255,6 @@ export const measureSource = async (args: {
 
 			if (levelsScratch.length < upChunkLength) {
 				levelsScratch = new Float64Array(upChunkLength);
-			}
-
-			if (baseScratch.length < frames) {
-				baseScratch = new Float64Array(frames);
 			}
 
 			const upChannels: Array<Float64Array> = [];
@@ -260,13 +281,28 @@ export const measureSource = async (args: {
 			}
 
 			writeMaxAcrossChannels(upChannels, levelsScratch, upChunkLength);
-			collapseMaxOf4(levelsScratch, frames, baseScratch);
 			writeFrameEnergies(block.channels, frames, energyRing, frameIndex);
 			frameIndex += frames;
 
-			await pushDetection(baseScratch.subarray(0, frames), frames);
+			await pushAlignedDetection(upChunkLength);
 		}
 
+		const flushLength = FLUSH_FRAMES * OVERSAMPLE_FACTOR;
+		const flushChannels = upsamplers.map((upsampler) => {
+			const flushed = new Float64Array(flushLength);
+
+			upsampler.flush(flushed);
+
+			return flushed;
+		});
+
+		if (levelsScratch.length < flushLength) {
+			levelsScratch = new Float64Array(flushLength);
+		}
+
+		writeMaxAcrossChannels(flushChannels, levelsScratch, flushLength);
+
+		await pushAlignedDetection(flushLength);
 		await persistPooled(slidingWindow.push(new Float64Array(0), true));
 
 		const levelResult = levelHistogram.finalize();
