@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SlidingWindowMaxStream, SlidingWindowMinStream } from "./SlidingWindowStreams";
+import { SlidingWindowMaxStream, SlidingWindowMeanStream, SlidingWindowMinStream } from "./SlidingWindowStreams";
 
 const makeLcg = (seed: number): (() => number) => {
 	let state = seed >>> 0;
@@ -25,9 +25,11 @@ const makeFixture = (length: number, seed: number): Float64Array => {
 	return result;
 };
 
+type OpenStream = (halfWidth: number) => { push: (chunk: Float64Array, isFinal: boolean) => Float64Array };
+
 interface Variant {
 	readonly name: string;
-	readonly openStream: (halfWidth: number) => { push: (chunk: Float64Array, isFinal: boolean) => Float64Array };
+	readonly openStream: OpenStream;
 	readonly isBetter: (candidate: number, incumbent: number) => boolean;
 	readonly worst: number;
 }
@@ -70,7 +72,12 @@ const slidingWindowNaive = (input: Float64Array, halfWidth: number, variant: Var
 	return output;
 };
 
-const runStreaming = (input: Float64Array, halfWidth: number, chunkSize: number, variant: Variant): Float64Array => {
+const runStreaming = (
+	input: Float64Array,
+	halfWidth: number,
+	chunkSize: number,
+	variant: { readonly openStream: OpenStream },
+): Float64Array => {
 	const stream = variant.openStream(halfWidth);
 	const collected: Array<Float64Array> = [];
 	let totalEmitted = 0;
@@ -277,5 +284,105 @@ describe("max-of-4 collapse equivalence", () => {
 		for (let baseIndex = 0; baseIndex < baseFrames; baseIndex++) {
 			expect(fromCollapsed[baseIndex]).toBe(collapsedOversampled[baseIndex]);
 		}
+	});
+});
+
+const slidingMeanNaive = (input: Float64Array, halfWidth: number): Float64Array => {
+	const length = input.length;
+	const output = new Float64Array(length);
+
+	for (let outputIndex = 0; outputIndex < length; outputIndex++) {
+		const leftEdge = Math.max(0, outputIndex - halfWidth);
+		const rightEdge = Math.min(length - 1, outputIndex + halfWidth);
+		let sum = 0;
+
+		for (let windowIndex = leftEdge; windowIndex <= rightEdge; windowIndex++) {
+			sum += input[windowIndex] ?? 0;
+		}
+
+		output[outputIndex] = sum / (rightEdge - leftEdge + 1);
+	}
+
+	return output;
+};
+
+const MEAN = { openStream: (halfWidth: number) => new SlidingWindowMeanStream(halfWidth) };
+
+const expectCloseToReference = (actual: Float64Array, expected: Float64Array): void => {
+	expect(actual.length).toBe(expected.length);
+
+	for (let frameIndex = 0; frameIndex < expected.length; frameIndex++) {
+		expect(actual[frameIndex]).toBeCloseTo(expected[frameIndex] ?? Number.NaN, 12);
+	}
+};
+
+describe("SlidingWindowMeanStream", () => {
+	it("matches the naive reference on a small fixture", () => {
+		const input = makeFixture(257, 0xdead_beef);
+		const halfWidth = 12;
+
+		expectCloseToReference(runStreaming(input, halfWidth, input.length, MEAN), slidingMeanNaive(input, halfWidth));
+	});
+
+	it("equivalent to the whole-array reference at several chunk sizes", () => {
+		const input = makeFixture(5000, 0xface_f00d);
+		const halfWidth = 50;
+		const reference = slidingMeanNaive(input, halfWidth);
+
+		for (const chunkSize of [1, 100, 333, 1000]) {
+			expectCloseToReference(runStreaming(input, halfWidth, chunkSize, MEAN), reference);
+		}
+	});
+
+	it("halfWidth 0 returns the input within rounding", () => {
+		const input = makeFixture(200, 0xbadc_afe);
+
+		expectCloseToReference(runStreaming(input, 0, 33, MEAN), input);
+	});
+
+	it("source shorter than halfWidth still emits all outputs once isFinal is signalled", () => {
+		const input = makeFixture(10, 0xcafe_babe);
+		const halfWidth = 50;
+
+		expectCloseToReference(runStreaming(input, halfWidth, 4, MEAN), slidingMeanNaive(input, halfWidth));
+	});
+
+	it("empty input with isFinal returns an empty output", () => {
+		const stream = new SlidingWindowMeanStream(5);
+
+		expect(stream.push(new Float64Array(0), true).length).toBe(0);
+	});
+
+	it("names the constructed class in the RangeError", () => {
+		expect(() => new SlidingWindowMeanStream(-1)).toThrow(/SlidingWindowMeanStream/);
+	});
+
+	it("a step input ramps linearly across 2·halfWidth+1 outputs", () => {
+		const halfWidth = 4;
+		const stepIndex = 50;
+		const input = new Float64Array(100);
+
+		input.fill(1, stepIndex);
+
+		const output = runStreaming(input, halfWidth, 7, MEAN);
+		const span = 2 * halfWidth + 1;
+
+		for (let offset = 0; offset <= span; offset++) {
+			expect(output[stepIndex - halfWidth - 1 + offset]).toBeCloseTo(offset / span, 12);
+		}
+
+		expect(output[stepIndex - halfWidth - 2]).toBeCloseTo(0, 12);
+		expect(output[stepIndex + halfWidth + 1]).toBeCloseTo(1, 12);
+	});
+
+	it("drains the tail against the naive reference", () => {
+		const input = Float64Array.from({ length: 10 }, (_, index) => index + 1);
+		const halfWidth = 2;
+		const output = runStreaming(input, halfWidth, 3, MEAN);
+
+		expectCloseToReference(output, slidingMeanNaive(input, halfWidth));
+		expect(output[7]).toBeCloseTo(8, 12);
+		expect(output[8]).toBeCloseTo(8.5, 12);
+		expect(output[9]).toBeCloseTo(9, 12);
 	});
 });

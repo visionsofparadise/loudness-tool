@@ -19,19 +19,19 @@ const applyEnvelopeToChannels = (
 	}
 };
 
-export interface SampleCursor {
+interface SampleCursor {
 	iterator: AsyncIterator<Float64Array>;
 	current: Float64Array | undefined;
 	offset: number;
 }
 
-export const createSampleCursor = (blocks: AsyncIterable<Float64Array>): SampleCursor => ({
+const createSampleCursor = (blocks: AsyncIterable<Float64Array>): SampleCursor => ({
 	iterator: blocks[Symbol.asyncIterator](),
 	current: undefined,
 	offset: 0,
 });
 
-export const pullSamples = async (cursor: SampleCursor, count: number): Promise<Float64Array> => {
+const pullSamples = async (cursor: SampleCursor, count: number): Promise<Float64Array> => {
 	const output = new Float64Array(count);
 	let filled = 0;
 

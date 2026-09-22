@@ -282,7 +282,7 @@ export const addTargetCommand = (program: Command): void => {
 		DEFAULT_LIMIT_PERCENTILE,
 	);
 	command.option("--limit-db <dB>", "limit-anchor override in dB", parseNegativeDb("limit-db", -60));
-	command.option("--smoothing <ms>", "envelope time constant in milliseconds", parseSmoothing, DEFAULT_SMOOTHING_MS);
+	command.option("--smoothing <ms>", "envelope window in milliseconds", parseSmoothing, DEFAULT_SMOOTHING_MS);
 	command.option("--never-expand", "keep the upper arm flat or compressive");
 	command.option("--tolerance <dB>", "LUFS exit threshold in dB", parseTolerance, DEFAULT_TOLERANCE);
 	command.option("--scratch-dir <path>", "directory for temporary sample files");

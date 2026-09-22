@@ -1,4 +1,3 @@
-import { BidirectionalIir } from "../../../measurement/BidirectionalIir";
 import { IntegratedLufsAccumulator } from "../../../measurement/IntegratedLufsAccumulator";
 import { computeLoudnessRange } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
@@ -8,7 +7,7 @@ import { SampleFile } from "../../../utils/SampleFile";
 import { forEachEnvelopedBlock } from "./apply";
 import { gainDbAt } from "./curve";
 import { renderEnvelope } from "./envelope";
-import { windowSamplesFromMs } from "./window";
+import { holdHalfWidthOf, windowSamplesFromMs } from "./window";
 import type { Anchors } from "./curve";
 import type { DetectionHistogram } from "./measureSource";
 import type { Scratch } from "../../../utils/Scratch";
@@ -391,8 +390,7 @@ export const iterateForTargets = async (args: {
 	}
 
 	const tpCap = effectiveTargetTp - currentLimit;
-	const halfWidth = windowSamplesFromMs(smoothingMs, sampleRate);
-	const iir = new BidirectionalIir(smoothingMs, sampleRate);
+	const holdHalfWidth = holdHalfWidthOf(windowSamplesFromMs(smoothingMs, sampleRate));
 	let residual = 0;
 	let tpCapEffective = tpCap;
 	let currentBoost = clampBoost(
@@ -431,15 +429,7 @@ export const iterateForTargets = async (args: {
 			let measured: { outputLufs: number; outputLra: number; outputTruePeakDb: number };
 
 			try {
-				await renderEnvelope({
-					detectionEnvelope,
-					dest,
-					scratch,
-					anchors,
-					iir,
-					halfWidth,
-					label: `attempt-${attemptIndex}`,
-				});
+				await renderEnvelope({ detectionEnvelope, dest, anchors, holdHalfWidth });
 				measured = await measureAttemptOutput({
 					inputPath,
 					sampleRate,

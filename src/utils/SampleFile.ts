@@ -81,29 +81,6 @@ export class SampleFile {
 		}
 	}
 
-	async *reverseBlocks(): AsyncIterableIterator<Float64Array> {
-		this.assertOpen();
-
-		const fullBlocks = Math.floor(this.writtenFrames / SAMPLE_FILE_BLOCK_FRAMES);
-		const remainder = this.writtenFrames % SAMPLE_FILE_BLOCK_FRAMES;
-
-		if (remainder > 0) {
-			const chunk = await this.readFrames(fullBlocks * SAMPLE_FILE_BLOCK_FRAMES, remainder);
-
-			chunk.reverse();
-
-			yield chunk;
-		}
-
-		for (let blockIndex = fullBlocks - 1; blockIndex >= 0; blockIndex--) {
-			const chunk = await this.readFrames(blockIndex * SAMPLE_FILE_BLOCK_FRAMES, SAMPLE_FILE_BLOCK_FRAMES);
-
-			chunk.reverse();
-
-			yield chunk;
-		}
-	}
-
 	async close(): Promise<void> {
 		if (this.isClosed) {
 			return;

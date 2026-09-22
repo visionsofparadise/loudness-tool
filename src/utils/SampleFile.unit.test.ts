@@ -87,50 +87,6 @@ describe("SampleFile", () => {
 		await file.close();
 	});
 
-	it("reverse iteration equals the reversed forward read", async () => {
-		scratch = await Scratch.create();
-
-		const file = await SampleFile.create(scratch, "reverse");
-		const samples = new Float64Array(SAMPLE_FILE_BLOCK_FRAMES + 17);
-
-		for (let index = 0; index < samples.length; index++) {
-			samples[index] = Math.sin(index / 13) * (index + 1);
-		}
-
-		await file.append(samples, samples.length);
-
-		const forward = await collect(file.blocks());
-		const reversed = await collect(file.reverseBlocks());
-		const expected = Float64Array.from(forward).reverse();
-
-		expect(reversed).toEqual(expected);
-
-		await file.close();
-	});
-
-	it("yields a ragged tail as the first reverse stripe", async () => {
-		scratch = await Scratch.create();
-
-		const file = await SampleFile.create(scratch, "ragged");
-		const tail = 123;
-		const samples = new Float64Array(SAMPLE_FILE_BLOCK_FRAMES + tail);
-
-		for (let index = 0; index < samples.length; index++) {
-			samples[index] = index;
-		}
-
-		await file.append(samples, samples.length);
-
-		const reverseChunks = await collectChunks(file.reverseBlocks());
-
-		expect(reverseChunks).toHaveLength(2);
-		expect(reverseChunks[0]?.length).toBe(tail);
-		expect(reverseChunks[1]?.length).toBe(SAMPLE_FILE_BLOCK_FRAMES);
-		expect(Array.from(reverseChunks[0] ?? [])).toEqual(Array.from(samples.subarray(samples.length - tail)).reverse());
-
-		await file.close();
-	});
-
 	it("round-trips a short file smaller than one block", async () => {
 		scratch = await Scratch.create();
 
@@ -140,7 +96,6 @@ describe("SampleFile", () => {
 		await file.append(samples, samples.length);
 
 		expect(await collect(file.blocks())).toEqual(samples);
-		expect(await collect(file.reverseBlocks())).toEqual(Float64Array.from(samples).reverse());
 
 		await file.close();
 	});
@@ -154,7 +109,6 @@ describe("SampleFile", () => {
 
 		expect(file.frameCount).toBe(0);
 		expect(await collect(file.blocks())).toEqual(new Float64Array(0));
-		expect(await collect(file.reverseBlocks())).toEqual(new Float64Array(0));
 
 		await file.close();
 	});

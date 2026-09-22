@@ -649,8 +649,12 @@ describe("iterateForTargets", () => {
 
 			return file;
 		});
-		vi.spyOn(envelope, "renderEnvelope").mockImplementation(async ({ dest, label }) => {
-			const gain = label === "attempt-0" ? 10 : 1;
+		let renderCount = 0;
+
+		vi.spyOn(envelope, "renderEnvelope").mockImplementation(async ({ dest }) => {
+			const gain = renderCount === 0 ? 10 : 1;
+
+			renderCount++;
 			const samples = new Float64Array(measurement.frameCount).fill(gain);
 
 			await dest.append(samples, samples.length);
