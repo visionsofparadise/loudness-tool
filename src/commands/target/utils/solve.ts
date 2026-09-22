@@ -561,7 +561,7 @@ export const iterateForTargets = async (args: {
 			const boostBoundExhausted =
 				(currentBoost === BOOST_UPPER_BOUND && measured.outputLufs < targetLufs) ||
 				(currentBoost === BOOST_LOWER_BOUND &&
-					currentPeakGainDb === BOOST_LOWER_BOUND &&
+					currentPeakGainDb <= BOOST_LOWER_BOUND &&
 					measured.outputLufs > targetLufs);
 
 			if (

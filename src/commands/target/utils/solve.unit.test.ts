@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dbToLinear, linearToDb } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
-import { createSine } from "../../../utils/testSignals";
+import { createLevelSegments, createSine } from "../../../utils/testSignals";
 import { Scratch } from "../../../utils/Scratch";
 import { WavWriter } from "../../../wav/WavWriter";
 import { type Anchors, gainDbAt } from "./curve";
@@ -443,6 +443,63 @@ describe("iterateForTargets", () => {
 		expect(Math.abs((result.winnerOutputLufs ?? Infinity) - targetLufs)).toBeLessThan(tolerance);
 		expect(result.winnerOutputTruePeakDb ?? Infinity).toBeLessThanOrEqual(targetTp + 0.01);
 		expect(result.bestPeakGainDb).toBeLessThan(targetTp - -30);
+
+		await result.bestSmoothedEnvelope.close();
+	}, 30_000);
+
+	it("stops after one attempt when the ceiling peak gain already sits below the lower bound", async () => {
+		scratch = await Scratch.create();
+
+		const inputPath = join(workingDirectory, "low-ceiling.wav");
+
+		await writeWav(
+			inputPath,
+			createLevelSegments(
+				[
+					{ seconds: 2, frequency: 1000, db: -10 },
+					{ seconds: 2, frequency: 1000, db: -25 },
+				],
+				SAMPLE_RATE,
+				1,
+			),
+		);
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+		const targetTp = -48;
+		const limitDb = -10.5;
+		const result = await iterateForTargets({
+			inputPath,
+			scratch,
+			sampleRate: measurement.sampleRate,
+			channelCount: measurement.channelCount,
+			frameCount: measurement.frameCount,
+			anchorBase: {
+				floorDb: null,
+				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+			},
+			smoothingMs: 1,
+			targetLufs: -70,
+			targetTp,
+			limitDbOverride: limitDb,
+			limitAutoDb: measurement.limitAutoDb,
+			sourceLufs: measurement.integratedLufs,
+			sourcePeakDb: measurement.truePeakDb,
+			maxAttempts: 10,
+			tolerance: 0.5,
+			neverExpand: false,
+			histogram: measurement.detectionHistogram,
+			detectionEnvelope: measurement.detectionEnvelope,
+		});
+
+		expect(result.bestLimitDb).toBe(limitDb);
+		expect(result.bestB).toBe(BOOST_LOWER_BOUND);
+		expect(result.bestPeakGainDb).toBeLessThan(BOOST_LOWER_BOUND);
+		expect(result.attempts).toHaveLength(1);
 
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
