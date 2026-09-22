@@ -14,6 +14,7 @@ import {
 	assignPeakGainDb,
 	attemptBeatsWinner,
 	bisectBForTargetLufs,
+	bisectPeakGainForTargetLufs,
 	BOOST_LOWER_BOUND,
 	BOOST_UPPER_BOUND,
 	holdsTruePeak,
@@ -237,6 +238,46 @@ describe("bisectBForTargetLufs", () => {
 	});
 });
 
+describe("bisectPeakGainForTargetLufs", () => {
+	const peakAnchors = { floorDb: null, pivotDb: -30, limitDb: -6, B: 0 };
+	const loudHistogram = singleLevelHistogram(-3, 50_000);
+	const sourceLufs = -10;
+	const ceilingPeakGainDb = 5;
+
+	it("returns the ceiling when it already meets the target", () => {
+		expect(
+			bisectPeakGainForTargetLufs({
+				sourceLufs,
+				targetLufs: -5,
+				anchors: peakAnchors,
+				histogram: loudHistogram,
+				ceilingPeakGainDb,
+				residual: 0,
+				tolerance: 0.5,
+			}),
+		).toBe(ceilingPeakGainDb);
+	});
+
+	it("lowers the peak gain to meet the target", () => {
+		const targetLufs = -12;
+		const peakGainDb = bisectPeakGainForTargetLufs({
+			sourceLufs,
+			targetLufs,
+			anchors: peakAnchors,
+			histogram: loudHistogram,
+			ceilingPeakGainDb,
+			residual: 0,
+			tolerance: 0.5,
+		});
+
+		expect(peakGainDb).toBeLessThan(ceilingPeakGainDb);
+		expect(peakGainDb).toBeGreaterThanOrEqual(BOOST_LOWER_BOUND);
+		expect(
+			Math.abs(predictOutputLufs(sourceLufs, { ...peakAnchors, peakGainDb }, loudHistogram) - targetLufs),
+		).toBeLessThan(0.01);
+	});
+});
+
 describe("winner election", () => {
 	it("a legal attempt beats an illegal one even when the illegal |lufsErr| is smaller", () => {
 		const targetLufs = -21;
@@ -335,6 +376,55 @@ describe("iterateForTargets", () => {
 			),
 		).toBe(true);
 		expect(Math.abs((result.winnerOutputLufs ?? Infinity) - targetLufs)).toBeLessThan(0.5);
+
+		await result.bestSmoothedEnvelope.close();
+	}, 30_000);
+
+	it("gives loudness priority when the body gain cannot bring the output down", async () => {
+		scratch = await Scratch.create();
+
+		const inputPath = join(workingDirectory, "loudness-priority.wav");
+
+		await writeWav(inputPath, [makeCrossAxis(3)]);
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+		const targetLufs = -20;
+		const targetTp = -6;
+		const tolerance = 0.5;
+		const result = await iterateForTargets({
+			inputPath,
+			scratch,
+			sampleRate: measurement.sampleRate,
+			channelCount: measurement.channelCount,
+			frameCount: measurement.frameCount,
+			anchorBase: {
+				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
+				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+			},
+			smoothingMs: 1,
+			targetLufs,
+			targetTp,
+			limitDbOverride: -30,
+			limitAutoDb: measurement.limitAutoDb,
+			sourceLufs: measurement.integratedLufs,
+			sourcePeakDb: measurement.truePeakDb,
+			maxAttempts: 8,
+			tolerance,
+			neverExpand: false,
+			histogram: measurement.detectionHistogram,
+			detectionEnvelope: measurement.detectionEnvelope,
+		});
+
+		expect(result.converged).toBe(true);
+		expect(result.winnerOutputLufs ?? Infinity).toBeLessThanOrEqual(targetLufs + 0.01);
+		expect(Math.abs((result.winnerOutputLufs ?? Infinity) - targetLufs)).toBeLessThan(tolerance);
+		expect(result.winnerOutputTruePeakDb ?? Infinity).toBeLessThanOrEqual(targetTp + 0.01);
+		expect(result.bestPeakGainDb).toBeLessThan(targetTp - -30);
 
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);

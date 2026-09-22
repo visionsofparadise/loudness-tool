@@ -96,6 +96,44 @@ export const assignPeakGainDb = (boost: number, tpCap: number, neverExpand: bool
 const truePeakResidual = (outputTruePeakDb: number, limitDb: number, peakGainDb: number): number =>
 	outputTruePeakDb - (limitDb + peakGainDb);
 
+const bisectRoot = (args: {
+	lower: number;
+	upper: number;
+	lowerError: number;
+	errorAt: (candidate: number) => number;
+	tolerance: number;
+}): number => {
+	const { errorAt, tolerance } = args;
+	let { lower, upper } = args;
+	let best = lower;
+	let bestAbsError = Math.abs(args.lowerError);
+	let workingLowerError = args.lowerError;
+	const subToleranceBracket = tolerance / 100;
+
+	for (let iteration = 0; iteration < MAX_BISECT_ITERATIONS; iteration++) {
+		const mid = 0.5 * (lower + upper);
+		const midError = errorAt(mid);
+
+		if (Math.abs(midError) < bestAbsError || iteration === 0) {
+			best = mid;
+			bestAbsError = Math.abs(midError);
+		}
+
+		if (!Number.isFinite(midError) || Math.sign(midError) === Math.sign(workingLowerError)) {
+			lower = mid;
+			workingLowerError = midError;
+		} else {
+			upper = mid;
+		}
+
+		if (upper - lower < subToleranceBracket) {
+			break;
+		}
+	}
+
+	return best;
+};
+
 export const bisectBForTargetLufs = (args: {
 	sourceLufs: number;
 	targetLufs: number;
@@ -124,8 +162,8 @@ export const bisectBForTargetLufs = (args: {
 		return predictOutputLufs(sourceLufs, candidateAnchors, histogram) + residual;
 	};
 
-	let lower = BOOST_LOWER_BOUND;
-	let upper = BOOST_UPPER_BOUND;
+	const lower = BOOST_LOWER_BOUND;
+	const upper = BOOST_UPPER_BOUND;
 	const lowerLufs = predictAt(lower);
 	const upperLufs = predictAt(upper);
 	const lowerError = lowerLufs - targetLufs;
@@ -142,33 +180,42 @@ export const bisectBForTargetLufs = (args: {
 		return lowerAbs <= upperAbs ? lower : upper;
 	}
 
-	let bestB = lower;
-	let bestAbsError = Math.abs(lowerError);
-	let workingLowerError = lowerError;
-	const subToleranceBracket = tolerance / 100;
+	return bisectRoot({
+		lower,
+		upper,
+		lowerError,
+		errorAt: (candidateB) => predictAt(candidateB) - targetLufs,
+		tolerance,
+	});
+};
 
-	for (let iteration = 0; iteration < MAX_BISECT_ITERATIONS; iteration++) {
-		const mid = 0.5 * (lower + upper);
-		const midError = predictAt(mid) - targetLufs;
+export const bisectPeakGainForTargetLufs = (args: {
+	sourceLufs: number;
+	targetLufs: number;
+	anchors: Omit<Anchors, "peakGainDb">;
+	histogram: DetectionHistogram;
+	ceilingPeakGainDb: number;
+	residual: number;
+	tolerance: number;
+}): number => {
+	const { sourceLufs, targetLufs, anchors: anchorBase, histogram, ceilingPeakGainDb, residual, tolerance } = args;
+	const errorAt = (candidatePeakGainDb: number): number =>
+		predictOutputLufs(sourceLufs, { ...anchorBase, peakGainDb: candidatePeakGainDb }, histogram) +
+		residual -
+		targetLufs;
+	const ceilingError = errorAt(ceilingPeakGainDb);
 
-		if (Math.abs(midError) < bestAbsError || iteration === 0) {
-			bestB = mid;
-			bestAbsError = Math.abs(midError);
-		}
-
-		if (!Number.isFinite(midError) || Math.sign(midError) === Math.sign(workingLowerError)) {
-			lower = mid;
-			workingLowerError = midError;
-		} else {
-			upper = mid;
-		}
-
-		if (upper - lower < subToleranceBracket) {
-			break;
-		}
+	if (!(ceilingError > 0) || ceilingPeakGainDb <= BOOST_LOWER_BOUND) {
+		return ceilingPeakGainDb;
 	}
 
-	return bestB;
+	const lowerError = errorAt(BOOST_LOWER_BOUND);
+
+	if (!(lowerError <= 0)) {
+		return BOOST_LOWER_BOUND;
+	}
+
+	return bisectRoot({ lower: BOOST_LOWER_BOUND, upper: ceilingPeakGainDb, lowerError, errorAt, tolerance });
 };
 
 const grainedDb = (errorDb: number): number => Math.round(errorDb / CHECK_GRAIN_DB) * CHECK_GRAIN_DB;
@@ -393,6 +440,23 @@ export const iterateForTargets = async (args: {
 	const holdHalfWidth = holdHalfWidthOf(windowSamplesFromMs(smoothingMs, sampleRate));
 	let residual = 0;
 	let tpCapEffective = tpCap;
+	const peakGainDbOf = (boost: number): number => {
+		const ceilingPeakGainDb = assignPeakGainDb(boost, tpCapEffective, neverExpand);
+
+		if (boost !== BOOST_LOWER_BOUND) {
+			return ceilingPeakGainDb;
+		}
+
+		return bisectPeakGainForTargetLufs({
+			sourceLufs,
+			targetLufs,
+			anchors: { floorDb: anchorBase.floorDb, pivotDb: anchorBase.pivotDb, limitDb: currentLimit, B: boost },
+			histogram,
+			ceilingPeakGainDb,
+			residual,
+			tolerance,
+		});
+	};
 	let currentBoost = clampBoost(
 		bisectBForTargetLufs({
 			sourceLufs,
@@ -405,10 +469,11 @@ export const iterateForTargets = async (args: {
 			tolerance,
 		}),
 	);
+	let currentPeakGainDb = peakGainDbOf(currentBoost);
 	const attempts: Array<IterationAttempt> = [];
 	let winningAttempt: IterationAttempt | undefined;
 	let bestBoost = currentBoost;
-	let bestPeakGainDb = assignPeakGainDb(currentBoost, tpCapEffective, neverExpand);
+	let bestPeakGainDb = currentPeakGainDb;
 	let winnerOutputLufs: number | null = null;
 	let winnerOutputTruePeakDb: number | null = null;
 	let winnerOutputLra: number | null = null;
@@ -416,7 +481,6 @@ export const iterateForTargets = async (args: {
 
 	try {
 		for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex++) {
-			const currentPeakGainDb = assignPeakGainDb(currentBoost, tpCapEffective, neverExpand);
 			const anchors: Anchors = {
 				floorDb: anchorBase.floorDb,
 				pivotDb: anchorBase.pivotDb,
@@ -497,7 +561,9 @@ export const iterateForTargets = async (args: {
 				Math.abs(grainedDb(winningAttempt.lufsErr)) < tolerance;
 			const boostBoundExhausted =
 				(currentBoost === BOOST_UPPER_BOUND && measured.outputLufs < targetLufs) ||
-				(currentBoost === BOOST_LOWER_BOUND && measured.outputLufs > targetLufs);
+				(currentBoost === BOOST_LOWER_BOUND &&
+					currentPeakGainDb === BOOST_LOWER_BOUND &&
+					measured.outputLufs > targetLufs);
 
 			if (
 				legalWinnerWithinTolerance ||
@@ -508,6 +574,7 @@ export const iterateForTargets = async (args: {
 			}
 
 			currentBoost = clampBoost(nextB);
+			currentPeakGainDb = peakGainDbOf(currentBoost);
 		}
 
 		const converged =
