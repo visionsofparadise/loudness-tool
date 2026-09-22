@@ -348,18 +348,22 @@ describe("measureSource", () => {
 		expect(Math.abs(massAbove(levelCounts, levelBucketMax) - burstFrames)).toBeLessThanOrEqual(12);
 	});
 
-	const measureImpulseEnvelope = async (frameCount: number, impulseFrame: number): Promise<Float64Array> => {
+	const measureImpulseEnvelope = async (
+		frameCount: number,
+		impulseFrame: number,
+		impulseLevel = 1,
+	): Promise<Float64Array> => {
 		scratch = await Scratch.create();
 
 		const channel = new Float64Array(frameCount);
 
-		channel[impulseFrame] = 1;
+		channel[impulseFrame] = impulseLevel;
 
 		const inputPath = join(workingDirectory, "impulse.wav");
 
 		await writeWav(inputPath, [channel]);
 
-		const measurement = await measureSource({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 1 });
+		const measurement = await measureSource({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 0 });
 		const envelope = await readEnvelope(measurement.detectionEnvelope);
 
 		await measurement.detectionEnvelope.close();
@@ -428,6 +432,8 @@ describe("measureSource", () => {
 
 		expect(Math.abs(envelope[999] ?? Number.NaN)).toBeLessThan(0.3);
 		expect(Math.abs(envelope[1000] ?? Number.NaN)).toBeLessThan(0.3);
+		expect(envelope[998]).toBeLessThan(-10);
+		expect(envelope[1001]).toBeLessThan(-10);
 		expect(envelope[990]).toBeLessThan(-20);
 		expect(envelope[1010]).toBeLessThan(-20);
 	});
@@ -436,5 +442,19 @@ describe("measureSource", () => {
 		const envelope = await measureImpulseEnvelope(SAMPLE_RATE, SAMPLE_RATE - 1);
 
 		expect(envelope[SAMPLE_RATE - 1]).toBeGreaterThan(-1);
+	});
+
+	it("reads a one-frame source through the flush", async () => {
+		const impulseLevel = 0.9;
+		const envelope = await measureImpulseEnvelope(1, 0, impulseLevel);
+
+		expect(envelope).toHaveLength(1);
+		expect(Math.abs((envelope[0] ?? Number.NaN) - 20 * Math.log10(impulseLevel))).toBeLessThan(1);
+	});
+
+	it("emits an empty detection envelope for a zero-frame source", async () => {
+		const envelope = await measureImpulseEnvelope(0, 0);
+
+		expect(envelope).toHaveLength(0);
 	});
 });
