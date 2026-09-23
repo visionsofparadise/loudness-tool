@@ -8,6 +8,7 @@ import { IntegratedLufsAccumulator } from "../../measurement/IntegratedLufsAccum
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
 import { dbToLinear, linearToDb } from "../../utils/db";
 import { SampleFile } from "../../utils/SampleFile";
+import { Scratch } from "../../utils/Scratch";
 import { createSine } from "../../utils/testSignals";
 import { WavWriter } from "../../wav/WavWriter";
 import { pushWavBlocks, withWavReader } from "../utils/withWavReader";
@@ -56,6 +57,16 @@ const measureFile = async (path: string): Promise<{ integratedLufs: number; true
 			truePeakDb: linearToDb(truePeak.finalize()),
 		};
 	});
+
+const reportedFigureOf = (stdout: string, label: string): number => {
+	const match = new RegExp(`^${label} +(-?\\d+\\.\\d{2}) `, "m").exec(stdout);
+
+	if (match?.[1] === undefined) {
+		throw new Error(`no ${label} figure in the report`);
+	}
+
+	return Number(match[1]);
+};
 
 const capture = async (
 	run: () => Promise<void>,
@@ -341,6 +352,8 @@ describe("target", () => {
 		await writeFile(outputPath, destinationBytes);
 		await mkdir(scratchDir, { recursive: true });
 
+		const scratchCreate = vi.spyOn(Scratch, "create");
+
 		await expect(parseProgram(["target", inputPath, "-o", outputPath])).rejects.toThrow(
 			"at least one of --lufs and --tp is required",
 		);
@@ -348,11 +361,12 @@ describe("target", () => {
 			"at least one of --lufs and --tp is required",
 		);
 
+		expect(scratchCreate).not.toHaveBeenCalled();
 		expect(Buffer.compare(await readFile(outputPath), destinationBytes)).toBe(0);
 		expect(await readdir(scratchDir)).toEqual([]);
 	});
 
-	it("lands the true peak on --tp alone and reports no loudness target", async () => {
+	it("lands the true peak on --tp alone and reports both output figures", async () => {
 		const inputPath = join(workingDirectory, "tp-only.wav");
 		const outputPath = join(workingDirectory, "tp-only-out.wav");
 		const targetTp = -6;
@@ -368,13 +382,13 @@ describe("target", () => {
 		expect(exitCode).toBeUndefined();
 		expect(measured.truePeakDb).toBeLessThanOrEqual(targetTp + 0.01);
 		expect(Math.abs(measured.truePeakDb - targetTp)).toBeLessThan(tolerance);
-		expect(stdout).toMatch(/output true peak/);
-		expect(stdout).not.toMatch(/output integrated/);
+		expect(Math.abs(reportedFigureOf(stdout, "output true peak") - measured.truePeakDb)).toBeLessThan(0.01);
+		expect(Math.abs(reportedFigureOf(stdout, "output integrated") - measured.integratedLufs)).toBeLessThan(0.01);
 		expect(stderr).toMatch(/peakErr/);
 		expect(stderr).not.toMatch(/lufsErr/);
 	}, 30_000);
 
-	it("lands loudness on --lufs alone and leaves the true peak unconstrained", async () => {
+	it("lands loudness on --lufs alone and reports the unconstrained true peak", async () => {
 		const inputPath = join(workingDirectory, "lufs-only.wav");
 		const outputPath = join(workingDirectory, "lufs-only-out.wav");
 		const targetLufs = -20;
@@ -391,8 +405,8 @@ describe("target", () => {
 		expect(measured.integratedLufs).toBeLessThanOrEqual(targetLufs + 0.01);
 		expect(Math.abs(measured.integratedLufs - targetLufs)).toBeLessThan(tolerance);
 		expect(measured.truePeakDb).toBeGreaterThan(-1);
-		expect(stdout).toMatch(/output integrated/);
-		expect(stdout).not.toMatch(/output true peak/);
+		expect(Math.abs(reportedFigureOf(stdout, "output integrated") - measured.integratedLufs)).toBeLessThan(0.01);
+		expect(Math.abs(reportedFigureOf(stdout, "output true peak") - measured.truePeakDb)).toBeLessThan(0.01);
 		expect(stderr).toMatch(/lufsErr/);
 		expect(stderr).not.toMatch(/peakErr/);
 	}, 30_000);

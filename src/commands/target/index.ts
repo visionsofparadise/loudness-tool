@@ -243,12 +243,8 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 
 			process.stdout.write(
 				`${[
-					...(targets.targetLufs === undefined
-						? []
-						: [alignedLine("output integrated", figureOf(result.winnerOutputLufs, "LUFS"))]),
-					...(targets.targetTp === undefined
-						? []
-						: [alignedLine("output true peak", figureOf(result.winnerOutputTruePeakDb, "dBTP"))]),
+					alignedLine("output integrated", figureOf(result.winnerOutputLufs, "LUFS")),
+					alignedLine("output true peak", figureOf(result.winnerOutputTruePeakDb, "dBTP")),
 					alignedLine("loudness range", figureOf(result.winnerOutputLra, "LU")),
 					alignedLine("B", `${result.bestB.toFixed(4)} dB`),
 					alignedLine("peakGainDb", `${result.bestPeakGainDb.toFixed(4)} dB`),
@@ -309,7 +305,12 @@ export const addTargetCommand = (program: Command): void => {
 	command.option("--limit-db <dB>", "limit-anchor override in dB", parseNegativeDb("limit-db", -60));
 	command.option("--smoothing <ms>", "envelope window in milliseconds", parseSmoothing, DEFAULT_SMOOTHING_MS);
 	command.option("--never-expand", "keep the upper arm flat or compressive");
-	command.option("--tolerance <dB>", "LUFS exit threshold in dB", parseTolerance, DEFAULT_TOLERANCE);
+	command.option(
+		"--tolerance <dB>",
+		"landing tolerance in dB on the targeted figure",
+		parseTolerance,
+		DEFAULT_TOLERANCE,
+	);
 	command.option("--scratch-dir <path>", "directory for temporary sample files");
 	command.action(target);
 };

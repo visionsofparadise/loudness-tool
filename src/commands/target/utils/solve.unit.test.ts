@@ -497,6 +497,54 @@ describe("iterateForTargets", () => {
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
+	it("converges on loudness alone under neverExpand with the peak gain on the body gain", async () => {
+		scratch = await Scratch.create();
+
+		const inputPath = join(workingDirectory, "lufs-only-never-expand.wav");
+
+		await writeWav(inputPath, [makeCrossAxis(3)]);
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+		const result = await iterateForTargets({
+			inputPath,
+			scratch,
+			sampleRate: measurement.sampleRate,
+			channelCount: measurement.channelCount,
+			frameCount: measurement.frameCount,
+			anchorBase: {
+				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
+				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+			},
+			smoothingMs: 1,
+			targetLufs: -20,
+			targetTp: undefined,
+			limitDbOverride: -10,
+			limitAutoDb: measurement.limitAutoDb,
+			sourceLufs: measurement.integratedLufs,
+			sourcePeakDb: measurement.truePeakDb,
+			maxAttempts: 8,
+			tolerance: 0.5,
+			neverExpand: true,
+			histogram: measurement.detectionHistogram,
+			detectionEnvelope: measurement.detectionEnvelope,
+		});
+
+		expect(result.attempts.length).toBeGreaterThan(0);
+
+		for (const attempt of result.attempts) {
+			expect(attempt.peakGainDb).toBe(attempt.boost);
+		}
+
+		expect(result.converged).toBe(true);
+
+		await result.bestSmoothedEnvelope.close();
+	}, 30_000);
+
 	it("keeps the body gain on the peak gain in every attempt when only the true peak is targeted", async () => {
 		scratch = await Scratch.create();
 
