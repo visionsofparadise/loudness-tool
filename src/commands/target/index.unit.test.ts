@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -329,6 +329,72 @@ describe("target", () => {
 		expect(measured.integratedLufs).toBeLessThanOrEqual(-20 + 0.01);
 		expect(measured.truePeakDb).toBeLessThanOrEqual(-6 + 0.01);
 		expect(await readdir(scratchDir)).toEqual([]);
+	}, 30_000);
+
+	it("rejects a run with neither --lufs nor --tp and leaves the destination untouched", async () => {
+		const inputPath = join(workingDirectory, "no-target.wav");
+		const outputPath = join(workingDirectory, "no-target-out.wav");
+		const scratchDir = join(workingDirectory, "scratch-no-target");
+		const destinationBytes = Buffer.from("existing destination");
+
+		await writeWav(inputPath, [makeCrossAxis(1)]);
+		await writeFile(outputPath, destinationBytes);
+		await mkdir(scratchDir, { recursive: true });
+
+		await expect(parseProgram(["target", inputPath, "-o", outputPath])).rejects.toThrow(
+			"at least one of --lufs and --tp is required",
+		);
+		await expect(target(inputPath, { output: outputPath, scratchDir })).rejects.toThrow(
+			"at least one of --lufs and --tp is required",
+		);
+
+		expect(Buffer.compare(await readFile(outputPath), destinationBytes)).toBe(0);
+		expect(await readdir(scratchDir)).toEqual([]);
+	});
+
+	it("lands the true peak on --tp alone and reports no loudness target", async () => {
+		const inputPath = join(workingDirectory, "tp-only.wav");
+		const outputPath = join(workingDirectory, "tp-only-out.wav");
+		const targetTp = -6;
+		const tolerance = 0.5;
+
+		await writeWav(inputPath, [makeCrossAxis(3)]);
+
+		const { stdout, stderr, exitCode } = await capture(() =>
+			target(inputPath, { output: outputPath, tp: targetTp, tolerance }),
+		);
+		const measured = await measureFile(outputPath);
+
+		expect(exitCode).toBeUndefined();
+		expect(measured.truePeakDb).toBeLessThanOrEqual(targetTp + 0.01);
+		expect(Math.abs(measured.truePeakDb - targetTp)).toBeLessThan(tolerance);
+		expect(stdout).toMatch(/output true peak/);
+		expect(stdout).not.toMatch(/output integrated/);
+		expect(stderr).toMatch(/peakErr/);
+		expect(stderr).not.toMatch(/lufsErr/);
+	}, 30_000);
+
+	it("lands loudness on --lufs alone and leaves the true peak unconstrained", async () => {
+		const inputPath = join(workingDirectory, "lufs-only.wav");
+		const outputPath = join(workingDirectory, "lufs-only-out.wav");
+		const targetLufs = -20;
+		const tolerance = 0.5;
+
+		await writeWav(inputPath, [makeCrossAxis(3)]);
+
+		const { stdout, stderr, exitCode } = await capture(() =>
+			target(inputPath, { output: outputPath, lufs: targetLufs, limitDb: -10, tolerance }),
+		);
+		const measured = await measureFile(outputPath);
+
+		expect(exitCode).toBeUndefined();
+		expect(measured.integratedLufs).toBeLessThanOrEqual(targetLufs + 0.01);
+		expect(Math.abs(measured.integratedLufs - targetLufs)).toBeLessThan(tolerance);
+		expect(measured.truePeakDb).toBeGreaterThan(-1);
+		expect(stdout).toMatch(/output integrated/);
+		expect(stdout).not.toMatch(/output true peak/);
+		expect(stderr).toMatch(/lufsErr/);
+		expect(stderr).not.toMatch(/peakErr/);
 	}, 30_000);
 
 	it("warns when pivot auto-derivation falls back", async () => {

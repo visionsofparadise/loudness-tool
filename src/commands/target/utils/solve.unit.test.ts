@@ -447,6 +447,108 @@ describe("iterateForTargets", () => {
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
+	it("keeps the peak gain on the body gain in every attempt when only loudness is targeted", async () => {
+		scratch = await Scratch.create();
+
+		const inputPath = join(workingDirectory, "lufs-only.wav");
+
+		await writeWav(inputPath, [makeCrossAxis(3)]);
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+		const result = await iterateForTargets({
+			inputPath,
+			scratch,
+			sampleRate: measurement.sampleRate,
+			channelCount: measurement.channelCount,
+			frameCount: measurement.frameCount,
+			anchorBase: {
+				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
+				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+			},
+			smoothingMs: 1,
+			targetLufs: -20,
+			targetTp: undefined,
+			limitDbOverride: -10,
+			limitAutoDb: measurement.limitAutoDb,
+			sourceLufs: measurement.integratedLufs,
+			sourcePeakDb: measurement.truePeakDb,
+			maxAttempts: 8,
+			tolerance: 0.5,
+			neverExpand: false,
+			histogram: measurement.detectionHistogram,
+			detectionEnvelope: measurement.detectionEnvelope,
+		});
+
+		expect(result.attempts.length).toBeGreaterThan(0);
+
+		for (const attempt of result.attempts) {
+			expect(attempt.peakGainDb).toBe(attempt.boost);
+			expect(attempt.peakErr).toBeNull();
+			expect(attempt.lufsErr).not.toBeNull();
+		}
+
+		expect(result.converged).toBe(true);
+
+		await result.bestSmoothedEnvelope.close();
+	}, 30_000);
+
+	it("keeps the body gain on the peak gain in every attempt when only the true peak is targeted", async () => {
+		scratch = await Scratch.create();
+
+		const inputPath = join(workingDirectory, "tp-only.wav");
+
+		await writeWav(inputPath, [makeCrossAxis(3)]);
+
+		const measurement = await measureSource({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+		const targetTp = -6;
+		const result = await iterateForTargets({
+			inputPath,
+			scratch,
+			sampleRate: measurement.sampleRate,
+			channelCount: measurement.channelCount,
+			frameCount: measurement.frameCount,
+			anchorBase: {
+				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
+				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+			},
+			smoothingMs: 1,
+			targetLufs: undefined,
+			targetTp,
+			limitAutoDb: measurement.limitAutoDb,
+			sourceLufs: measurement.integratedLufs,
+			sourcePeakDb: measurement.truePeakDb,
+			maxAttempts: 8,
+			tolerance: 0.5,
+			neverExpand: false,
+			histogram: measurement.detectionHistogram,
+			detectionEnvelope: measurement.detectionEnvelope,
+		});
+
+		expect(result.attempts.length).toBeGreaterThan(0);
+		expect(result.attempts[0]?.boost).toBe(targetTp - result.bestLimitDb);
+
+		for (const attempt of result.attempts) {
+			expect(attempt.boost).toBe(attempt.peakGainDb);
+			expect(attempt.lufsErr).toBeNull();
+			expect(attempt.peakErr).not.toBeNull();
+		}
+
+		expect(result.converged).toBe(true);
+		expect(holdsTruePeak(result.winnerOutputTruePeakDb ?? Infinity, targetTp)).toBe(true);
+
+		await result.bestSmoothedEnvelope.close();
+	}, 30_000);
+
 	it("stops after one attempt when the ceiling peak gain already sits below the lower bound", async () => {
 		scratch = await Scratch.create();
 

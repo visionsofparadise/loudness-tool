@@ -8,7 +8,7 @@ import { forEachEnvelopedBlock } from "./utils/apply";
 import { measureSource } from "./utils/measureSource";
 import { iterateForTargets } from "./utils/solve";
 import { windowSamplesFromMs } from "./utils/window";
-import type { IterationAttempt } from "./utils/solve";
+import type { IterationAttempt, Targets } from "./utils/solve";
 import type { SampleFile } from "../../utils/SampleFile";
 
 interface TargetOptions {
@@ -26,7 +26,6 @@ interface TargetOptions {
 }
 
 const LABEL_WIDTH = 18;
-const DEFAULT_TARGET_LUFS = -16;
 const DEFAULT_LIMIT_PERCENTILE = 0.995;
 const DEFAULT_SMOOTHING_MS = 1;
 const DEFAULT_TOLERANCE = 0.5;
@@ -96,14 +95,32 @@ const isTolerance = (value: number): boolean => Number.isFinite(value) && value 
 
 const parseTolerance = (value: string): number => parseFinite("tolerance", value, isTolerance, TOLERANCE_RANGE);
 
+const errorFieldsOf = (label: string, error: number | null): Array<string> =>
+	error === null ? [] : [`${label} ${error.toFixed(4)}`];
+
 const formatAttempt = (attempt: IterationAttempt, attemptIndex: number): string =>
 	[
 		`attempt ${attemptIndex + 1}`,
 		`B ${attempt.boost.toFixed(4)}`,
 		`peakGainDb ${attempt.peakGainDb.toFixed(4)}`,
-		`lufsErr ${attempt.lufsErr.toFixed(4)}`,
-		`peakErr ${attempt.peakErr.toFixed(4)}`,
+		...errorFieldsOf("lufsErr", attempt.lufsErr),
+		...errorFieldsOf("peakErr", attempt.peakErr),
 	].join("    ");
+
+const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets => {
+	if (lufs !== undefined) {
+		return { targetLufs: lufs, targetTp: tp };
+	}
+
+	if (tp !== undefined) {
+		return { targetLufs: undefined, targetTp: tp };
+	}
+
+	throw new InvalidArgumentError("at least one of --lufs and --tp is required");
+};
+
+const figureOf = (value: number | null, unit: string): string =>
+	value === null ? "n/a" : `${value.toFixed(2)} ${unit}`;
 
 const applyEnvelopeAndWrite = async (inputPath: string, outputPath: string, envelope: SampleFile): Promise<void> => {
 	await withWavWriter(inputPath, outputPath, async (reader, writer) => {
@@ -133,7 +150,6 @@ const sampleRateOf = async (path: string): Promise<number> => {
 };
 
 export const target = async (inputPath: string, options: TargetOptions): Promise<void> => {
-	const targetLufs = options.lufs ?? DEFAULT_TARGET_LUFS;
 	const limitPercentile = options.limitPercentile ?? DEFAULT_LIMIT_PERCENTILE;
 	const smoothingMs = options.smoothing ?? DEFAULT_SMOOTHING_MS;
 	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE;
@@ -151,6 +167,8 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	if (options.floor !== undefined && options.pivot !== undefined && options.floor >= options.pivot) {
 		throw new InvalidArgumentError("floor must be < pivot when both are supplied");
 	}
+
+	const targets = targetsOf(options.lufs, options.tp);
 
 	const scratch = await Scratch.create(options.scratchDir);
 	const errors: Array<unknown> = [];
@@ -205,8 +223,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 				frameCount: measurement.frameCount,
 				anchorBase: { floorDb: effectiveFloorDb, pivotDb: effectivePivotDb },
 				smoothingMs,
-				targetLufs,
-				targetTp: options.tp,
+				...targets,
 				limitDbOverride: options.limitDb,
 				limitAutoDb: measurement.limitAutoDb,
 				sourceLufs: measurement.integratedLufs,
@@ -224,15 +241,15 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 
 			await applyEnvelopeAndWrite(inputPath, options.output, result.bestSmoothedEnvelope);
 
-			const outputLufs = result.winnerOutputLufs;
-			const outputTruePeak = result.winnerOutputTruePeakDb;
-			const outputLra = result.winnerOutputLra;
-
 			process.stdout.write(
 				`${[
-					alignedLine("output integrated", outputLufs === null ? "n/a" : `${outputLufs.toFixed(2)} LUFS`),
-					alignedLine("output true peak", outputTruePeak === null ? "n/a" : `${outputTruePeak.toFixed(2)} dBTP`),
-					alignedLine("loudness range", outputLra === null ? "n/a" : `${outputLra.toFixed(2)} LU`),
+					...(targets.targetLufs === undefined
+						? []
+						: [alignedLine("output integrated", figureOf(result.winnerOutputLufs, "LUFS"))]),
+					...(targets.targetTp === undefined
+						? []
+						: [alignedLine("output true peak", figureOf(result.winnerOutputTruePeakDb, "dBTP"))]),
+					alignedLine("loudness range", figureOf(result.winnerOutputLra, "LU")),
 					alignedLine("B", `${result.bestB.toFixed(4)} dB`),
 					alignedLine("peakGainDb", `${result.bestPeakGainDb.toFixed(4)} dB`),
 					alignedLine("converged", String(result.converged)),
@@ -268,11 +285,19 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 export const addTargetCommand = (program: Command): void => {
 	const command = program.command("target");
 
-	command.description("Fit a WAV file to a joint integrated-loudness and true-peak target");
+	command.description("Fit a WAV file to an integrated-loudness target, a true-peak target, or both");
 	command.argument("<input>", "input WAV path");
 	command.requiredOption("-o, --output <path>", "output WAV path");
-	command.option("--lufs <n>", "target integrated loudness in LUFS", parseLufs, DEFAULT_TARGET_LUFS);
-	command.option("--tp <dBTP>", "target true peak in dBTP", parseNegativeDb("tp", -24));
+	command.option(
+		"--lufs <n>",
+		"target integrated loudness in LUFS; without it the body gain follows the limit gain",
+		parseLufs,
+	);
+	command.option(
+		"--tp <dBTP>",
+		"target true peak in dBTP; without it the limit gain follows the body gain",
+		parseNegativeDb("tp", -24),
+	);
 	command.option("--pivot <dB>", "body-anchor level in dB", parseNegativeDb("pivot", -80));
 	command.option("--floor <dB>", "noise-gate level in dB", parseNegativeDb("floor", -100));
 	command.option(
