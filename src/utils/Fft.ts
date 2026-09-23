@@ -49,8 +49,18 @@ const bitReverse = (real: Float64Array, imaginary: Float64Array, size: number): 
 	}
 };
 
+export const nextPowerOfTwo = (value: number): number => {
+	let size = 2;
+
+	while (size < value) {
+		size *= 2;
+	}
+
+	return size;
+};
+
 export class Fft {
-	private readonly size: number;
+	readonly size: number;
 	private readonly twiddleReal: Float64Array;
 	private readonly twiddleImaginary: Float64Array;
 
@@ -76,6 +86,27 @@ export class Fft {
 
 		bitReverse(real, imaginary, this.size);
 		this.butterfly(real, imaginary);
+	}
+
+	inverse(real: Float64Array, imaginary: Float64Array): void {
+		this.assertCapacity(real, imaginary);
+
+		if (this.size <= 1) {
+			return;
+		}
+
+		for (let index = 0; index < this.size; index++) {
+			imaginary[index] = -(imaginary[index] ?? 0);
+		}
+
+		this.forward(real, imaginary);
+
+		const scale = 1 / this.size;
+
+		for (let index = 0; index < this.size; index++) {
+			real[index] = (real[index] ?? 0) * scale;
+			imaginary[index] = -(imaginary[index] ?? 0) * scale;
+		}
 	}
 
 	private assertCapacity(real: Float64Array, imaginary: Float64Array): void {

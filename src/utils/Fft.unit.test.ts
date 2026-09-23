@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Fft, hannWindow } from "./Fft";
+import { Fft, hannWindow, nextPowerOfTwo } from "./Fft";
 
 const ORACLE_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
@@ -79,6 +79,32 @@ const energyOf = (real: ArrayLike<number>, imag: ArrayLike<number>): number => {
 };
 
 const oracleToleranceOf = (size: number): number => (size >= 1024 ? 1e-8 : 1e-10);
+
+const noisy = (frameCount: number, seed: number): Float64Array => {
+	let state = seed >>> 0;
+	const values = new Float64Array(frameCount);
+
+	for (let index = 0; index < frameCount; index++) {
+		state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+		values[index] = state / 0x80000000 - 1;
+	}
+
+	return values;
+};
+
+const discreteTransformAt = (values: Float64Array, bin: number): { real: number; imaginary: number } => {
+	let real = 0;
+	let imaginary = 0;
+
+	for (let index = 0; index < values.length; index++) {
+		const angle = (-2 * Math.PI * bin * index) / values.length;
+
+		real += (values[index] ?? 0) * Math.cos(angle);
+		imaginary += (values[index] ?? 0) * Math.sin(angle);
+	}
+
+	return { real, imaginary };
+};
 
 describe("Fft validation", () => {
 	it.each([0, -1, 1.5, 3, 6, 7, 6442450944, 2 ** 51 + 1, Number.POSITIVE_INFINITY, Number.NaN])(
@@ -176,5 +202,92 @@ describe("hannWindow", () => {
 
 	it.each([0, -1, 1.5, Number.NaN])("rejects invalid size %s", (size) => {
 		expect(() => hannWindow(size)).toThrow("positive integer");
+	});
+});
+
+describe("nextPowerOfTwo", () => {
+	it("rounds up to a power of two and never below two", () => {
+		expect(nextPowerOfTwo(1)).toBe(2);
+		expect(nextPowerOfTwo(2)).toBe(2);
+		expect(nextPowerOfTwo(3)).toBe(4);
+		expect(nextPowerOfTwo(1000)).toBe(1024);
+		expect(nextPowerOfTwo(1024)).toBe(1024);
+	});
+});
+
+describe("Fft", () => {
+	it("matches the discrete transform bin by bin", () => {
+		const size = 64;
+		const fft = new Fft(size);
+		const values = noisy(size, 3);
+		const real = Float64Array.from(values);
+		const imaginary = new Float64Array(size);
+
+		fft.forward(real, imaginary);
+
+		for (let bin = 0; bin < size; bin++) {
+			const expected = discreteTransformAt(values, bin);
+
+			expect(real[bin] ?? 0).toBeCloseTo(expected.real, 10);
+			expect(imaginary[bin] ?? 0).toBeCloseTo(expected.imaginary, 10);
+		}
+	});
+
+	it("returns the signal the forward transform was taken of", () => {
+		const size = 256;
+		const fft = new Fft(size);
+		const values = noisy(size, 11);
+		const real = Float64Array.from(values);
+		const imaginary = new Float64Array(size);
+
+		fft.forward(real, imaginary);
+		fft.inverse(real, imaginary);
+
+		for (let index = 0; index < size; index++) {
+			expect(real[index] ?? 0).toBeCloseTo(values[index] ?? 0, 12);
+			expect(imaginary[index] ?? 0).toBeCloseTo(0, 12);
+		}
+	});
+
+	it("multiplies spectra into a circular convolution", () => {
+		const size = 32;
+		const fft = new Fft(size);
+		const first = noisy(size, 17);
+		const second = new Float64Array(size);
+
+		second.set(noisy(5, 23), 0);
+
+		const firstReal = Float64Array.from(first);
+		const firstImaginary = new Float64Array(size);
+		const secondReal = Float64Array.from(second);
+		const secondImaginary = new Float64Array(size);
+
+		fft.forward(firstReal, firstImaginary);
+		fft.forward(secondReal, secondImaginary);
+
+		const productReal = new Float64Array(size);
+		const productImaginary = new Float64Array(size);
+
+		for (let index = 0; index < size; index++) {
+			const realFirst = firstReal[index] ?? 0;
+			const imaginaryFirst = firstImaginary[index] ?? 0;
+			const realSecond = secondReal[index] ?? 0;
+			const imaginarySecond = secondImaginary[index] ?? 0;
+
+			productReal[index] = realFirst * realSecond - imaginaryFirst * imaginarySecond;
+			productImaginary[index] = realFirst * imaginarySecond + imaginaryFirst * realSecond;
+		}
+
+		fft.inverse(productReal, productImaginary);
+
+		for (let position = 0; position < size; position++) {
+			let expected = 0;
+
+			for (let offset = 0; offset < size; offset++) {
+				expected += (second[offset] ?? 0) * (first[(position - offset + size) % size] ?? 0);
+			}
+
+			expect(productReal[position] ?? 0).toBeCloseTo(expected, 12);
+		}
 	});
 });
