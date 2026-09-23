@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Fft, hannWindow, nextPowerOfTwo } from "./Fft";
+import { Fft, nextPowerOfTwo } from "./Fft";
 
 const ORACLE_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
@@ -183,25 +183,6 @@ describe("Fft direct oracles", () => {
 		expect(Math.abs(timeEnergy - frequencyEnergy / size)).toBeLessThan(
 			oracleToleranceOf(size) * Math.max(1, timeEnergy),
 		);
-	});
-});
-
-describe("hannWindow", () => {
-	it("returns [1] for a one-sample window", () => {
-		expect(Array.from(hannWindow(1))).toEqual([1]);
-	});
-
-	it("is the periodic Hann window", () => {
-		const window = hannWindow(4);
-
-		expect(window[0]).toBeCloseTo(0, 12);
-		expect(window[1]).toBeCloseTo(0.5, 12);
-		expect(window[2]).toBeCloseTo(1, 12);
-		expect(window[3]).toBeCloseTo(0.5, 12);
-	});
-
-	it.each([0, -1, 1.5, Number.NaN])("rejects invalid size %s", (size) => {
-		expect(() => hannWindow(size)).toThrow("positive integer");
 	});
 });
 

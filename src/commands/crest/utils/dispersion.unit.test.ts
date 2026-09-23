@@ -1,215 +1,107 @@
 import { describe, expect, it } from "vitest";
-import { betaForBand, designDispersionAllpass, poleRadius, schroederTargetToDelay } from "./dispersion";
-import { stepDownToReflection } from "./lattice";
+import { dispersionKernelOf } from "./dispersion";
 
-const makeDenseMagnitude = (bins: number): Float64Array => {
-	const mag = new Float64Array(bins);
+const circularOf = (kernel: Float64Array): Float64Array => {
+	const length = kernel.length;
+	const halfWidth = (length - 1) / 2;
+	const circular = new Float64Array(length);
 
-	for (let bin = 0; bin < bins; bin++) {
-		mag[bin] = 1 / (1 + bin / 8);
+	for (let offset = -halfWidth; offset <= halfWidth; offset++) {
+		circular[(offset + length) % length] = kernel[offset + halfWidth] ?? 0;
 	}
 
-	return mag;
+	return circular;
 };
 
-const sectionGroupDelay = (rho: number, theta: number, omega: number): number =>
-	(1 - rho * rho) / (1 + rho * rho - 2 * rho * Math.cos(omega - theta));
+const binOf = (circular: Float64Array, bin: number): { magnitude: number; phase: number } => {
+	const length = circular.length;
+	let real = 0;
+	let imaginary = 0;
 
-const rawAllpassPhase = (denominator: Float64Array, w: number): number => {
-	let re = 0;
-	let im = 0;
+	for (let position = 0; position < length; position++) {
+		const angle = (-2 * Math.PI * bin * position) / length;
 
-	for (let k = 0; k < denominator.length; k++) {
-		const d = denominator[k] ?? 0;
-
-		re += d * Math.cos(-k * w);
-		im += d * Math.sin(-k * w);
+		real += (circular[position] ?? 0) * Math.cos(angle);
+		imaginary += (circular[position] ?? 0) * Math.sin(angle);
 	}
 
-	const m = denominator.length - 1;
-
-	return -2 * Math.atan2(im, re) - m * w;
+	return { magnitude: Math.hypot(real, imaginary), phase: Math.atan2(imaginary, real) };
 };
 
-const polyAllpassGroupDelay = (denominator: Float64Array, omega: number): number => {
-	const h = 1e-5;
-	const pa = rawAllpassPhase(denominator, omega - h);
-	let pb = rawAllpassPhase(denominator, omega + h);
+const statedPhaseOf = (halfWidth: number, bin: number): number => {
+	const length = 2 * halfWidth + 1;
 
-	while (pb - pa > Math.PI) {
-		pb -= 2 * Math.PI;
-	}
-
-	while (pb - pa < -Math.PI) {
-		pb += 2 * Math.PI;
-	}
-
-	return -(pb - pa) / (2 * h);
+	return (Math.PI * halfWidth * bin) / length - (2 * Math.PI * halfWidth * bin * bin) / (length * length);
 };
 
-const halfBandGroupDelayArea = (denominator: Float64Array, steps = 20_000): number => {
-	let prev = rawAllpassPhase(denominator, 0);
-	let total = prev;
+const wrapped = (angle: number): number => Math.atan2(Math.sin(angle), Math.cos(angle));
 
-	for (let i = 1; i <= steps; i++) {
-		const w = (Math.PI * i) / steps;
-		let p = rawAllpassPhase(denominator, w);
-
-		while (p - prev > Math.PI) {
-			p -= 2 * Math.PI;
-		}
-
-		while (p - prev < -Math.PI) {
-			p += 2 * Math.PI;
-		}
-
-		total += p - prev;
-		prev = p;
-	}
-
-	return rawAllpassPhase(denominator, 0) - total;
-};
-
-describe("betaForBand", () => {
-	it("is a constant moderate β in (0, 1) for every band", () => {
-		for (let band = 0; band < 16; band++) {
-			const beta = betaForBand(band);
-
-			expect(beta).toBeGreaterThan(0);
-			expect(beta).toBeLessThan(1);
-		}
-	});
-});
-
-describe("poleRadius", () => {
-	it("matches the exact closed form ρ = η − √(η²−1)", () => {
-		const beta = 0.5;
-		const delta = 0.4;
-		const eta = (1 - beta * Math.cos(delta)) / (1 - beta);
-		const expected = eta - Math.sqrt(eta * eta - 1);
-
-		expect(poleRadius(delta, beta)).toBeCloseTo(Math.min(0.95, expected), 12);
+describe("dispersionKernelOf", () => {
+	it("makes dispersion by zero the frame itself", () => {
+		expect(Array.from(dispersionKernelOf(0))).toEqual([1]);
 	});
 
-	it("a narrower band ⇒ a larger pole radius", () => {
-		expect(poleRadius(0.05, 0.5)).toBeGreaterThan(poleRadius(0.5, 0.5));
-	});
+	it("has unit magnitude at every bin and the stated phase up to the half width", () => {
+		for (const halfWidth of [1, 2, 5, 13]) {
+			const circular = circularOf(dispersionKernelOf(halfWidth));
 
-	it("the Eq. 12 and Eq. 10 branches are continuous at the Δ switch", () => {
-		const beta = 0.5;
+			for (let bin = 0; bin < circular.length; bin++) {
+				expect(binOf(circular, bin).magnitude).toBeCloseTo(1, 10);
+			}
 
-		expect(poleRadius(1e-3 * 0.999, beta)).toBeCloseTo(poleRadius(1e-3 * 1.001, beta), 4);
-
-		const dMod = 0.3;
-		const etaMod = (1 - beta * Math.cos(dMod)) / (1 - beta);
-		const exactMod = etaMod - Math.sqrt(etaMod * etaMod - 1);
-
-		expect(poleRadius(dMod, beta)).toBeCloseTo(Math.min(0.95, exactMod), 12);
-	});
-
-	it("is clamped strictly inside the unit circle", () => {
-		expect(poleRadius(1e-9, 0.99)).toBeLessThanOrEqual(0.95);
-		expect(poleRadius(1e-9, 0.99)).toBeGreaterThanOrEqual(0);
-	});
-});
-
-describe("schroederTargetToDelay", () => {
-	it("yields a non-negative group delay", () => {
-		const delay = schroederTargetToDelay(makeDenseMagnitude(513), 1);
-
-		expect(delay.length).toBe(513);
-
-		for (const value of delay) {
-			expect(value).toBeGreaterThanOrEqual(0);
+			for (let bin = 0; bin <= halfWidth; bin++) {
+				expect(wrapped(binOf(circular, bin).phase - statedPhaseOf(halfWidth, bin))).toBeCloseTo(0, 10);
+			}
 		}
 	});
 
-	it("scales linearly with the peak-priority amount", () => {
-		const mag = makeDenseMagnitude(513);
-		const full = schroederTargetToDelay(mag, 1);
-		const half = schroederTargetToDelay(mag, 0.5);
-		const zero = schroederTargetToDelay(mag, 0);
+	it("mirrors the bins above the half width as a real signal does", () => {
+		const circular = circularOf(dispersionKernelOf(7));
+		const length = circular.length;
 
-		for (let bin = 0; bin < full.length; bin++) {
-			expect(half[bin]).toBeCloseTo((full[bin] ?? 0) * 0.5, 12);
-			expect(zero[bin]).toBe(0);
-		}
-	});
-});
+		for (let bin = 1; bin <= 7; bin++) {
+			const lower = binOf(circular, bin);
+			const upper = binOf(circular, length - bin);
 
-describe("designDispersionAllpass", () => {
-	it("an identity target yields the trivial all-pass D(z) = 1", () => {
-		const { denominator, poles } = designDispersionAllpass(new Float64Array(513), 8);
-
-		expect(Array.from(denominator)).toEqual([1]);
-		expect(poles.length).toBe(0);
-	});
-
-	it("produces a monic, real, stable D(z) whose step-down kₘ satisfy |kₘ| < 1", () => {
-		const delay = schroederTargetToDelay(makeDenseMagnitude(1025), 1);
-		const { denominator } = designDispersionAllpass(delay, 8);
-
-		expect(denominator[0]).toBe(1);
-		expect(denominator.length).toBeLessThanOrEqual(9);
-
-		for (const coefficient of denominator) {
-			expect(Number.isFinite(coefficient)).toBe(true);
-		}
-
-		const reflection = stepDownToReflection(denominator);
-
-		expect(reflection.length).toBeGreaterThan(0);
-
-		for (const k of reflection) {
-			expect(Number.isFinite(k)).toBe(true);
-			expect(Math.abs(k)).toBeLessThan(1);
+			expect(upper.magnitude).toBeCloseTo(lower.magnitude, 10);
+			expect(wrapped(upper.phase + lower.phase)).toBeCloseTo(0, 10);
 		}
 	});
 
-	it("a single-pole design reproduces its own Eq. 3 group delay", () => {
-		const delay = new Float64Array(1025).fill(1);
-		const { denominator, poles } = designDispersionAllpass(delay, 1);
+	it("preserves a constant and the signal energy", () => {
+		const kernel = dispersionKernelOf(9);
+		let sum = 0;
+		let energy = 0;
 
-		expect(poles.length).toBe(1);
-
-		const { rho, theta } = poles[0] ?? { rho: 0, theta: 0 };
-
-		expect(theta).toBeCloseTo(0, 12);
-
-		for (const omega of [0.2, 0.8, 1.5, 2.5]) {
-			expect(polyAllpassGroupDelay(denominator, omega)).toBeCloseTo(sectionGroupDelay(rho, theta, omega), 2);
+		for (const value of kernel) {
+			sum += value;
+			energy += value * value;
 		}
+
+		expect(sum).toBeCloseTo(1, 10);
+		expect(energy).toBeCloseTo(1, 10);
 	});
 
-	it("the cascade group delay integrates to degree·π", () => {
-		const delay = new Float64Array(2049);
+	it("reverses the values for a negative step", () => {
+		const forward = dispersionKernelOf(6);
+		const backward = dispersionKernelOf(-6);
 
-		for (let bin = 0; bin < delay.length; bin++) {
-			delay[bin] = 3 + 2 * Math.cos((4 * Math.PI * bin) / delay.length);
-		}
-
-		const { denominator } = designDispersionAllpass(delay, 8);
-		const degree = denominator.length - 1;
-
-		expect(degree).toBeGreaterThan(0);
-		expect(halfBandGroupDelayArea(denominator)).toBeCloseTo(degree * Math.PI, 0);
+		expect(Array.from(backward)).toEqual(Array.from(forward).reverse());
 	});
 
-	it("a peakier target yields a higher-order, larger-delay design than a flat one", () => {
-		const bins = 1025;
-		const peaky = new Float64Array(bins);
-		const mild = new Float64Array(bins);
+	it("undoes a step when the opposite step follows it", () => {
+		const forward = circularOf(dispersionKernelOf(4));
+		const backward = circularOf(dispersionKernelOf(-4));
+		const length = forward.length;
 
-		for (let bin = 0; bin < bins; bin++) {
-			peaky[bin] = bin < 120 ? 12 : 0.05;
-			mild[bin] = 0.4;
+		for (let position = 0; position < length; position++) {
+			let sum = 0;
+
+			for (let tap = 0; tap < length; tap++) {
+				sum += (forward[tap] ?? 0) * (backward[(position - tap + length) % length] ?? 0);
+			}
+
+			expect(sum).toBeCloseTo(position === 0 ? 1 : 0, 10);
 		}
-
-		const dPeaky = designDispersionAllpass(peaky, 8);
-		const dMild = designDispersionAllpass(mild, 8);
-
-		expect(dPeaky.denominator.length).toBeGreaterThan(1);
-		expect(halfBandGroupDelayArea(dPeaky.denominator)).toBeGreaterThan(halfBandGroupDelayArea(dMild.denominator));
-		expect(dPeaky.denominator.length - 1).toBeLessThanOrEqual(8);
 	});
 });

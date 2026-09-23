@@ -152,25 +152,3 @@ export class Fft {
 		}
 	}
 }
-
-// eslint-disable-next-line comment-rules/no-restricted-comments
-// Periodic Hann windows follow Harris, "On the Use of Windows for Harmonic Analysis with the Discrete Fourier Transform" (1978).
-export const hannWindow = (size: number): Float64Array => {
-	if (!Number.isInteger(size) || size <= 0) {
-		throw new Error(`hannWindow: size must be a positive integer, got ${size}`);
-	}
-
-	const window = new Float64Array(size);
-
-	if (size === 1) {
-		window[0] = 1;
-
-		return window;
-	}
-
-	for (let index = 0; index < size; index++) {
-		window[index] = 0.5 * (1 - Math.cos((2 * Math.PI * index) / size));
-	}
-
-	return window;
-};
