@@ -205,6 +205,7 @@ describe("crest", () => {
 		expect(reader.format).toEqual({
 			sampleRate: SAMPLE_RATE,
 			channelCount: 2,
+			channelMask: 0,
 			bitDepth: "16",
 			frameCount: 600,
 		});

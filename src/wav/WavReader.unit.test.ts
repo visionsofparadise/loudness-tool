@@ -186,6 +186,7 @@ const writeExtensibleWav = async (
 		channels: ReadonlyArray<Float64Array>;
 		subFormatGuid?: Buffer;
 		cbSize?: number;
+		channelMask?: number;
 	},
 ): Promise<void> => {
 	const data = encodePlanar(options.channels, options.bitDepth);
@@ -211,7 +212,7 @@ const writeExtensibleWav = async (
 	file.writeUInt16LE(bitsPerSample, 34);
 	file.writeUInt16LE(cbSize, 36);
 	file.writeUInt16LE(bitsPerSample, 38);
-	file.writeUInt32LE((1 << options.channelCount) - 1, 40);
+	file.writeUInt32LE(options.channelMask ?? (1 << options.channelCount) - 1, 40);
 	subFormatGuid.copy(file, 44, 0, Math.min(subFormatGuid.length, 16));
 	file.write("data", 60);
 	file.writeUInt32LE(data.length, 64);
@@ -423,6 +424,26 @@ describe("WavReader", () => {
 			}
 		},
 	);
+
+	it.each([
+		{ name: "a 6-channel WAVE_FORMAT_EXTENSIBLE file", channelCount: 6, channelMask: 0x3f, isExtensible: true },
+		{ name: "a plain 6-channel file", channelCount: 6, channelMask: 0, isExtensible: false },
+		{ name: "a WAVE_FORMAT_EXTENSIBLE stereo file with mask 0", channelCount: 2, channelMask: 0, isExtensible: true },
+	])("reads the channel mask $channelMask of $name", async ({ channelCount, channelMask, isExtensible }) => {
+		const path = join(workingDirectory, "mask.wav");
+		const options = {
+			sampleRate: SAMPLE_RATE,
+			channelCount,
+			bitDepth: "16" as const,
+			channels: createRamp(8, channelCount),
+		};
+
+		await (isExtensible ? writeExtensibleWav(path, { ...options, channelMask }) : writeRiffWav(path, options));
+
+		const { format } = await readAll(path);
+
+		expect(format).toEqual({ sampleRate: SAMPLE_RATE, channelCount, channelMask, bitDepth: "16", frameCount: 8 });
+	});
 
 	it("rejects WAVE_FORMAT_EXTENSIBLE with an unknown SubFormat GUID naming the GUID", async () => {
 		const path = join(workingDirectory, "unknown-guid.wav");

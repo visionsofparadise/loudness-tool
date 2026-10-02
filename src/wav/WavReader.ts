@@ -7,6 +7,7 @@ export const BLOCK_FRAMES = 65536;
 interface StreamFormat {
 	readonly sampleRate: number;
 	readonly channelCount: number;
+	readonly channelMask: number;
 	readonly bitDepth: SourceBitDepth;
 }
 
@@ -57,6 +58,7 @@ export class WavReader implements BlockSource {
 		this.format = {
 			sampleRate: parsed.sampleRate,
 			channelCount: parsed.channelCount,
+			channelMask: parsed.channelMask,
 			bitDepth: parsed.bitDepth,
 			frameCount: Math.floor(parsed.dataSize / parsed.blockAlign),
 		};

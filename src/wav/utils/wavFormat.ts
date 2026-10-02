@@ -7,6 +7,7 @@ export type SourceBitDepth = WavBitDepth | "8" | "64f";
 export interface ParsedWavFormat {
 	readonly sampleRate: number;
 	readonly channelCount: number;
+	readonly channelMask: number;
 	readonly bitDepth: SourceBitDepth;
 	readonly blockAlign: number;
 	readonly dataOffset: number;
@@ -19,6 +20,7 @@ const WAVE_FORMAT_PCM = 1;
 const WAVE_FORMAT_IEEE_FLOAT = 3;
 const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
 const WAVE_FORMAT_EXTENSIBLE_EXTENSION_SIZE = 22;
+const CHANNEL_MASK_OFFSET = 20;
 const SUBFORMAT_GUID_OFFSET = 24;
 const SUBFORMAT_GUID_SIZE = 16;
 const FORMAT_READ_SIZE_LIMIT = 64;
@@ -84,6 +86,9 @@ const resolvedAudioFormatOf = (formatData: Buffer, audioFormat: number, bitsPerS
 	);
 };
 
+const channelMaskOf = (formatData: Buffer, audioFormat: number): number =>
+	audioFormat === WAVE_FORMAT_EXTENSIBLE ? formatData.readUInt32LE(CHANNEL_MASK_OFFSET) : 0;
+
 const sourceBitDepthOf = (audioFormat: number, bitsPerSample: number): SourceBitDepth => {
 	if (audioFormat === WAVE_FORMAT_IEEE_FLOAT) {
 		if (bitsPerSample === 32) {
@@ -137,6 +142,7 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 		| {
 				readonly sampleRate: number;
 				readonly channelCount: number;
+				readonly channelMask: number;
 				readonly bitDepth: SourceBitDepth;
 				readonly blockAlign: number;
 		  }
@@ -188,6 +194,7 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 			formatFields = {
 				sampleRate,
 				channelCount,
+				channelMask: channelMaskOf(formatData, audioFormat),
 				bitDepth,
 				blockAlign,
 			};
