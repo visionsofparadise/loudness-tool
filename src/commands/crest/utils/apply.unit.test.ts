@@ -106,11 +106,16 @@ describe("applyWalk", () => {
 	): Promise<{ layout: CrestLayout; walk: Int32Array; level: number; measured: number; written: Float64Array }> => {
 		const inputPath = join(workingDirectory, "in.wav");
 		const outputPath = join(workingDirectory, "out.wav");
-		const writer = await WavWriter.create(inputPath, {
-			sampleRate: SAMPLE_RATE,
-			channelCount: 1,
-			bitDepth: "32f",
-		});
+		const writer = await WavWriter.create(
+			{ kind: "file", path: inputPath },
+			{
+				sampleRate: SAMPLE_RATE,
+				channelCount: 1,
+				channelMask: 0,
+				bitDepth: "32f",
+				frameCount: channel.length,
+			},
+		);
 
 		await writer.write([channel]);
 		await writer.close();
@@ -134,7 +139,7 @@ describe("applyWalk", () => {
 		});
 		const measured = await applyWalk({
 			inputPath,
-			outputPath,
+			sink: { kind: "file", path: outputPath },
 			layout,
 			bitDepth: "32f",
 			channelCount: 1,

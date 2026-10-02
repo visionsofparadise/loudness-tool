@@ -20,11 +20,16 @@ import { target } from "./index";
 const SAMPLE_RATE = 48000;
 
 const writeWav = async (path: string, channels: Array<Float64Array>): Promise<void> => {
-	const writer = await WavWriter.create(path, {
-		sampleRate: SAMPLE_RATE,
-		channelCount: channels.length,
-		bitDepth: "32f",
-	});
+	const writer = await WavWriter.create(
+		{ kind: "file", path },
+		{
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			channelMask: 0,
+			bitDepth: "32f",
+			frameCount: channels[0]?.length ?? 0,
+		},
+	);
 
 	await writer.write(channels);
 	await writer.close();
@@ -499,6 +504,38 @@ describe("target", () => {
 		expect(exitCode).toBeUndefined();
 		expect(Math.abs(weightedOutputLufs - targetLufs)).toBeLessThan(tolerance);
 		expect(Math.abs(reportedFigureOf(stdout, "output integrated") - weightedOutputLufs)).toBeLessThan(0.01);
+	}, 30_000);
+
+	it("lands --lufs as stats measures it for a 0x3F source with its signal on every channel", async () => {
+		const inputPath = join(workingDirectory, "surround-all.wav");
+		const outputPath = join(workingDirectory, "surround-all-out.wav");
+		const targetLufs = -20;
+		const tolerance = 0.5;
+		const signal = makeCrossAxis(3);
+		const channels = Array.from({ length: 6 }, () => Float64Array.from(signal));
+
+		await writeExtensibleWav(inputPath, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			bitDepth: "32f",
+			channelMask: 0x3f,
+			channels,
+		});
+
+		const { stdout, exitCode } = await capture(() =>
+			target(inputPath, { output: outputPath, lufs: targetLufs, limitDb: -10, tolerance }),
+		);
+		const statsRun = await capture(() => stats([outputPath], { json: true }));
+		const [measured] = JSON.parse(statsRun.stdout) as Array<{ channelCount: number; integratedLufs: number }>;
+		const outputMask = await withWavReader(outputPath, async (reader) => reader.format.channelMask);
+
+		expect(exitCode).toBeUndefined();
+		expect(outputMask).toBe(0x3f);
+		expect(measured?.channelCount).toBe(6);
+		expect(Math.abs((measured?.integratedLufs ?? 0) - targetLufs)).toBeLessThan(tolerance);
+		expect(Math.abs(reportedFigureOf(stdout, "output integrated") - (measured?.integratedLufs ?? 0))).toBeLessThan(
+			0.01,
+		);
 	}, 30_000);
 
 	it("copies an unmeasurable source byte-identically", async () => {

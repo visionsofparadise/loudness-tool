@@ -72,7 +72,7 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 	const sourceTpDb = 20 * Math.log10(measurement.truePeak);
 	const outputTruePeakDb = sourceTpDb + gainDb;
 
-	await applyUniformGain(inputPath, options.output, gain);
+	await applyUniformGain(inputPath, { kind: "file", path: options.output }, gain);
 
 	if (outputTruePeakDb > 0) {
 		process.stderr.write(`warning: predicted output true peak ${outputTruePeakDb.toFixed(2)} dBTP exceeds 0 dBTP\n`);

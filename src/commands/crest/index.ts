@@ -95,7 +95,7 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 	});
 	const outputTruePeak = await applyWalk({
 		inputPath,
-		outputPath: options.output,
+		sink: { kind: "file", path: options.output },
 		layout,
 		bitDepth,
 		channelCount,

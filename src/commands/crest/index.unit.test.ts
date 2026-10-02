@@ -37,11 +37,16 @@ const peakySource = (frameCount: number, channelCount: number, seed: number): Ar
 };
 
 const writeWav = async (path: string, channels: Array<Float64Array>, bitDepth: WavBitDepth): Promise<void> => {
-	const writer = await WavWriter.create(path, {
-		sampleRate: SAMPLE_RATE,
-		channelCount: channels.length,
-		bitDepth,
-	});
+	const writer = await WavWriter.create(
+		{ kind: "file", path },
+		{
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			channelMask: 0,
+			bitDepth,
+			frameCount: channels[0]?.length ?? 0,
+		},
+	);
 
 	await writer.write(channels);
 	await writer.close();

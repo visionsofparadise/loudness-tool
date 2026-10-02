@@ -47,7 +47,7 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 
 	const gain = dbToLinear(target) / measurement.truePeak;
 
-	await applyUniformGain(inputPath, options.output, gain);
+	await applyUniformGain(inputPath, { kind: "file", path: options.output }, gain);
 
 	const sourceTpDb = 20 * Math.log10(measurement.truePeak);
 	const gainDb = 20 * Math.log10(gain);

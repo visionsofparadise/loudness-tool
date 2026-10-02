@@ -219,11 +219,16 @@ describe("SourceMeter", () => {
 		chunkFrames?: ReadonlyArray<number>;
 	}): Promise<CrestLayout> => {
 		const inputPath = join(workingDirectory, "source.wav");
-		const writer = await WavWriter.create(inputPath, {
-			sampleRate: SAMPLE_RATE,
-			channelCount: args.channelCount,
-			bitDepth: args.bitDepth,
-		});
+		const writer = await WavWriter.create(
+			{ kind: "file", path: inputPath },
+			{
+				sampleRate: SAMPLE_RATE,
+				channelCount: args.channelCount,
+				channelMask: 0,
+				bitDepth: args.bitDepth,
+				frameCount: args.frameCount,
+			},
+		);
 
 		await writer.write(peakySource(args.frameCount, args.channelCount, args.frameCount + 7));
 		await writer.close();

@@ -5,16 +5,17 @@ import { allocateChannels, forEachStretchChunk, renderStretch } from "./render";
 import { quantizerOf } from "./rounding";
 import type { StretchRange } from "./regions";
 import type { WavBitDepth } from "../../../wav/utils/wavFormat";
+import type { WavSink } from "../../../wav/WavWriter";
 
 export const applyWalk = async (args: {
 	inputPath: string;
-	outputPath: string;
+	sink: WavSink;
 	layout: CrestLayout;
 	bitDepth: WavBitDepth;
 	channelCount: number;
 	walk: Int32Array;
 }): Promise<number> => {
-	const { inputPath, outputPath, layout, bitDepth, channelCount, walk } = args;
+	const { inputPath, sink, layout, bitDepth, channelCount, walk } = args;
 	const accumulator = new TruePeakAccumulator(channelCount);
 	const quantize = quantizerOf(bitDepth);
 	const stretchOutput = allocateChannels(channelCount, layout.stretchFrames);
@@ -28,7 +29,7 @@ export const applyWalk = async (args: {
 		return [...stepIndices];
 	};
 
-	await withWavWriter(inputPath, outputPath, async (reader, writer) => {
+	await withWavWriter(inputPath, sink, async (reader, writer) => {
 		await reader.close();
 		await forEachStretchChunk({
 			path: inputPath,

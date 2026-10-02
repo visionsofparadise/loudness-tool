@@ -11,11 +11,16 @@ import { stats } from "./stats";
 const SAMPLE_RATE = 48000;
 
 const writeWav = async (path: string, channels: Array<Float64Array>, bitDepth: "16" | "32f" = "32f"): Promise<void> => {
-	const writer = await WavWriter.create(path, {
-		sampleRate: SAMPLE_RATE,
-		channelCount: channels.length,
-		bitDepth,
-	});
+	const writer = await WavWriter.create(
+		{ kind: "file", path },
+		{
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			channelMask: 0,
+			bitDepth,
+			frameCount: channels[0]?.length ?? 0,
+		},
+	);
 
 	await writer.write(channels);
 	await writer.close();
@@ -155,11 +160,16 @@ describe("stats", () => {
 
 	it("reports truePeakDb null and human n/a for a zero-frame file", async () => {
 		const inputPath = join(workingDirectory, "empty.wav");
-		const writer = await WavWriter.create(inputPath, {
-			sampleRate: SAMPLE_RATE,
-			channelCount: 1,
-			bitDepth: "32f",
-		});
+		const writer = await WavWriter.create(
+			{ kind: "file", path: inputPath },
+			{
+				sampleRate: SAMPLE_RATE,
+				channelCount: 1,
+				channelMask: 0,
+				bitDepth: "32f",
+				frameCount: 0,
+			},
+		);
 
 		await writer.close();
 
@@ -243,11 +253,16 @@ describe("stats", () => {
 
 	it("reports loudnessRange 0 for silence long enough to close short-term windows", async () => {
 		const inputPath = join(workingDirectory, "silence.wav");
-		const writer = await WavWriter.create(inputPath, {
-			sampleRate: SAMPLE_RATE,
-			channelCount: 1,
-			bitDepth: "32f",
-		});
+		const writer = await WavWriter.create(
+			{ kind: "file", path: inputPath },
+			{
+				sampleRate: SAMPLE_RATE,
+				channelCount: 1,
+				channelMask: 0,
+				bitDepth: "32f",
+				frameCount: SAMPLE_RATE * 4,
+			},
+		);
 
 		await writer.write([new Float64Array(SAMPLE_RATE * 4)]);
 		await writer.close();

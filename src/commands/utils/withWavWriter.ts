@@ -1,20 +1,22 @@
 import { nearestWritableBitDepth } from "../../wav/utils/wavFormat";
 import { WavReader } from "../../wav/WavReader";
-import { WavWriter } from "../../wav/WavWriter";
+import { WavWriter, type WavSink } from "../../wav/WavWriter";
 
 export const withWavWriter = async (
 	inputPath: string,
-	outputPath: string,
+	sink: WavSink,
 	consume: (reader: WavReader, writer: WavWriter) => Promise<void>,
 ): Promise<void> => {
 	const reader = await WavReader.open(inputPath);
 	let writer: WavWriter | undefined;
 
 	try {
-		writer = await WavWriter.create(outputPath, {
+		writer = await WavWriter.create(sink, {
 			sampleRate: reader.format.sampleRate,
 			channelCount: reader.format.channelCount,
+			channelMask: reader.format.channelMask,
 			bitDepth: nearestWritableBitDepth(reader.format.bitDepth),
+			frameCount: reader.format.frameCount,
 		});
 
 		await consume(reader, writer);

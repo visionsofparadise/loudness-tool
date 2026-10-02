@@ -1,138 +1,113 @@
-import { randomBytes } from "node:crypto";
-import { open, rename, unlink, type FileHandle } from "node:fs/promises";
+import { writeToStream } from "../utils/writeToStream";
 import { bytesPerSampleOf, encodeSample } from "./utils/sampleCodec";
-import { assertRiffDataSize, type WavBitDepth } from "./utils/wavFormat";
+import { TemporaryFile } from "./utils/TemporaryFile";
+import { wavHeaderOf } from "./utils/wavHeader";
+import type { WavBitDepth } from "./utils/wavFormat";
 
-const WAV_HEADER_SIZE = 44;
+export type WavSink =
+	| { readonly kind: "file"; readonly path: string }
+	| { readonly kind: "stream"; readonly stream: NodeJS.WritableStream };
 
-const buildWavHeader = (dataSize: number, sampleRate: number, channelCount: number, bitDepth: WavBitDepth): Buffer => {
-	const header = Buffer.alloc(WAV_HEADER_SIZE);
-	const bytesPerSample = bytesPerSampleOf(bitDepth);
-	const blockAlign = channelCount * bytesPerSample;
-	const byteRate = sampleRate * blockAlign;
-	const bitsPerSample = bytesPerSample * 8;
-	const audioFormat = bitDepth === "32f" ? 3 : 1;
+interface WavWriterFormat {
+	readonly sampleRate: number;
+	readonly channelCount: number;
+	readonly channelMask: number;
+	readonly bitDepth: WavBitDepth;
+	readonly frameCount: number;
+}
 
-	header.write("RIFF", 0);
-	header.writeUInt32LE(WAV_HEADER_SIZE - 8 + dataSize, 4);
-	header.write("WAVE", 8);
-	header.write("fmt ", 12);
-	header.writeUInt32LE(16, 16);
-	header.writeUInt16LE(audioFormat, 20);
-	header.writeUInt16LE(channelCount, 22);
-	header.writeUInt32LE(sampleRate, 24);
-	header.writeUInt32LE(byteRate, 28);
-	header.writeUInt16LE(blockAlign, 32);
-	header.writeUInt16LE(bitsPerSample, 34);
-	header.write("data", 36);
-	header.writeUInt32LE(dataSize, 40);
+interface WavOutput {
+	write(buffer: Buffer, position: number): Promise<void>;
 
-	return header;
-};
+	commit(): Promise<void>;
+
+	discard(): Promise<void>;
+}
+
+const streamOutputOf = (stream: NodeJS.WritableStream): WavOutput => ({
+	write: async (buffer) => writeToStream(stream, buffer),
+	commit: () => Promise.resolve(),
+	discard: () => Promise.resolve(),
+});
+
+const outputOf = async (sink: WavSink): Promise<WavOutput> =>
+	sink.kind === "file" ? TemporaryFile.create(sink.path) : streamOutputOf(sink.stream);
 
 export class WavWriter {
-	static async create(
-		path: string,
-		format: { sampleRate: number; channelCount: number; bitDepth: WavBitDepth },
-	): Promise<WavWriter> {
-		const temporaryPath = `${path}.${randomBytes(8).toString("hex")}.tmp`;
-		const fileHandle = await open(temporaryPath, "w");
-		const header = buildWavHeader(0, format.sampleRate, format.channelCount, format.bitDepth);
+	static async create(sink: WavSink, format: WavWriterFormat): Promise<WavWriter> {
+		const blockAlign = format.channelCount * bytesPerSampleOf(format.bitDepth);
+		const header = wavHeaderOf({ ...format, blockAlign }, format.frameCount * blockAlign);
+		const output = await outputOf(sink);
 
 		try {
-			await fileHandle.write(header, 0, header.length, 0);
-
-			return new WavWriter(path, temporaryPath, fileHandle, format);
+			await output.write(header, 0);
 		} catch (error) {
-			await fileHandle.close();
-			await unlink(temporaryPath).catch(() => undefined);
+			await output.discard();
 
 			throw error;
 		}
+
+		return new WavWriter(output, format, blockAlign, header.length);
 	}
 
-	private readonly destinationPath: string;
-	private readonly temporaryPath: string;
-	private readonly fileHandle: FileHandle;
-	private readonly sampleRate: number;
-	private readonly channelCount: number;
-	private readonly bitDepth: WavBitDepth;
-	private dataSize = 0;
-	private isSettled = false;
+	private readonly output: WavOutput;
+	private readonly format: WavWriterFormat;
+	private readonly blockAlign: number;
+	private readonly dataOffset: number;
+	private framesWritten = 0;
 
-	private constructor(
-		destinationPath: string,
-		temporaryPath: string,
-		fileHandle: FileHandle,
-		format: { sampleRate: number; channelCount: number; bitDepth: WavBitDepth },
-	) {
-		this.destinationPath = destinationPath;
-		this.temporaryPath = temporaryPath;
-		this.fileHandle = fileHandle;
-		this.sampleRate = format.sampleRate;
-		this.channelCount = format.channelCount;
-		this.bitDepth = format.bitDepth;
+	private constructor(output: WavOutput, format: WavWriterFormat, blockAlign: number, dataOffset: number) {
+		this.output = output;
+		this.format = format;
+		this.blockAlign = blockAlign;
+		this.dataOffset = dataOffset;
 	}
 
 	async write(channels: ReadonlyArray<Float64Array>): Promise<void> {
-		if (channels.length !== this.channelCount) {
-			throw new Error(`Channel count mismatch: expected ${this.channelCount}, received ${channels.length}`);
+		const { channelCount, bitDepth } = this.format;
+
+		if (channels.length !== channelCount) {
+			throw new Error(`Channel count mismatch: expected ${channelCount}, received ${channels.length}`);
 		}
 
 		const frameCount = channels[0]?.length ?? 0;
-		const bytesPerSample = bytesPerSampleOf(this.bitDepth);
-		const blockAlign = this.channelCount * bytesPerSample;
-		const buffer = Buffer.alloc(frameCount * blockAlign);
+		const nextFramesWritten = this.framesWritten + frameCount;
+
+		if (nextFramesWritten > this.format.frameCount) {
+			throw new Error(
+				`Frame count overrun: the header declares ${this.format.frameCount} frames, received ${nextFramesWritten}`,
+			);
+		}
+
+		const buffer = Buffer.alloc(frameCount * this.blockAlign);
 		let offset = 0;
 
 		for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
-			for (let channelIndex = 0; channelIndex < this.channelCount; channelIndex++) {
+			for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
 				const sample = channels[channelIndex]?.[frameIndex] ?? 0;
 
-				offset = encodeSample(buffer, offset, sample, this.bitDepth);
+				offset = encodeSample(buffer, offset, sample, bitDepth);
 			}
 		}
 
-		const nextDataSize = this.dataSize + buffer.length;
+		await this.output.write(buffer, this.dataOffset + this.framesWritten * this.blockAlign);
 
-		assertRiffDataSize(nextDataSize);
-
-		await this.fileHandle.write(buffer, 0, buffer.length, WAV_HEADER_SIZE + this.dataSize);
-
-		this.dataSize = nextDataSize;
+		this.framesWritten = nextFramesWritten;
 	}
 
 	async close(): Promise<void> {
-		if (this.isSettled) {
-			return;
+		if (this.framesWritten !== this.format.frameCount) {
+			await this.output.discard();
+
+			throw new Error(
+				`Frame count mismatch: the header declares ${this.format.frameCount} frames, ${this.framesWritten} were written`,
+			);
 		}
 
-		const header = buildWavHeader(this.dataSize, this.sampleRate, this.channelCount, this.bitDepth);
-
-		await this.fileHandle.write(header, 0, header.length, 0);
-		await this.fileHandle.close();
-
-		try {
-			await rename(this.temporaryPath, this.destinationPath);
-		} catch (error) {
-			await unlink(this.temporaryPath).catch(() => undefined);
-
-			throw new Error(`Failed to replace "${this.destinationPath}" with "${this.temporaryPath}"`, {
-				cause: error,
-			});
-		} finally {
-			this.isSettled = true;
-		}
+		await this.output.commit();
 	}
 
 	async abort(): Promise<void> {
-		if (this.isSettled) {
-			return;
-		}
-
-		this.isSettled = true;
-
-		await this.fileHandle.close().catch(() => undefined);
-		await unlink(this.temporaryPath).catch(() => undefined);
+		await this.output.discard();
 	}
 }

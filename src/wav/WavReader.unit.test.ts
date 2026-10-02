@@ -259,7 +259,10 @@ describe("WavReader", () => {
 		const raggedFrames = 123;
 		const frameCount = BLOCK_FRAMES + raggedFrames;
 		const channels = createRamp(frameCount, 1);
-		const writer = await WavWriter.create(path, { sampleRate: SAMPLE_RATE, channelCount: 1, bitDepth: "32f" });
+		const writer = await WavWriter.create(
+			{ kind: "file", path },
+			{ sampleRate: SAMPLE_RATE, channelCount: 1, channelMask: 0, bitDepth: "32f", frameCount },
+		);
 
 		await writer.write(channels);
 		await writer.close();
@@ -588,7 +591,10 @@ describe("WavReader", () => {
 
 	it("leaves no temporary files after reading", async () => {
 		const path = join(workingDirectory, "plain.wav");
-		const writer = await WavWriter.create(path, { sampleRate: SAMPLE_RATE, channelCount: 1, bitDepth: "16" });
+		const writer = await WavWriter.create(
+			{ kind: "file", path },
+			{ sampleRate: SAMPLE_RATE, channelCount: 1, channelMask: 0, bitDepth: "16", frameCount: 8 },
+		);
 
 		await writer.write(createRamp(8, 1));
 		await writer.close();

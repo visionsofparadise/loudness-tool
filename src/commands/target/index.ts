@@ -10,6 +10,7 @@ import { iterateForTargets } from "./utils/solve";
 import { windowSamplesFromMs } from "./utils/window";
 import type { IterationAttempt, Targets } from "./utils/solve";
 import type { SampleFile } from "../../utils/SampleFile";
+import type { WavSink } from "../../wav/WavWriter";
 
 interface TargetOptions {
 	readonly output: string;
@@ -122,8 +123,8 @@ const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets =>
 const figureOf = (value: number | null, unit: string): string =>
 	value === null ? "n/a" : `${value.toFixed(2)} ${unit}`;
 
-const applyEnvelopeAndWrite = async (inputPath: string, outputPath: string, envelope: SampleFile): Promise<void> => {
-	await withWavWriter(inputPath, outputPath, async (reader, writer) => {
+const applyEnvelopeAndWrite = async (inputPath: string, sink: WavSink, envelope: SampleFile): Promise<void> => {
+	await withWavWriter(inputPath, sink, async (reader, writer) => {
 		await reader.close();
 		await forEachEnvelopedBlock(inputPath, envelope, async (channels) => {
 			await writer.write(channels);
@@ -224,7 +225,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 
 			winningEnvelope = result.bestSmoothedEnvelope;
 
-			await applyEnvelopeAndWrite(inputPath, options.output, result.bestSmoothedEnvelope);
+			await applyEnvelopeAndWrite(inputPath, { kind: "file", path: options.output }, result.bestSmoothedEnvelope);
 
 			process.stdout.write(
 				`${[

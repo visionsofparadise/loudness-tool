@@ -173,11 +173,16 @@ describe("solveCrest", () => {
 		smoothingMs: number,
 	): Promise<{ layout: CrestLayout; walk: Array<number>; solution: CrestSolution }> => {
 		const path = join(workingDirectory, "source.wav");
-		const writer = await WavWriter.create(path, {
-			sampleRate: SAMPLE_RATE,
-			channelCount: channels.length,
-			bitDepth: "32f",
-		});
+		const writer = await WavWriter.create(
+			{ kind: "file", path },
+			{
+				sampleRate: SAMPLE_RATE,
+				channelCount: channels.length,
+				channelMask: 0,
+				bitDepth: "32f",
+				frameCount: channels[0]?.length ?? 0,
+			},
+		);
 
 		await writer.write(channels.map((channel) => Float64Array.from(channel)));
 		await writer.close();

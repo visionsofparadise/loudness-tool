@@ -14,12 +14,11 @@ export interface ParsedWavFormat {
 	readonly dataSize: number;
 }
 
-const RIFF_HEADER_OVERHEAD = 36;
-const RIFF_DATA_SIZE_LIMIT = 0xffffffff - RIFF_HEADER_OVERHEAD;
-const WAVE_FORMAT_PCM = 1;
-const WAVE_FORMAT_IEEE_FLOAT = 3;
-const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
-const WAVE_FORMAT_EXTENSIBLE_EXTENSION_SIZE = 22;
+export const WAVE_FORMAT_PCM = 1;
+export const WAVE_FORMAT_IEEE_FLOAT = 3;
+export const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
+export const WAVE_FORMAT_EXTENSIBLE_EXTENSION_SIZE = 22;
+
 const CHANNEL_MASK_OFFSET = 20;
 const SUBFORMAT_GUID_OFFSET = 24;
 const SUBFORMAT_GUID_SIZE = 16;
@@ -37,14 +36,6 @@ export const nearestWritableBitDepth = (bitDepth: SourceBitDepth): WavBitDepth =
 		case "32":
 		case "32f":
 			return bitDepth;
-	}
-};
-
-export const assertRiffDataSize = (dataSize: number): void => {
-	if (dataSize > RIFF_DATA_SIZE_LIMIT) {
-		throw new Error(
-			`RIFF data size ${dataSize} exceeds the ${RIFF_DATA_SIZE_LIMIT} byte payload ceiling (0xffffffff minus the 36-byte header)`,
-		);
 	}
 };
 

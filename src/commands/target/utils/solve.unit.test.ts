@@ -141,11 +141,16 @@ const referenceLufsShift = (anchors: Anchors, histogram: DetectionHistogram): nu
 };
 
 const writeWav = async (path: string, channels: Array<Float64Array>): Promise<void> => {
-	const writer = await WavWriter.create(path, {
-		sampleRate: SAMPLE_RATE,
-		channelCount: channels.length,
-		bitDepth: "32f",
-	});
+	const writer = await WavWriter.create(
+		{ kind: "file", path },
+		{
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			channelMask: 0,
+			bitDepth: "32f",
+			frameCount: channels[0]?.length ?? 0,
+		},
+	);
 
 	await writer.write(channels);
 	await writer.close();
