@@ -51,7 +51,7 @@ const errorMessageOf = (error: unknown, inputPath: string): string => {
 
 const measureStats = async (inputPath: string): Promise<StatsJson> =>
 	withWavReader(inputPath, async (reader) => {
-		const { sampleRate, channelCount, bitDepth, frameCount } = reader.format;
+		const { sampleRate, channelCount, bitDepth } = reader.format;
 
 		if (channelCount > 2) {
 			throw new Error(
@@ -63,7 +63,7 @@ const measureStats = async (inputPath: string): Promise<StatsJson> =>
 		const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
 		const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, channelCount);
 
-		await pushWavBlocks(reader, [truePeakAccumulator, lufsAccumulator, shortTermAccumulator]);
+		const frameCount = await pushWavBlocks(reader, [truePeakAccumulator, lufsAccumulator, shortTermAccumulator]);
 
 		const truePeak = truePeakAccumulator.finalize();
 		const integrated = lufsAccumulator.finalize();

@@ -1,6 +1,7 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { nearestWritableBitDepth } from "../../wav/utils/wavFormat";
 import { measureTruePeak } from "../utils/measureTruePeak";
+import { withWavReader } from "../utils/withWavReader";
 import { applyWalk } from "./utils/apply";
 import { crestLayoutOf } from "./utils/ladder";
 import { printedDbOf } from "./utils/rounding";
@@ -40,26 +41,30 @@ const parseSmoothing = (value: string): number => {
 };
 
 export const crest = async (inputPath: string, options: CrestOptions): Promise<void> => {
-	const measurement = await measureTruePeak(inputPath);
-	const bitDepth = nearestWritableBitDepth(measurement.bitDepth);
+	const measurement = await withWavReader(inputPath, async (reader) => ({
+		format: reader.format,
+		...(await measureTruePeak(reader)),
+	}));
+	const { sampleRate, channelCount } = measurement.format;
+	const bitDepth = nearestWritableBitDepth(measurement.format.bitDepth);
 	const layout = crestLayoutOf({
 		spreadMs: options.spread ?? DEFAULT_SPREAD_MS,
 		smoothingMs: options.smoothing ?? DEFAULT_SMOOTHING_MS,
-		sampleRate: measurement.sampleRate,
+		sampleRate,
 		frameCount: measurement.frameCount,
 	});
 	const solution = await solveCrest({
 		inputPath,
 		layout,
 		bitDepth,
-		channelCount: measurement.channelCount,
+		channelCount,
 	});
 	const outputTruePeak = await applyWalk({
 		inputPath,
 		outputPath: options.output,
 		layout,
 		bitDepth,
-		channelCount: measurement.channelCount,
+		channelCount,
 		walk: solution.walk,
 	});
 	const sourceDb = printedDbOf(measurement.truePeak);

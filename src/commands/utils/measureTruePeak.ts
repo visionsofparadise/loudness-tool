@@ -1,32 +1,12 @@
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
-import { pushWavBlocks, withWavReader } from "./withWavReader";
-import type { SourceBitDepth } from "../../wav/utils/wavFormat";
+import { pushWavBlocks } from "./withWavReader";
+import type { BlockSource } from "../../wav/WavReader";
 
 export const measureTruePeak = async (
-	path: string,
-): Promise<{
-	readonly path: string;
-	readonly sampleRate: number;
-	readonly channelCount: number;
-	readonly bitDepth: SourceBitDepth;
-	readonly durationSeconds: number;
-	readonly frameCount: number;
-	readonly truePeak: number;
-}> =>
-	withWavReader(path, async (reader) => {
-		const accumulator = new TruePeakAccumulator(reader.format.channelCount);
+	source: BlockSource,
+): Promise<{ readonly truePeak: number; readonly frameCount: number }> => {
+	const accumulator = new TruePeakAccumulator(source.format.channelCount);
+	const frameCount = await pushWavBlocks(source, [accumulator]);
 
-		await pushWavBlocks(reader, [accumulator]);
-
-		const { sampleRate, channelCount, bitDepth, frameCount } = reader.format;
-
-		return {
-			path,
-			sampleRate,
-			channelCount,
-			bitDepth,
-			durationSeconds: sampleRate === 0 ? 0 : frameCount / sampleRate,
-			frameCount,
-			truePeak: accumulator.finalize(),
-		};
-	});
+	return { truePeak: accumulator.finalize(), frameCount };
+};

@@ -4,10 +4,13 @@ import { parseWavFormat, type ParsedWavFormat, type SourceBitDepth } from "./uti
 
 export const BLOCK_FRAMES = 65536;
 
-export interface AudioFormat {
+interface StreamFormat {
 	readonly sampleRate: number;
 	readonly channelCount: number;
 	readonly bitDepth: SourceBitDepth;
+}
+
+export interface AudioFormat extends StreamFormat {
 	readonly frameCount: number;
 }
 
@@ -16,7 +19,14 @@ export interface AudioBlock {
 	readonly frameIndex: number;
 }
 
-export class WavReader {
+export interface BlockSource {
+	readonly format: StreamFormat;
+	blocks(): AsyncIterableIterator<AudioBlock>;
+
+	close(): Promise<void>;
+}
+
+export class WavReader implements BlockSource {
 	static async open(path: string): Promise<WavReader> {
 		const fileHandle = await open(path, "r");
 

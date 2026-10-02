@@ -6,6 +6,7 @@ import { isMultipleOf } from "../utils/multipleOf";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { copyUnchanged } from "./utils/copyUnchanged";
 import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
+import type { BlockSource } from "../wav/WavReader";
 
 interface LufsNormOptions {
 	readonly output: string;
@@ -37,34 +38,36 @@ const parseTargetLufs = (value: string): number => {
 };
 
 const measureIntegratedAndTruePeak = async (
-	path: string,
-): Promise<{ readonly integratedLufs: number; readonly truePeak: number }> =>
-	withWavReader(path, async (reader) => {
-		const { sampleRate, channelCount } = reader.format;
+	source: BlockSource,
+): Promise<{ readonly integratedLufs: number; readonly truePeak: number }> => {
+	const { sampleRate, channelCount } = source.format;
+	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
+	const truePeakAccumulator = new TruePeakAccumulator(channelCount);
 
-		if (channelCount > 2) {
-			throw new Error(
-				`${path}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
-			);
-		}
+	await pushWavBlocks(source, [lufsAccumulator, truePeakAccumulator]);
 
-		const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
-		const truePeakAccumulator = new TruePeakAccumulator(channelCount);
-
-		await pushWavBlocks(reader, [lufsAccumulator, truePeakAccumulator]);
-
-		return {
-			integratedLufs: lufsAccumulator.finalize(),
-			truePeak: truePeakAccumulator.finalize(),
-		};
-	});
+	return {
+		integratedLufs: lufsAccumulator.finalize(),
+		truePeak: truePeakAccumulator.finalize(),
+	};
+};
 
 export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Promise<void> => {
 	const target = options.lufs ?? DEFAULT_TARGET_LUFS;
 
 	assertTargetLufs(target, target);
 
-	const measurement = await measureIntegratedAndTruePeak(inputPath);
+	const measurement = await withWavReader(inputPath, async (reader) => {
+		const { channelCount } = reader.format;
+
+		if (channelCount > 2) {
+			throw new Error(
+				`${inputPath}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+			);
+		}
+
+		return measureIntegratedAndTruePeak(reader);
+	});
 
 	if (!Number.isFinite(measurement.integratedLufs)) {
 		await copyUnchanged(inputPath, options.output);

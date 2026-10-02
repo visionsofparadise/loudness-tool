@@ -3,6 +3,7 @@ import { dbToLinear } from "../utils/db";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { copyUnchanged } from "./utils/copyUnchanged";
 import { measureTruePeak } from "./utils/measureTruePeak";
+import { withWavReader } from "./utils/withWavReader";
 
 interface TpNormOptions {
 	readonly output: string;
@@ -35,7 +36,7 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 
 	assertTargetDb(target, target);
 
-	const measurement = await measureTruePeak(inputPath);
+	const measurement = await withWavReader(inputPath, measureTruePeak);
 
 	if (measurement.truePeak <= 0) {
 		await copyUnchanged(inputPath, options.output);
