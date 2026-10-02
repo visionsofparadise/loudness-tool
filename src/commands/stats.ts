@@ -5,6 +5,7 @@ import { ShortTermLoudnessAccumulator } from "../measurement/ShortTermLoudnessAc
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
 import { linearToDb } from "../utils/db";
 import { withAudioInput } from "./utils/AudioInput";
+import { STDIO_PATH } from "./utils/stdioPath";
 import { pushWavBlocks } from "./utils/withWavReader";
 import type { SourceBitDepth } from "../wav/utils/wavFormat";
 import type { Command } from "commander";
@@ -45,12 +46,10 @@ const formatHuman = (result: StatsJson): string => {
 	].join("\n")}\n`;
 };
 
-const STDIN_PATH = "-";
-
 const errorMessageOf = (error: unknown, inputPath: string): string => {
 	const message = error instanceof Error ? error.message : String(error);
 
-	return inputPath !== STDIN_PATH && message.includes(inputPath) ? message : `Cannot read "${inputPath}": ${message}`;
+	return inputPath !== STDIO_PATH && message.includes(inputPath) ? message : `Cannot read "${inputPath}": ${message}`;
 };
 
 const measureStats = async (inputPath: string): Promise<StatsJson> =>
@@ -82,7 +81,7 @@ const measureStats = async (inputPath: string): Promise<StatsJson> =>
 	);
 
 export const stats = async (inputs: Array<string>, options: StatsOptions): Promise<void> => {
-	if (inputs.filter((inputPath) => inputPath === STDIN_PATH).length > 1) {
+	if (inputs.filter((inputPath) => inputPath === STDIO_PATH).length > 1) {
 		throw new Error("stdin can be read once");
 	}
 

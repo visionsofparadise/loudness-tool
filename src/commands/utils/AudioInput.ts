@@ -2,9 +2,9 @@ import { Scratch } from "../../utils/Scratch";
 import { WavReader, type BlockSource } from "../../wav/WavReader";
 import { WavSpool } from "../../wav/WavSpool";
 import { WavStreamReader } from "../../wav/WavStreamReader";
+import { STDIO_PATH } from "./stdioPath";
 import type { Command } from "commander";
 
-const STDIO_PATH = "-";
 const SPOOL_LABEL = "input.wav";
 
 interface AudioInputOptions {
