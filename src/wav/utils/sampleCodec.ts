@@ -39,6 +39,27 @@ export const decodeSample = (buffer: Buffer, offset: number, bitDepth: SourceBit
 	}
 };
 
+export const decodeFrames = (
+	buffer: Buffer,
+	frameCount: number,
+	layout: { readonly channelCount: number; readonly blockAlign: number; readonly bitDepth: SourceBitDepth },
+): Array<Float64Array> => {
+	const { channelCount, blockAlign, bitDepth } = layout;
+	const bytesPerSample = bytesPerSampleOf(bitDepth);
+
+	return Array.from({ length: channelCount }, (_, channelIndex) => {
+		const channel = new Float64Array(frameCount);
+		let sampleOffset = channelIndex * bytesPerSample;
+
+		for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+			channel[frameIndex] = decodeSample(buffer, sampleOffset, bitDepth);
+			sampleOffset += blockAlign;
+		}
+
+		return channel;
+	});
+};
+
 export const encodeSample = (buffer: Buffer, offset: number, sample: number, bitDepth: WavBitDepth): number => {
 	switch (bitDepth) {
 		case "16": {

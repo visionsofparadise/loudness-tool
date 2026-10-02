@@ -1,5 +1,5 @@
 import { open, type FileHandle } from "node:fs/promises";
-import { bytesPerSampleOf, decodeSample } from "./utils/sampleCodec";
+import { decodeFrames } from "./utils/sampleCodec";
 import { parseWavFormat, type ParsedWavFormat, type SourceBitDepth } from "./utils/wavFormat";
 
 export const BLOCK_FRAMES = 65536;
@@ -94,27 +94,15 @@ export class WavReader implements BlockSource {
 	}
 
 	private async readBlock(frameIndex: number, frameCount: number): Promise<Array<Float64Array>> {
-		const { channelCount } = this.format;
-		const bytesPerSample = bytesPerSampleOf(this.bitDepth);
 		const byteCount = frameCount * this.blockAlign;
 		const fileOffset = this.dataOffset + frameIndex * this.blockAlign;
 		const buffer = Buffer.alloc(byteCount);
 		const { bytesRead } = await this.fileHandle.read(buffer, 0, byteCount, fileOffset);
-		const framesRead = Math.floor(bytesRead / this.blockAlign);
-		const channels: Array<Float64Array> = [];
 
-		for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
-			const channel = new Float64Array(framesRead);
-
-			for (let decodedFrameIndex = 0; decodedFrameIndex < framesRead; decodedFrameIndex++) {
-				const sampleOffset = decodedFrameIndex * this.blockAlign + channelIndex * bytesPerSample;
-
-				channel[decodedFrameIndex] = decodeSample(buffer, sampleOffset, this.bitDepth);
-			}
-
-			channels.push(channel);
-		}
-
-		return channels;
+		return decodeFrames(buffer, Math.floor(bytesRead / this.blockAlign), {
+			channelCount: this.format.channelCount,
+			blockAlign: this.blockAlign,
+			bitDepth: this.bitDepth,
+		});
 	}
 }
