@@ -273,7 +273,9 @@ describe("tp-norm", () => {
 		const renameSpy = vi.spyOn(fsPromises, "rename").mockRejectedValueOnce(new Error("rename failed"));
 
 		try {
-			await expect(tpNorm(inputPath, { output: outputPath, tp: -1 })).rejects.toThrow("rename failed");
+			await expect(tpNorm(inputPath, { output: outputPath, tp: -1 })).rejects.toThrow(
+				`Failed to replace "${outputPath}" with`,
+			);
 
 			expect(await readFile(outputPath, "utf8")).toBe("original-bytes");
 			expect(unlinkSpy.mock.calls.some((call) => call[0] === outputPath)).toBe(false);

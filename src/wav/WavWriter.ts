@@ -30,14 +30,14 @@ const streamOutputOf = (stream: NodeJS.WritableStream): WavOutput => ({
 	discard: () => Promise.resolve(),
 });
 
-const outputOf = async (sink: WavSink): Promise<WavOutput> =>
+export const sinkOutputOf = async (sink: WavSink): Promise<WavOutput> =>
 	sink.kind === "file" ? TemporaryFile.create(sink.path) : streamOutputOf(sink.stream);
 
 export class WavWriter {
 	static async create(sink: WavSink, format: WavWriterFormat): Promise<WavWriter> {
 		const blockAlign = format.channelCount * bytesPerSampleOf(format.bitDepth);
 		const header = wavHeaderOf({ ...format, blockAlign }, format.frameCount * blockAlign);
-		const output = await outputOf(sink);
+		const output = await sinkOutputOf(sink);
 
 		try {
 			await output.write(header, 0);
