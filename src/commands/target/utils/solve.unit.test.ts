@@ -9,7 +9,8 @@ import { Scratch } from "../../../utils/Scratch";
 import { WavWriter } from "../../../wav/WavWriter";
 import { type Anchors, gainDbAt } from "./curve";
 import * as envelope from "./envelope";
-import { measureSource, type DetectionHistogram } from "./measureSource";
+import { withWavReader } from "../../utils/withWavReader";
+import { measureSource, type DetectionHistogram, type SourceMeasurement } from "./measureSource";
 import {
 	assignPeakGainDb,
 	attemptBeatsWinner,
@@ -25,6 +26,21 @@ import {
 import { windowSamplesFromMs } from "./window";
 
 const SAMPLE_RATE = 48000;
+
+const measureFile = async (args: {
+	inputPath: string;
+	scratch: Scratch;
+	limitPercentile: number;
+	halfWidth: number;
+}): Promise<SourceMeasurement> =>
+	withWavReader(args.inputPath, async (source) =>
+		measureSource({
+			source,
+			scratch: args.scratch,
+			limitPercentile: args.limitPercentile,
+			halfWidthOf: () => args.halfWidth,
+		}),
+	);
 
 const baseAnchors = (overrides: Partial<Anchors> = {}): Anchors => ({
 	floorDb: null,
@@ -348,7 +364,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, [makeCrossAxis(3)]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -405,7 +421,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, [makeCrossAxis(3)]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -454,7 +470,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, [makeCrossAxis(3)]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -504,7 +520,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, [makeCrossAxis(3)]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -552,7 +568,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, [makeCrossAxis(3)]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -614,7 +630,7 @@ describe("iterateForTargets", () => {
 			),
 		);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -661,7 +677,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-6)));
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -711,7 +727,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -757,7 +773,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -806,7 +822,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -873,7 +889,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -941,7 +957,7 @@ describe("iterateForTargets", () => {
 
 		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,

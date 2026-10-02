@@ -1,8 +1,8 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
-import { WavReader } from "../../wav/WavReader";
 import { copyUnchanged } from "../utils/copyUnchanged";
+import { withWavReader } from "../utils/withWavReader";
 import { withWavWriter } from "../utils/withWavWriter";
 import { forEachEnvelopedBlock } from "./utils/apply";
 import { measureSource } from "./utils/measureSource";
@@ -131,24 +131,6 @@ const applyEnvelopeAndWrite = async (inputPath: string, outputPath: string, enve
 	});
 };
 
-const sampleRateOf = async (path: string): Promise<number> => {
-	const reader = await WavReader.open(path);
-
-	try {
-		const { sampleRate, channelCount } = reader.format;
-
-		if (channelCount > 2) {
-			throw new Error(
-				`${path}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
-			);
-		}
-
-		return sampleRate;
-	} finally {
-		await reader.close();
-	}
-};
-
 export const target = async (inputPath: string, options: TargetOptions): Promise<void> => {
 	const limitPercentile = options.limitPercentile ?? DEFAULT_LIMIT_PERCENTILE;
 	const smoothingMs = options.smoothing ?? DEFAULT_SMOOTHING_MS;
@@ -175,11 +157,21 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	let winningEnvelope: SampleFile | undefined;
 
 	try {
-		const measurement = await measureSource({
-			inputPath,
-			scratch,
-			limitPercentile,
-			halfWidth: windowSamplesFromMs(smoothingMs, await sampleRateOf(inputPath)),
+		const measurement = await withWavReader(inputPath, async (reader) => {
+			const { channelCount } = reader.format;
+
+			if (channelCount > 2) {
+				throw new Error(
+					`${inputPath}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+				);
+			}
+
+			return measureSource({
+				source: reader,
+				scratch,
+				limitPercentile,
+				halfWidthOf: (sampleRate) => windowSamplesFromMs(smoothingMs, sampleRate),
+			});
 		});
 
 		winningEnvelope = measurement.detectionEnvelope;

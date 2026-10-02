@@ -7,13 +7,29 @@ import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoud
 import { dbToLinear } from "../../../utils/db";
 import { createLevelSegments, createNoise, createSine } from "../../../utils/testSignals";
 import { Scratch } from "../../../utils/Scratch";
-import { BLOCK_FRAMES } from "../../../wav/WavReader";
+import { BLOCK_FRAMES, WavReader, type AudioBlock, type BlockSource } from "../../../wav/WavReader";
 import { WavWriter } from "../../../wav/WavWriter";
 import type { SampleFile } from "../../../utils/SampleFile";
-import { computeLimitAutoDb, measureSource } from "./measureSource";
+import { withWavReader } from "../../utils/withWavReader";
+import { computeLimitAutoDb, measureSource, type DetectionHistogram, type SourceMeasurement } from "./measureSource";
 import { windowSamplesFromMs } from "./window";
 
 const SAMPLE_RATE = 48000;
+
+const measureFile = async (args: {
+	inputPath: string;
+	scratch: Scratch;
+	limitPercentile: number;
+	halfWidth: number;
+}): Promise<SourceMeasurement> =>
+	withWavReader(args.inputPath, async (source) =>
+		measureSource({
+			source,
+			scratch: args.scratch,
+			limitPercentile: args.limitPercentile,
+			halfWidthOf: () => args.halfWidth,
+		}),
+	);
 
 const writeWav = async (path: string, channels: Array<Float64Array>): Promise<void> => {
 	const writer = await WavWriter.create(path, {
@@ -92,7 +108,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, createSine(frameCount, 1, SAMPLE_RATE, 220, 0.2));
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -114,7 +130,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, [new Float64Array(SAMPLE_RATE)]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -134,7 +150,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, [new Float64Array(SAMPLE_RATE).fill(1e-12)]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -164,7 +180,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, [channel]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -188,7 +204,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, channels);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -227,7 +243,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, channels);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -269,7 +285,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, [channel]);
 
-		const narrow = await measureSource({
+		const narrow = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -278,7 +294,7 @@ describe("measureSource", () => {
 
 		await narrow.detectionEnvelope.close();
 
-		const wide = await measureSource({
+		const wide = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -320,7 +336,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, [channel]);
 
-		const measurement = await measureSource({
+		const measurement = await measureFile({
 			inputPath,
 			scratch,
 			limitPercentile: 0.995,
@@ -363,7 +379,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, [channel]);
 
-		const measurement = await measureSource({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 0 });
+		const measurement = await measureFile({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 0 });
 		const envelope = await readEnvelope(measurement.detectionEnvelope);
 
 		await measurement.detectionEnvelope.close();
@@ -397,7 +413,7 @@ describe("measureSource", () => {
 		}
 
 		for (const halfWidth of [0, 3, 48]) {
-			const measurement = await measureSource({ inputPath, scratch, limitPercentile: 0.995, halfWidth });
+			const measurement = await measureFile({ inputPath, scratch, limitPercentile: 0.995, halfWidth });
 			const levelsDb = await readEnvelope(measurement.detectionEnvelope);
 
 			await measurement.detectionEnvelope.close();
@@ -457,4 +473,84 @@ describe("measureSource", () => {
 
 		expect(envelope).toHaveLength(0);
 	});
+
+	it("measures the same whatever the block size the source is read in", async () => {
+		const measureScratch = await Scratch.create();
+
+		scratch = measureScratch;
+
+		const measureInChunks = async (
+			inputPath: string,
+			chunkFrames: number | undefined,
+		): Promise<{ envelope: Float64Array; histogram: DetectionHistogram; frameCount: number }> => {
+			const reader = await WavReader.open(inputPath);
+			const source: BlockSource = {
+				format: reader.format,
+				blocks: async function* (): AsyncIterableIterator<AudioBlock> {
+					for await (const block of reader.blocks()) {
+						const frameCount = block.channels[0]?.length ?? 0;
+						const step = chunkFrames ?? frameCount;
+
+						for (let offset = 0; offset < frameCount; offset += step) {
+							const take = Math.min(step, frameCount - offset);
+
+							yield {
+								channels: block.channels.map((channel) => channel.slice(offset, offset + take)),
+								frameIndex: block.frameIndex + offset,
+							};
+						}
+					}
+				},
+				close: async () => reader.close(),
+			};
+
+			try {
+				const measurement = await measureSource({
+					source,
+					scratch: measureScratch,
+					limitPercentile: 0.995,
+					halfWidthOf: (sampleRate) => windowSamplesFromMs(1, sampleRate),
+				});
+				const envelope = await readEnvelope(measurement.detectionEnvelope);
+
+				await measurement.detectionEnvelope.close();
+
+				return { envelope, histogram: measurement.detectionHistogram, frameCount: measurement.frameCount };
+			} finally {
+				await source.close();
+			}
+		};
+
+		const cases: ReadonlyArray<{ frameCount: number; chunkSizes: ReadonlyArray<number> }> = [
+			{ frameCount: 1, chunkSizes: [1] },
+			{ frameCount: 5, chunkSizes: [1, 2, 3] },
+			{ frameCount: 6, chunkSizes: [1, 4, 5] },
+			{ frameCount: 7, chunkSizes: [1, 3, 6] },
+			{ frameCount: 2 * BLOCK_FRAMES + 8_000, chunkSizes: [4_093, 30_011, BLOCK_FRAMES - 1] },
+		];
+
+		for (const { frameCount, chunkSizes } of cases) {
+			const inputPath = join(workingDirectory, `chunks-${frameCount}.wav`);
+			const channels = createNoise(frameCount, 2, frameCount).map((channel) =>
+				channel.map((sample) => sample * 0.5),
+			);
+			const [left = new Float64Array(0)] = channels;
+
+			// AmplitudeHistogramAccumulator rebins when a chunk raises its maximum, so the multi-block
+			// source holds its peak at frame 100, in its first block. The 1- to 7-frame sources put it on
+			// their last frame and still compare exactly.
+			left[Math.min(100, frameCount - 1)] = 0.99;
+
+			await writeWav(inputPath, channels);
+
+			const whole = await measureInChunks(inputPath, undefined);
+
+			expect(whole.frameCount).toBe(frameCount);
+			expect(whole.envelope).toHaveLength(frameCount);
+
+			for (const chunkFrames of chunkSizes) {
+				expect(await measureInChunks(inputPath, chunkFrames)).toEqual(whole);
+			}
+		}
+	}, 60_000);
 });

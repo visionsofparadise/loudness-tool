@@ -7,7 +7,7 @@ import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
 import { TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
 import { dbToLinear, linearToDb } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
-import { BLOCK_FRAMES, WavReader } from "../../../wav/WavReader";
+import { BLOCK_FRAMES, type BlockSource } from "../../../wav/WavReader";
 import type { Scratch } from "../../../utils/Scratch";
 import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
@@ -155,17 +155,17 @@ const writeLinearAsDb = (linear: Float64Array, output: Float64Array): void => {
 };
 
 export const measureSource = async (args: {
-	inputPath: string;
+	source: BlockSource;
 	scratch: Scratch;
 	limitPercentile: number;
-	halfWidth: number;
+	halfWidthOf: (sampleRate: number) => number;
 }): Promise<SourceMeasurement> => {
-	const { inputPath, scratch, limitPercentile, halfWidth } = args;
-	const reader = await WavReader.open(inputPath);
+	const { source, scratch, limitPercentile, halfWidthOf } = args;
 	const detectionEnvelope = await SampleFile.create(scratch, "detection");
 
 	try {
-		const { sampleRate, channelCount, bitDepth, frameCount } = reader.format;
+		const { sampleRate, channelCount, bitDepth } = source.format;
+		const halfWidth = halfWidthOf(sampleRate);
 		const truePeak = new TruePeakAccumulator(channelCount);
 		const integrated = new IntegratedLufsAccumulator(sampleRate, channelCount);
 		const shortTerm = new ShortTermLoudnessAccumulator(sampleRate, channelCount);
@@ -224,7 +224,7 @@ export const measureSource = async (args: {
 
 			skipRemaining -= skipped;
 
-			const frames = Math.min((upLength - skipped) / OVERSAMPLE_FACTOR, frameCount - detectedFrames);
+			const frames = Math.min((upLength - skipped) / OVERSAMPLE_FACTOR, frameIndex - detectedFrames);
 
 			if (frames <= 0) {
 				return;
@@ -240,7 +240,7 @@ export const measureSource = async (args: {
 			await pushDetection(baseScratch.subarray(0, frames), frames);
 		};
 
-		for await (const block of reader.blocks()) {
+		for await (const block of source.blocks()) {
 			const frames = block.channels[0]?.length ?? 0;
 
 			if (frames === 0) {
@@ -327,14 +327,12 @@ export const measureSource = async (args: {
 			detectionEnvelope,
 			sampleRate,
 			channelCount,
-			frameCount,
+			frameCount: frameIndex,
 			bitDepth,
 		};
 	} catch (error: unknown) {
 		await detectionEnvelope.close();
 
 		throw error;
-	} finally {
-		await reader.close();
 	}
 };
