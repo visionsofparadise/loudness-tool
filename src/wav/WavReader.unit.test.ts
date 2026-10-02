@@ -514,6 +514,24 @@ describe("WavReader", () => {
 		await expect(WavReader.open(path)).rejects.toThrow(/Invalid WAV file: sampleRate 0/);
 	});
 
+	it("rejects an RF64 file whose ds64 chunk is smaller than its size fields as an invalid WAV file naming its path", async () => {
+		const path = join(workingDirectory, "rf64-short-ds64.wav");
+
+		await writeRf64Wav(path, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: createRamp(8, 1),
+		});
+
+		const file = await readFile(path);
+
+		file.writeUInt32LE(8, 16);
+		await writeFile(path, file);
+
+		await expect(WavReader.open(path)).rejects.toThrow(`Invalid WAV file: "${path}"`);
+	});
+
 	it("takes min(ds64, bytes present) for RF64 rather than the 0xFFFFFFFF data-chunk sentinel", async () => {
 		const path = join(workingDirectory, "rf64-ds64-clamp.wav");
 		const frameCount = 64;

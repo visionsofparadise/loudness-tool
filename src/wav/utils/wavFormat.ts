@@ -19,6 +19,7 @@ const SUBFORMAT_GUID_OFFSET = 24;
 const SUBFORMAT_GUID_SIZE = 16;
 const FORMAT_READ_SIZE_LIMIT = 64;
 const STREAMING_DATA_SIZE_SENTINEL = 0xffffffff;
+const DS64_REQUIRED_SIZE = 16;
 
 export const notWavErrorOf = (path: string): Error => new Error(`Not a WAV file: "${path}"`);
 
@@ -181,12 +182,17 @@ const declaredDataSizeOf = (walk: WavChunkWalk, chunkSize: number): number | und
 export const stepChunk = async (
 	walk: WavChunkWalk,
 	chunkHeader: Buffer,
+	path: string,
 	readPayload: (byteCount: number) => Promise<Buffer>,
 ): Promise<WavChunkStep> => {
 	const chunkId = chunkHeader.toString("ascii", 0, 4);
 	const chunkSize = chunkHeader.readUInt32LE(4);
 
 	if (chunkId === "ds64") {
+		if (chunkSize < DS64_REQUIRED_SIZE) {
+			throw invalidWavErrorOf(path);
+		}
+
 		const ds64Data = await readPayload(Math.min(chunkSize, 28));
 
 		walk.ds64DataSize = Number(ds64Data.readBigUInt64LE(8));
@@ -230,7 +236,7 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 		await fileHandle.read(chunkHeader, 0, 8, offset);
 
 		const payloadOffset = offset + 8;
-		const step = await stepChunk(walk, chunkHeader, async (byteCount) => {
+		const step = await stepChunk(walk, chunkHeader, path, async (byteCount) => {
 			const payload = Buffer.alloc(byteCount);
 			const { bytesRead } = await fileHandle.read(payload, 0, byteCount, payloadOffset);
 

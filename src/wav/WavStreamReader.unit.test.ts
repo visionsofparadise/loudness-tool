@@ -360,6 +360,16 @@ describe("WavStreamReader", () => {
 		await expect(WavStreamReader.open(stream, "-")).rejects.toThrow('Invalid WAV file: "-"');
 	});
 
+	it("rejects an RF64 stream whose ds64 chunk is smaller than its size fields as an invalid WAV file", async () => {
+		const { file } = wavBytesOf({ channels: createNoise(10, 1, 1), bitDepth: "16", isRf64: true });
+
+		file.writeUInt32LE(8, 16);
+
+		const { stream } = feed(file, 7);
+
+		await expect(WavStreamReader.open(stream, "-")).rejects.toThrow('Invalid WAV file: "-"');
+	});
+
 	it("rejects a stream that ends inside a chunk's payload as an invalid WAV file", async () => {
 		const { file } = wavBytesOf({ channels: createNoise(10, 1, 1), bitDepth: "16" });
 		const { stream } = feed(file.subarray(0, 30), 7);

@@ -119,7 +119,7 @@ export class WavStreamReader implements BlockSource {
 				}
 
 				let payloadBytesRead = 0;
-				const step = await stepChunk(walk, chunkHeader, async (byteCount) => {
+				const step = await stepChunk(walk, chunkHeader, path, async (byteCount) => {
 					payloadBytesRead = byteCount;
 
 					const payload = await bytes.read(byteCount);
