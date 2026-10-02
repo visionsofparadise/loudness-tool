@@ -51,35 +51,58 @@ const formatChunkOf = (format: WavHeaderFormat, isExtensible: boolean): Buffer =
 	return chunk;
 };
 
-const ds64ChunkOf = (riffSize: number, dataSize: number, sampleCount: number): Buffer => {
+const sizeChunkOf = (sizes: { riffSize: number; dataSize: number; sampleCount: number } | undefined): Buffer => {
 	const chunk = Buffer.alloc(CHUNK_HEADER_SIZE + DS64_SIZE);
 
-	chunk.write("ds64", 0);
+	chunk.write(sizes === undefined ? "JUNK" : "ds64", 0);
 	chunk.writeUInt32LE(DS64_SIZE, 4);
-	chunk.writeBigUInt64LE(BigInt(riffSize), 8);
-	chunk.writeBigUInt64LE(BigInt(dataSize), 16);
-	chunk.writeBigUInt64LE(BigInt(sampleCount), 24);
-	chunk.writeUInt32LE(0, 32);
+
+	if (sizes !== undefined) {
+		chunk.writeBigUInt64LE(BigInt(sizes.riffSize), 8);
+		chunk.writeBigUInt64LE(BigInt(sizes.dataSize), 16);
+		chunk.writeBigUInt64LE(BigInt(sizes.sampleCount), 24);
+		chunk.writeUInt32LE(0, 32);
+	}
 
 	return chunk;
 };
 
-export const wavHeaderOf = (format: WavHeaderFormat, dataSize: number): Buffer => {
-	const formatChunk = formatChunkOf(format, format.channelCount > 2 || format.channelMask !== 0);
-	const riffSizeOf = (ds64Length: number): number =>
-		RIFF_PREAMBLE_SIZE + ds64Length + formatChunk.length + CHUNK_HEADER_SIZE - 8 + dataSize;
-	const isRf64 = riffSizeOf(0) > RIFF_SIZE_LIMIT;
+const headerOf = (
+	format: WavHeaderFormat,
+	dataSize: number,
+	layout: { readonly isExtensible: boolean; readonly reservesSizeChunk: boolean },
+): Buffer => {
+	const formatChunk = formatChunkOf(format, layout.isExtensible);
+	const riffSizeOf = (hasSizeChunk: boolean): number =>
+		RIFF_PREAMBLE_SIZE +
+		(hasSizeChunk ? CHUNK_HEADER_SIZE + DS64_SIZE : 0) +
+		formatChunk.length +
+		CHUNK_HEADER_SIZE -
+		8 +
+		dataSize;
+	const isRf64 = riffSizeOf(layout.reservesSizeChunk) > RIFF_SIZE_LIMIT;
+	const hasSizeChunk = layout.reservesSizeChunk || isRf64;
+	const riffSize = riffSizeOf(hasSizeChunk);
 	const preamble = Buffer.alloc(RIFF_PREAMBLE_SIZE);
 	const dataChunkHeader = Buffer.alloc(CHUNK_HEADER_SIZE);
-	const ds64Chunk = isRf64
-		? ds64ChunkOf(riffSizeOf(CHUNK_HEADER_SIZE + DS64_SIZE), dataSize, Math.floor(dataSize / format.blockAlign))
+	const sizeChunk = hasSizeChunk
+		? sizeChunkOf(isRf64 ? { riffSize, dataSize, sampleCount: Math.floor(dataSize / format.blockAlign) } : undefined)
 		: Buffer.alloc(0);
 
 	preamble.write(isRf64 ? "RF64" : "RIFF", 0);
-	preamble.writeUInt32LE(isRf64 ? RIFF_SIZE_LIMIT : riffSizeOf(0), 4);
+	preamble.writeUInt32LE(isRf64 ? RIFF_SIZE_LIMIT : riffSize, 4);
 	preamble.write("WAVE", 8);
 	dataChunkHeader.write("data", 0);
 	dataChunkHeader.writeUInt32LE(isRf64 ? RIFF_SIZE_LIMIT : dataSize, 4);
 
-	return Buffer.concat([preamble, ds64Chunk, formatChunk, dataChunkHeader]);
+	return Buffer.concat([preamble, sizeChunk, formatChunk, dataChunkHeader]);
 };
+
+export const wavHeaderOf = (format: WavHeaderFormat, dataSize: number): Buffer =>
+	headerOf(format, dataSize, {
+		isExtensible: format.channelCount > 2 || format.channelMask !== 0,
+		reservesSizeChunk: false,
+	});
+
+export const spoolHeaderOf = (format: WavHeaderFormat, dataSize: number): Buffer =>
+	headerOf(format, dataSize, { isExtensible: true, reservesSizeChunk: true });

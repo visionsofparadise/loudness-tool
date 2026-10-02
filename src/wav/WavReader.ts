@@ -4,7 +4,7 @@ import { parseWavFormat, type ParsedWavFormat, type SourceBitDepth } from "./uti
 
 export const BLOCK_FRAMES = 65536;
 
-interface StreamFormat {
+export interface StreamFormat {
 	readonly sampleRate: number;
 	readonly channelCount: number;
 	readonly channelMask: number;
