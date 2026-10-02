@@ -4,7 +4,8 @@ import { computeLoudnessRange } from "../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
 import { linearToDb } from "../utils/db";
-import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
+import { withAudioInput } from "./utils/AudioInput";
+import { pushWavBlocks } from "./utils/withWavReader";
 import type { SourceBitDepth } from "../wav/utils/wavFormat";
 import type { Command } from "commander";
 
@@ -44,39 +45,47 @@ const formatHuman = (result: StatsJson): string => {
 	].join("\n")}\n`;
 };
 
+const STDIN_PATH = "-";
+
 const errorMessageOf = (error: unknown, inputPath: string): string => {
 	const message = error instanceof Error ? error.message : String(error);
 
-	return message.includes(inputPath) ? message : `Cannot read "${inputPath}": ${message}`;
+	return inputPath !== STDIN_PATH && message.includes(inputPath) ? message : `Cannot read "${inputPath}": ${message}`;
 };
 
 const measureStats = async (inputPath: string): Promise<StatsJson> =>
-	withWavReader(inputPath, async (reader) => {
-		const { sampleRate, channelCount, channelMask, bitDepth } = reader.format;
-		const weights = channelWeightsOf(channelCount, channelMask);
-		const truePeakAccumulator = new TruePeakAccumulator(channelCount);
-		const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, weights);
-		const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, weights);
+	withAudioInput(inputPath, { replayable: false, scratchDirectory: undefined }, async (input) =>
+		input.withFirstPass(async (source) => {
+			const { sampleRate, channelCount, channelMask, bitDepth } = source.format;
+			const weights = channelWeightsOf(channelCount, channelMask);
+			const truePeakAccumulator = new TruePeakAccumulator(channelCount);
+			const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, weights);
+			const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, weights);
 
-		const frameCount = await pushWavBlocks(reader, [truePeakAccumulator, lufsAccumulator, shortTermAccumulator]);
+			const frameCount = await pushWavBlocks(source, [truePeakAccumulator, lufsAccumulator, shortTermAccumulator]);
 
-		const truePeak = truePeakAccumulator.finalize();
-		const integrated = lufsAccumulator.finalize();
-		const shortTerm = shortTermAccumulator.finalize();
+			const truePeak = truePeakAccumulator.finalize();
+			const integrated = lufsAccumulator.finalize();
+			const shortTerm = shortTermAccumulator.finalize();
 
-		return {
-			path: inputPath,
-			sampleRate,
-			channelCount,
-			bitDepth,
-			durationSeconds: sampleRate === 0 ? 0 : frameCount / sampleRate,
-			truePeakDb: frameCount === 0 ? null : linearToDb(truePeak),
-			integratedLufs: Number.isFinite(integrated) ? integrated : null,
-			loudnessRange: shortTerm.length === 0 ? null : computeLoudnessRange(shortTerm),
-		};
-	});
+			return {
+				path: inputPath,
+				sampleRate,
+				channelCount,
+				bitDepth,
+				durationSeconds: sampleRate === 0 ? 0 : frameCount / sampleRate,
+				truePeakDb: frameCount === 0 ? null : linearToDb(truePeak),
+				integratedLufs: Number.isFinite(integrated) ? integrated : null,
+				loudnessRange: shortTerm.length === 0 ? null : computeLoudnessRange(shortTerm),
+			};
+		}),
+	);
 
 export const stats = async (inputs: Array<string>, options: StatsOptions): Promise<void> => {
+	if (inputs.filter((inputPath) => inputPath === STDIN_PATH).length > 1) {
+		throw new Error("stdin can be read once");
+	}
+
 	const results: Array<StatsJson> = [];
 	let failed = false;
 
@@ -112,7 +121,7 @@ export const addStatsCommand = (program: Command): void => {
 	program
 		.command("stats")
 		.description("Report true-peak, integrated loudness, and loudness range of WAV files")
-		.argument("<inputs...>", "input WAV paths")
+		.argument("<inputs...>", "input WAV paths, or - for stdin")
 		.option("--json", "print JSON")
 		.action(stats);
 };

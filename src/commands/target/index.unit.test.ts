@@ -10,6 +10,7 @@ import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
 import { dbToLinear, linearToDb } from "../../utils/db";
 import { SampleFile } from "../../utils/SampleFile";
 import { Scratch } from "../../utils/Scratch";
+import { runSilenceOnStdin, runStdioCombinations } from "../../utils/testCli";
 import { createSine } from "../../utils/testSignals";
 import { writeExtensibleWav } from "../../utils/testWav";
 import { WavWriter } from "../../wav/WavWriter";
@@ -626,5 +627,64 @@ describe("target", () => {
 		} finally {
 			createSpy.mockRestore();
 		}
+	});
+});
+
+describe("target on stdin and stdout", () => {
+	let workingDirectory: string;
+
+	beforeEach(async () => {
+		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-target-stdio-"));
+	});
+
+	afterEach(async () => {
+		await rm(workingDirectory, { recursive: true, force: true });
+	});
+
+	it("reads - and writes -o - byte-identically to file mode, printing the summary to stderr for -o -", async () => {
+		const inputPath = join(workingDirectory, "input.wav");
+
+		await writeWav(inputPath, createSine(2 * SAMPLE_RATE, 2, SAMPLE_RATE, 997, 0.3));
+
+		const runs = await runStdioCombinations({
+			command: ["target", "--lufs", "-16"],
+			inputPath,
+			directory: workingDirectory,
+		});
+		const stdoutSummary = runs.fileRun.stderr + runs.summaryFor("-");
+
+		expect(runs.fileRun.exitCode).toBeUndefined();
+		expect(runs.fileOutput.length).toBeGreaterThan(0);
+		expect(runs.stdinOutput.equals(runs.fileOutput)).toBe(true);
+		expect(runs.stdoutRun.stdout.equals(runs.fileOutput)).toBe(true);
+		expect(runs.pipeRun.stdout.equals(runs.fileOutput)).toBe(true);
+		expect(runs.stdinRun.stdout.toString("utf8")).toBe(runs.summaryFor(runs.stdinPath));
+		expect(runs.stdinRun.stderr).toBe(runs.fileRun.stderr);
+		expect(runs.stdoutRun.stderr).toBe(stdoutSummary);
+		expect(runs.pipeRun.stderr).toBe(stdoutSummary);
+		expect(runs.pipeRun.stderr).toMatch(/output {4,}-\n$/);
+		expect([runs.stdinRun.exitCode, runs.stdoutRun.exitCode, runs.pipeRun.exitCode]).toEqual([
+			undefined,
+			undefined,
+			undefined,
+		]);
+	});
+
+	it("passes silence on stdin through to the input's samples", async () => {
+		const inputPath = join(workingDirectory, "silence.wav");
+
+		await writeWav(inputPath, [new Float64Array(4800), new Float64Array(4800)]);
+
+		const runs = await runSilenceOnStdin({
+			command: ["target", "--lufs", "-16"],
+			inputPath,
+			directory: workingDirectory,
+		});
+
+		expect(runs.fileRun.exitCode).toBeUndefined();
+		expect(runs.pipeRun.exitCode).toBeUndefined();
+		expect(runs.pipeRun.stderr).toContain("passed through unchanged");
+		expect(runs.fileSamples).toEqual(runs.inputSamples);
+		expect(runs.pipeSamples).toEqual(runs.inputSamples);
 	});
 });

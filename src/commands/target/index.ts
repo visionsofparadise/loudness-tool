@@ -1,8 +1,9 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
+import { scratchDirectoryOf, withAudioInput, type AudioInput } from "../utils/AudioInput";
 import { copyUnchanged } from "../utils/copyUnchanged";
-import { withWavReader } from "../utils/withWavReader";
+import { sinkOf, summaryStreamOf } from "../utils/sinks";
 import { withWavWriter } from "../utils/withWavWriter";
 import { forEachEnvelopedBlock } from "./utils/apply";
 import { measureSource } from "./utils/measureSource";
@@ -123,44 +124,35 @@ const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets =>
 const figureOf = (value: number | null, unit: string): string =>
 	value === null ? "n/a" : `${value.toFixed(2)} ${unit}`;
 
-const applyEnvelopeAndWrite = async (inputPath: string, sink: WavSink, envelope: SampleFile): Promise<void> => {
-	await withWavWriter(inputPath, sink, async (reader, writer) => {
+const applyEnvelopeAndWrite = async (replayPath: string, sink: WavSink, envelope: SampleFile): Promise<void> => {
+	await withWavWriter(replayPath, sink, async (reader, writer) => {
 		await reader.close();
-		await forEachEnvelopedBlock(inputPath, envelope, async (channels) => {
+		await forEachEnvelopedBlock(replayPath, envelope, async (channels) => {
 			await writer.write(channels);
 		});
 	});
 };
 
-export const target = async (inputPath: string, options: TargetOptions): Promise<void> => {
-	const limitPercentile = options.limitPercentile ?? DEFAULT_LIMIT_PERCENTILE;
-	const smoothingMs = options.smoothing ?? DEFAULT_SMOOTHING_MS;
-	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE;
-	const neverExpand = options.neverExpand === true;
-
-	assertBounded("lufs", options.lufs, isLufs, LUFS_RANGE);
-	assertBoundedNegativeDb("tp", -24, options.tp);
-	assertBoundedNegativeDb("pivot", -80, options.pivot);
-	assertBoundedNegativeDb("floor", -100, options.floor);
-	assertBoundedNegativeDb("limit-db", -60, options.limitDb);
-	assertBounded("limit-percentile", options.limitPercentile, isLimitPercentile, LIMIT_PERCENTILE_RANGE);
-	assertBounded("smoothing", options.smoothing, isSmoothing, SMOOTHING_RANGE);
-	assertBounded("tolerance", options.tolerance, isTolerance, TOLERANCE_RANGE);
-
-	if (options.floor !== undefined && options.pivot !== undefined && options.floor >= options.pivot) {
-		throw new InvalidArgumentError("floor must be < pivot when both are supplied");
-	}
-
-	const targets = targetsOf(options.lufs, options.tp);
-
+const fitInput = async (
+	input: AudioInput,
+	options: TargetOptions,
+	settings: {
+		readonly targets: Targets;
+		readonly limitPercentile: number;
+		readonly smoothingMs: number;
+		readonly tolerance: number;
+		readonly neverExpand: boolean;
+	},
+): Promise<void> => {
+	const { targets, limitPercentile, smoothingMs, tolerance, neverExpand } = settings;
 	const scratch = await Scratch.create(options.scratchDir);
 	const errors: Array<unknown> = [];
 	let winningEnvelope: SampleFile | undefined;
 
 	try {
-		const measurement = await withWavReader(inputPath, async (reader) =>
+		const measurement = await input.withFirstPass(async (source) =>
 			measureSource({
-				source: reader,
+				source,
 				scratch,
 				limitPercentile,
 				halfWidthOf: (sampleRate) => windowSamplesFromMs(smoothingMs, sampleRate),
@@ -170,7 +162,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 		winningEnvelope = measurement.detectionEnvelope;
 
 		if (!Number.isFinite(measurement.integratedLufs)) {
-			await copyUnchanged(inputPath, options.output);
+			await copyUnchanged(input.replayPath(), sinkOf(options.output));
 			process.stderr.write("source has no measurable loudness; passed through unchanged\n");
 		} else {
 			let effectivePivotDb: number;
@@ -201,7 +193,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 			}
 
 			const result = await iterateForTargets({
-				inputPath,
+				inputPath: input.replayPath(),
 				scratch,
 				sampleRate: measurement.sampleRate,
 				channelCount: measurement.channelCount,
@@ -225,9 +217,9 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 
 			winningEnvelope = result.bestSmoothedEnvelope;
 
-			await applyEnvelopeAndWrite(inputPath, { kind: "file", path: options.output }, result.bestSmoothedEnvelope);
+			await applyEnvelopeAndWrite(input.replayPath(), sinkOf(options.output), result.bestSmoothedEnvelope);
 
-			process.stdout.write(
+			summaryStreamOf(options.output).write(
 				`${[
 					alignedLine("output integrated", figureOf(result.winnerOutputLufs, "LUFS")),
 					alignedLine("output true peak", figureOf(result.winnerOutputTruePeakDb, "dBTP")),
@@ -264,12 +256,38 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	}
 };
 
+export const target = async (inputPath: string, options: TargetOptions): Promise<void> => {
+	const limitPercentile = options.limitPercentile ?? DEFAULT_LIMIT_PERCENTILE;
+	const smoothingMs = options.smoothing ?? DEFAULT_SMOOTHING_MS;
+	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE;
+	const neverExpand = options.neverExpand === true;
+
+	assertBounded("lufs", options.lufs, isLufs, LUFS_RANGE);
+	assertBoundedNegativeDb("tp", -24, options.tp);
+	assertBoundedNegativeDb("pivot", -80, options.pivot);
+	assertBoundedNegativeDb("floor", -100, options.floor);
+	assertBoundedNegativeDb("limit-db", -60, options.limitDb);
+	assertBounded("limit-percentile", options.limitPercentile, isLimitPercentile, LIMIT_PERCENTILE_RANGE);
+	assertBounded("smoothing", options.smoothing, isSmoothing, SMOOTHING_RANGE);
+	assertBounded("tolerance", options.tolerance, isTolerance, TOLERANCE_RANGE);
+
+	if (options.floor !== undefined && options.pivot !== undefined && options.floor >= options.pivot) {
+		throw new InvalidArgumentError("floor must be < pivot when both are supplied");
+	}
+
+	const targets = targetsOf(options.lufs, options.tp);
+
+	await withAudioInput(inputPath, { replayable: true, scratchDirectory: options.scratchDir }, async (input) =>
+		fitInput(input, options, { targets, limitPercentile, smoothingMs, tolerance, neverExpand }),
+	);
+};
+
 export const addTargetCommand = (program: Command): void => {
 	const command = program.command("target");
 
 	command.description("Fit a WAV file to an integrated-loudness target, a true-peak target, or both");
-	command.argument("<input>", "input WAV path");
-	command.requiredOption("-o, --output <path>", "output WAV path");
+	command.argument("<input>", "input WAV path, or - for stdin");
+	command.requiredOption("-o, --output <path>", "output WAV path, or - for stdout");
 	command.option(
 		"--lufs <n>",
 		"target integrated loudness in LUFS; without it the body gain follows the limit gain",
@@ -297,6 +315,7 @@ export const addTargetCommand = (program: Command): void => {
 		parseTolerance,
 		DEFAULT_TOLERANCE,
 	);
-	command.option("--scratch-dir <path>", "directory for temporary sample files");
-	command.action(target);
+	command.action(async (input: string, options: TargetOptions) =>
+		target(input, { ...options, scratchDir: scratchDirectoryOf(command) }),
+	);
 };

@@ -1,7 +1,9 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
 import { nearestWritableBitDepth, type WavBitDepth } from "../../wav/utils/wavFormat";
-import { pushWavBlocks, withWavReader } from "../utils/withWavReader";
+import { scratchDirectoryOf, withAudioInput } from "../utils/AudioInput";
+import { sinkOf, summaryStreamOf } from "../utils/sinks";
+import { pushWavBlocks } from "../utils/withWavReader";
 import { applyWalk } from "./utils/apply";
 import { crestLayoutOf, stretchFramesOf } from "./utils/ladder";
 import { printedDbOf } from "./utils/rounding";
@@ -13,6 +15,7 @@ interface CrestOptions {
 	readonly output: string;
 	readonly spread?: number;
 	readonly smoothing?: number;
+	readonly scratchDir?: string;
 }
 
 const LABEL_WIDTH = 16;
@@ -78,48 +81,52 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 		spreadMs: options.spread ?? DEFAULT_SPREAD_MS,
 		smoothingMs: options.smoothing ?? DEFAULT_SMOOTHING_MS,
 	};
-	const measurement = await withWavReader(inputPath, async (reader) => meterSource(reader, ladder));
-	const { sampleRate, channelCount, bitDepth, readings } = measurement;
-	const layout = crestLayoutOf({ ...ladder, sampleRate, frameCount: measurement.frameCount });
 
-	if (readings.length !== layout.stretchCount) {
-		throw new Error(`crest metered ${readings.length} stretches for a layout of ${layout.stretchCount}`);
-	}
+	await withAudioInput(inputPath, { replayable: true, scratchDirectory: options.scratchDir }, async (input) => {
+		const measurement = await input.withFirstPass(async (source) => meterSource(source, ladder));
+		const { sampleRate, channelCount, bitDepth, readings } = measurement;
+		const layout = crestLayoutOf({ ...ladder, sampleRate, frameCount: measurement.frameCount });
 
-	const solution = await solveCrest({
-		inputPath,
-		layout,
-		bitDepth,
-		channelCount,
-		readings,
+		if (readings.length !== layout.stretchCount) {
+			throw new Error(`crest metered ${readings.length} stretches for a layout of ${layout.stretchCount}`);
+		}
+
+		const replayPath = input.replayPath();
+		const solution = await solveCrest({
+			inputPath: replayPath,
+			layout,
+			bitDepth,
+			channelCount,
+			readings,
+		});
+		const outputTruePeak = await applyWalk({
+			inputPath: replayPath,
+			sink: sinkOf(options.output),
+			layout,
+			bitDepth,
+			channelCount,
+			walk: solution.walk,
+		});
+		const sourceDb = printedDbOf(measurement.truePeak);
+		const outputDb = printedDbOf(outputTruePeak);
+
+		summaryStreamOf(options.output).write(
+			`${[
+				alignedLine("source true peak", `${sourceDb.toFixed(2)} dBTP`),
+				alignedLine("output true peak", `${outputDb.toFixed(2)} dBTP`),
+				alignedLine("delta", `${(outputDb - sourceDb).toFixed(2)} dB`),
+				alignedLine("output", options.output),
+			].join("\n")}\n`,
+		);
 	});
-	const outputTruePeak = await applyWalk({
-		inputPath,
-		sink: { kind: "file", path: options.output },
-		layout,
-		bitDepth,
-		channelCount,
-		walk: solution.walk,
-	});
-	const sourceDb = printedDbOf(measurement.truePeak);
-	const outputDb = printedDbOf(outputTruePeak);
-
-	process.stdout.write(
-		`${[
-			alignedLine("source true peak", `${sourceDb.toFixed(2)} dBTP`),
-			alignedLine("output true peak", `${outputDb.toFixed(2)} dBTP`),
-			alignedLine("delta", `${(outputDb - sourceDb).toFixed(2)} dB`),
-			alignedLine("output", options.output),
-		].join("\n")}\n`,
-	);
 };
 
 export const addCrestCommand = (program: Command): void => {
 	const command = program.command("crest");
 
 	command.description("Lower the true peak of a WAV file by dispersing phase");
-	command.argument("<input>", "input WAV path");
-	command.requiredOption("-o, --output <path>", "output WAV path");
+	command.argument("<input>", "input WAV path, or - for stdin");
+	command.requiredOption("-o, --output <path>", "output WAV path, or - for stdout");
 	command.option("--spread <ms>", "furthest energy is moved in milliseconds", parseSpread, DEFAULT_SPREAD_MS);
 	command.option(
 		"--smoothing <ms>",
@@ -127,5 +134,7 @@ export const addCrestCommand = (program: Command): void => {
 		parseSmoothing,
 		DEFAULT_SMOOTHING_MS,
 	);
-	command.action(crest);
+	command.action(async (input: string, options: CrestOptions) =>
+		crest(input, { ...options, scratchDir: scratchDirectoryOf(command) }),
+	);
 };

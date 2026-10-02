@@ -15,7 +15,12 @@ const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.me
 export const createProgram = (): Command => {
 	const program = new Command();
 
-	program.name("loudness-tool").description("WAV loudness processing").version(packageJson.version);
+	program
+		.name("loudness-tool")
+		.description("WAV loudness processing")
+		.version(packageJson.version)
+		.configureHelp({ showGlobalOptions: true });
+	program.option("--scratch-dir <path>", "directory for temporary files");
 
 	addStatsCommand(program);
 	addTpNormCommand(program);

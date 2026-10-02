@@ -5,13 +5,16 @@ import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
 import { dbToLinear } from "../utils/db";
 import { isMultipleOf } from "../utils/multipleOf";
 import { applyUniformGain } from "./utils/applyUniformGain";
+import { scratchDirectoryOf, withAudioInput } from "./utils/AudioInput";
 import { copyUnchanged } from "./utils/copyUnchanged";
-import { pushWavBlocks, withWavReader } from "./utils/withWavReader";
+import { sinkOf, summaryStreamOf } from "./utils/sinks";
+import { pushWavBlocks } from "./utils/withWavReader";
 import type { BlockSource } from "../wav/WavReader";
 
 interface LufsNormOptions {
 	readonly output: string;
 	readonly lufs?: number;
+	readonly scratchDir?: string;
 }
 
 const LABEL_WIDTH = 18;
@@ -58,43 +61,50 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 
 	assertTargetLufs(target, target);
 
-	const measurement = await withWavReader(inputPath, measureIntegratedAndTruePeak);
+	await withAudioInput(inputPath, { replayable: true, scratchDirectory: options.scratchDir }, async (input) => {
+		const measurement = await input.withFirstPass(measureIntegratedAndTruePeak);
+		const sink = sinkOf(options.output);
 
-	if (!Number.isFinite(measurement.integratedLufs)) {
-		await copyUnchanged(inputPath, options.output);
-		process.stderr.write("source has no measurable loudness; passed through unchanged\n");
+		if (!Number.isFinite(measurement.integratedLufs)) {
+			await copyUnchanged(input.replayPath(), sink);
+			process.stderr.write("source has no measurable loudness; passed through unchanged\n");
 
-		return;
-	}
+			return;
+		}
 
-	const gainDb = target - measurement.integratedLufs;
-	const gain = dbToLinear(gainDb);
-	const sourceTpDb = 20 * Math.log10(measurement.truePeak);
-	const outputTruePeakDb = sourceTpDb + gainDb;
+		const gainDb = target - measurement.integratedLufs;
+		const gain = dbToLinear(gainDb);
+		const sourceTpDb = 20 * Math.log10(measurement.truePeak);
+		const outputTruePeakDb = sourceTpDb + gainDb;
 
-	await applyUniformGain(inputPath, { kind: "file", path: options.output }, gain);
+		await applyUniformGain(input.replayPath(), sink, gain);
 
-	if (outputTruePeakDb > 0) {
-		process.stderr.write(`warning: predicted output true peak ${outputTruePeakDb.toFixed(2)} dBTP exceeds 0 dBTP\n`);
-	}
+		if (outputTruePeakDb > 0) {
+			process.stderr.write(
+				`warning: predicted output true peak ${outputTruePeakDb.toFixed(2)} dBTP exceeds 0 dBTP\n`,
+			);
+		}
 
-	process.stdout.write(
-		`${[
-			alignedLine("source integrated", `${measurement.integratedLufs.toFixed(2)} LUFS`),
-			alignedLine("target", `${target.toFixed(2)} LUFS`),
-			alignedLine("applied gain", `${gainDb.toFixed(2)} dB`),
-			alignedLine("output true peak", `${outputTruePeakDb.toFixed(2)} dBTP`),
-			alignedLine("output", options.output),
-		].join("\n")}\n`,
-	);
+		summaryStreamOf(options.output).write(
+			`${[
+				alignedLine("source integrated", `${measurement.integratedLufs.toFixed(2)} LUFS`),
+				alignedLine("target", `${target.toFixed(2)} LUFS`),
+				alignedLine("applied gain", `${gainDb.toFixed(2)} dB`),
+				alignedLine("output true peak", `${outputTruePeakDb.toFixed(2)} dBTP`),
+				alignedLine("output", options.output),
+			].join("\n")}\n`,
+		);
+	});
 };
 
 export const addLufsNormCommand = (program: Command): void => {
 	const command = program.command("lufs-norm");
 
 	command.description("Normalize a WAV file to an integrated-loudness target");
-	command.argument("<input>", "input WAV path");
-	command.requiredOption("-o, --output <path>", "output WAV path");
+	command.argument("<input>", "input WAV path, or - for stdin");
+	command.requiredOption("-o, --output <path>", "output WAV path, or - for stdout");
 	command.option("--lufs <LUFS>", "target integrated loudness in LUFS", parseTargetLufs, DEFAULT_TARGET_LUFS);
-	command.action(lufsNorm);
+	command.action(async (input: string, options: LufsNormOptions) =>
+		lufsNorm(input, { ...options, scratchDir: scratchDirectoryOf(command) }),
+	);
 };

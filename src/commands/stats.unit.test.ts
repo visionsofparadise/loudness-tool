@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linearToDb } from "../utils/db";
+import { runCli } from "../utils/testCli";
 import { createSine } from "../utils/testSignals";
 import { writeExtensibleWav } from "../utils/testWav";
 import { WavWriter } from "../wav/WavWriter";
@@ -441,5 +442,51 @@ describe("stats", () => {
 			expect(monoMasked).toEqual(monoPlain);
 			expect(stereoMasked).toEqual(stereoPlain);
 		});
+	});
+});
+
+describe("stats on stdin", () => {
+	let workingDirectory: string;
+
+	beforeEach(async () => {
+		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-stats-stdin-"));
+	});
+
+	afterEach(async () => {
+		await rm(workingDirectory, { recursive: true, force: true });
+	});
+
+	it("measures - among file inputs as the file it carries, with path -", async () => {
+		const firstPath = join(workingDirectory, "first.wav");
+		const secondPath = join(workingDirectory, "second.wav");
+
+		await writeWav(firstPath, createSine(SAMPLE_RATE, 2, SAMPLE_RATE, 997, 0.25));
+		await writeWav(secondPath, createSine(2 * SAMPLE_RATE, 2, SAMPLE_RATE, 440, 0.5), "16");
+
+		const run = await runCli(["stats", firstPath, "-", secondPath, "--json"], await readFile(secondPath));
+		const results = JSON.parse(run.stdout.toString("utf8")) as Array<{ path: string }>;
+
+		expect(run.exitCode).toBeUndefined();
+		expect(results.map((result) => result.path)).toEqual([firstPath, "-", secondPath]);
+		expect(results[1]).toEqual({ ...results[2], path: "-" });
+	});
+
+	it("rejects a second - before reading any input", async () => {
+		const inputPath = join(workingDirectory, "input.wav");
+
+		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, 0.5));
+
+		const run = await runCli(["stats", inputPath, "-", "-"], await readFile(inputPath));
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toBe("error: stdin can be read once\n");
+		expect(run.stdout.length).toBe(0);
+	});
+
+	it('prefixes Cannot read "-" to a stdin read failure', async () => {
+		const run = await runCli(["stats", "-"], Buffer.from("not a wav stream"));
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toBe('error: Cannot read "-": Not a WAV stream\n');
 	});
 });

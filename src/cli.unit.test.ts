@@ -1,5 +1,11 @@
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createProgram, runProgram } from "./cli";
+import { runCli } from "./utils/testCli";
+import { createSine } from "./utils/testSignals";
+import { WavWriter } from "./wav/WavWriter";
 
 describe("cli", () => {
 	it("names the program loudness-tool", () => {
@@ -39,6 +45,53 @@ describe("cli", () => {
 		} finally {
 			write.mockRestore();
 			process.exitCode = previousExitCode;
+		}
+	});
+
+	it("reads --scratch-dir as a program option before or after the subcommand", async () => {
+		const workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-cli-"));
+
+		try {
+			const inputPath = join(workingDirectory, "input.wav");
+			const writer = await WavWriter.create(
+				{ kind: "file", path: inputPath },
+				{ sampleRate: 48000, channelCount: 1, channelMask: 0, bitDepth: "16", frameCount: 4800 },
+			);
+
+			await writer.write(createSine(4800, 1, 48000, 997, 0.5));
+			await writer.close();
+
+			const input = await readFile(inputPath);
+			const before = join(workingDirectory, "before");
+			const after = join(workingDirectory, "after");
+			const beforeRun = await runCli(["--scratch-dir", before, "tp-norm", "-", "-o", "-"], input);
+			const afterRun = await runCli(["tp-norm", "-", "-o", "-", "--scratch-dir", after], input);
+
+			expect([beforeRun.exitCode, afterRun.exitCode]).toEqual([undefined, undefined]);
+			expect(afterRun.stdout.equals(beforeRun.stdout)).toBe(true);
+			expect(await readdir(before)).toEqual([]);
+			expect(await readdir(after)).toEqual([]);
+			expect(createProgram().options.map((option) => option.long)).toContain("--scratch-dir");
+			expect(
+				createProgram()
+					.commands.flatMap((command) => command.options)
+					.map((option) => option.long),
+			).not.toContain("--scratch-dir");
+		} finally {
+			await rm(workingDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("shows - for stdin and stdout and the program's --scratch-dir in every command's help", () => {
+		for (const command of createProgram().commands) {
+			const help = command.helpInformation();
+
+			expect(help).toContain("- for stdin");
+			expect(help).toContain("--scratch-dir <path>");
+
+			if (command.name() !== "stats") {
+				expect(help).toContain("output WAV path, or - for stdout");
+			}
 		}
 	});
 });
