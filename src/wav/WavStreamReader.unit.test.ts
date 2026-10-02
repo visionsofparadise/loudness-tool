@@ -139,6 +139,7 @@ describe("WavStreamReader", () => {
 		const { stream, isFed } = feed(bytes, writeSize);
 		const reader = await WavStreamReader.open(
 			stream,
+			"-",
 			spoolPath === undefined
 				? undefined
 				: async (format, blockAlign) => WavSpool.create(spoolPath, format, blockAlign),
@@ -244,7 +245,7 @@ describe("WavStreamReader", () => {
 	it("drains a trailing chunk far larger than the stream's buffers to the end of the stream", async () => {
 		const { file } = wavBytesOf({ channels: createNoise(700, 2, 4), bitDepth: "16", afterData: LARGE_LIST_CHUNK });
 		const { stream, isFed } = feed(file, 65536);
-		const reader = await WavStreamReader.open(stream);
+		const reader = await WavStreamReader.open(stream, "-");
 
 		try {
 			expect(blockFramesOf(await collect(reader))).toEqual([700]);
@@ -301,7 +302,7 @@ describe("WavStreamReader", () => {
 		const spoolPath = join(workingDirectory, "spool.wav");
 		const { file } = wavBytesOf({ channels: createNoise(2 * BLOCK_FRAMES, 1, 2), bitDepth: "16" });
 		const { stream } = feed(file, 65536);
-		const reader = await WavStreamReader.open(stream, async (format, blockAlign) =>
+		const reader = await WavStreamReader.open(stream, "-", async (format, blockAlign) =>
 			WavSpool.create(spoolPath, format, blockAlign),
 		);
 
@@ -321,7 +322,7 @@ describe("WavStreamReader", () => {
 		const spoolPath = join(workingDirectory, "spool.wav");
 		const { file } = wavBytesOf({ channels: createNoise(500, 1, 2), bitDepth: "16" });
 		const { stream } = feed(file, 65536);
-		const reader = await WavStreamReader.open(stream, async (format, blockAlign) =>
+		const reader = await WavStreamReader.open(stream, "-", async (format, blockAlign) =>
 			WavSpool.create(spoolPath, format, blockAlign),
 		);
 
@@ -340,16 +341,29 @@ describe("WavStreamReader", () => {
 		}
 	});
 
-	it("rejects a stream that is not WAV", async () => {
+	it("rejects a stream that is not WAV as a file that is not WAV, naming its path", async () => {
 		const { stream } = feed(Buffer.from("not a wav stream at all"), 7);
 
-		await expect(WavStreamReader.open(stream)).rejects.toThrow("Not a WAV stream");
+		await expect(WavStreamReader.open(stream, "-")).rejects.toThrow('Not a WAV file: "-"');
+	});
+
+	it("rejects an empty stream as a file that is not WAV", async () => {
+		const { stream } = feed(Buffer.alloc(0), 7);
+
+		await expect(WavStreamReader.open(stream, "-")).rejects.toThrow('Not a WAV file: "-"');
 	});
 
 	it("rejects a stream that ends before its data chunk", async () => {
 		const { file } = wavBytesOf({ channels: createNoise(10, 1, 1), bitDepth: "16" });
 		const { stream } = feed(file.subarray(0, 60), 7);
 
-		await expect(WavStreamReader.open(stream)).rejects.toThrow("Invalid WAV stream");
+		await expect(WavStreamReader.open(stream, "-")).rejects.toThrow('Invalid WAV file: "-"');
+	});
+
+	it("rejects a stream that ends inside a chunk's payload as an invalid WAV file", async () => {
+		const { file } = wavBytesOf({ channels: createNoise(10, 1, 1), bitDepth: "16" });
+		const { stream } = feed(file.subarray(0, 30), 7);
+
+		await expect(WavStreamReader.open(stream, "-")).rejects.toThrow('Invalid WAV file: "-"');
 	});
 });

@@ -483,10 +483,25 @@ describe("stats on stdin", () => {
 		expect(run.stdout.length).toBe(0);
 	});
 
-	it('prefixes Cannot read "-" to a stdin read failure', async () => {
+	it("reports a stdin that is not WAV as a file that is not WAV, with path -", async () => {
 		const run = await runCli(["stats", "-"], Buffer.from("not a wav stream"));
 
 		expect(run.exitCode).toBe(1);
-		expect(run.stderr).toBe('error: Cannot read "-": Not a WAV stream\n');
+		expect(run.stderr).toBe('error: Not a WAV file: "-"\n');
+	});
+
+	it('prefixes Cannot read "-" to a stdin failure whose message names no path, as for a file', async () => {
+		const inputPath = join(workingDirectory, "input.wav");
+
+		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, 0.5), "16");
+
+		const input = await readFile(inputPath);
+
+		input.writeUInt16LE(0, 22);
+
+		const run = await runCli(["stats", "-"], input);
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toBe('error: Cannot read "-": Invalid WAV file: channelCount 0\n');
 	});
 });

@@ -20,6 +20,10 @@ const SUBFORMAT_GUID_SIZE = 16;
 const FORMAT_READ_SIZE_LIMIT = 64;
 const STREAMING_DATA_SIZE_SENTINEL = 0xffffffff;
 
+export const notWavErrorOf = (path: string): Error => new Error(`Not a WAV file: "${path}"`);
+
+export const invalidWavErrorOf = (path: string): Error => new Error(`Invalid WAV file: "${path}"`);
+
 export const nearestWritableBitDepth = (bitDepth: SourceBitDepth): WavBitDepth => {
 	switch (bitDepth) {
 		case "8":
@@ -216,7 +220,7 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 	const walk = chunkWalkOf(preamble);
 
 	if (walk === undefined) {
-		throw new Error(`Not a WAV file: "${path}"`);
+		throw notWavErrorOf(path);
 	}
 
 	let offset = 12;
@@ -228,8 +232,11 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 		const payloadOffset = offset + 8;
 		const step = await stepChunk(walk, chunkHeader, async (byteCount) => {
 			const payload = Buffer.alloc(byteCount);
+			const { bytesRead } = await fileHandle.read(payload, 0, byteCount, payloadOffset);
 
-			await fileHandle.read(payload, 0, byteCount, payloadOffset);
+			if (bytesRead < byteCount) {
+				throw invalidWavErrorOf(path);
+			}
 
 			return payload;
 		});
@@ -248,5 +255,5 @@ export const parseWavFormat = async (fileHandle: FileHandle, path: string): Prom
 		offset = payloadOffset + step.byteCount;
 	}
 
-	throw new Error(`Invalid WAV file: "${path}"`);
+	throw invalidWavErrorOf(path);
 };

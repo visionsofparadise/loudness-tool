@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -471,6 +471,21 @@ describe("WavReader", () => {
 		});
 
 		await expect(WavReader.open(path)).rejects.toThrow(/Invalid WAV file: blockAlign 0/);
+	});
+
+	it("rejects a file that ends inside a chunk's payload as an invalid WAV file naming its path", async () => {
+		const path = join(workingDirectory, "ends-inside-fmt.wav");
+		const whole = join(workingDirectory, "whole.wav");
+
+		await writeRiffWav(whole, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 1,
+			bitDepth: "16",
+			channels: createRamp(8, 1),
+		});
+		await writeFile(path, (await readFile(whole)).subarray(0, 30));
+
+		await expect(WavReader.open(path)).rejects.toThrow(`Invalid WAV file: "${path}"`);
 	});
 
 	it("rejects a file whose channelCount is 0 with a named Invalid WAV file error", async () => {

@@ -54,6 +54,7 @@ export class AudioInput {
 		const { scratch } = this;
 		const reader = await WavStreamReader.open(
 			process.stdin,
+			this.label,
 			scratch === undefined
 				? undefined
 				: async (format, blockAlign) => WavSpool.create(scratch.filePath(SPOOL_LABEL), format, blockAlign),

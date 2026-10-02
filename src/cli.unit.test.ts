@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -77,6 +77,58 @@ describe("cli", () => {
 					.commands.flatMap((command) => command.options)
 					.map((option) => option.long),
 			).not.toContain("--scratch-dir");
+		} finally {
+			await rm(workingDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("reports a stdin input's read errors as a file input's, with - as its path, on every command", async () => {
+		const workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-cli-"));
+
+		try {
+			const validPath = join(workingDirectory, "valid.wav");
+			const writer = await WavWriter.create(
+				{ kind: "file", path: validPath },
+				{ sampleRate: 48000, channelCount: 1, channelMask: 0, bitDepth: "16", frameCount: 480 },
+			);
+
+			await writer.write(createSine(480, 1, 48000, 997, 0.5));
+			await writer.close();
+
+			const valid = await readFile(validPath);
+			const zeroChannels = Buffer.from(valid);
+
+			zeroChannels.writeUInt16LE(0, 22);
+
+			const inputs = [
+				Buffer.alloc(0),
+				Buffer.from("not a wav file at all"),
+				valid.subarray(0, 30),
+				valid.subarray(0, 36),
+				zeroChannels,
+			];
+			const inputPath = join(workingDirectory, "input.wav");
+			const outputPath = join(workingDirectory, "output.wav");
+			const commands = [
+				["stats"],
+				["tp-norm", "-o", outputPath],
+				["lufs-norm", "-o", outputPath],
+				["crest", "-o", outputPath],
+				["target", "-o", outputPath, "--lufs", "-16"],
+			];
+
+			for (const input of inputs) {
+				await writeFile(inputPath, input);
+
+				for (const [name = "", ...options] of commands) {
+					const fileRun = await runCli([name, inputPath, ...options]);
+					const stdinRun = await runCli([name, "-", ...options], input);
+
+					expect(fileRun.exitCode).toBe(1);
+					expect(stdinRun.exitCode).toBe(1);
+					expect(stdinRun.stderr).toBe(fileRun.stderr.replaceAll(inputPath, "-"));
+				}
+			}
 		} finally {
 			await rm(workingDirectory, { recursive: true, force: true });
 		}

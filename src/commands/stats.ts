@@ -49,7 +49,9 @@ const formatHuman = (result: StatsJson): string => {
 const errorMessageOf = (error: unknown, inputPath: string): string => {
 	const message = error instanceof Error ? error.message : String(error);
 
-	return inputPath !== STDIO_PATH && message.includes(inputPath) ? message : `Cannot read "${inputPath}": ${message}`;
+	const namesInput = message.includes(`"${inputPath}"`) || message.includes(`'${inputPath}'`);
+
+	return namesInput ? message : `Cannot read "${inputPath}": ${message}`;
 };
 
 const measureStats = async (inputPath: string): Promise<StatsJson> =>

@@ -1,5 +1,5 @@
 import { decodeFrames } from "./utils/sampleCodec";
-import { chunkWalkOf, stepChunk } from "./utils/wavFormat";
+import { chunkWalkOf, invalidWavErrorOf, notWavErrorOf, stepChunk } from "./utils/wavFormat";
 import { BLOCK_FRAMES, type AudioBlock, type BlockSource, type StreamFormat } from "./WavReader";
 import type { WavSpool } from "./WavSpool";
 
@@ -22,16 +22,6 @@ class StreamBytes {
 		}
 
 		return this.take(byteCount);
-	}
-
-	async readExactly(byteCount: number): Promise<Buffer> {
-		const bytes = await this.read(byteCount);
-
-		if (bytes.length < byteCount) {
-			throw new Error("Invalid WAV stream: it ends inside the header");
-		}
-
-		return bytes;
 	}
 
 	async skip(byteCount: number): Promise<void> {
@@ -108,29 +98,37 @@ class StreamBytes {
 export class WavStreamReader implements BlockSource {
 	static async open(
 		stream: NodeJS.ReadableStream,
+		path: string,
 		spool?: (format: StreamFormat, blockAlign: number) => Promise<WavSpool>,
 	): Promise<WavStreamReader> {
 		const bytes = new StreamBytes(stream);
 
 		try {
-			const walk = chunkWalkOf(await bytes.readExactly(PREAMBLE_SIZE));
+			const preamble = await bytes.read(PREAMBLE_SIZE);
+			const walk = preamble.length < PREAMBLE_SIZE ? undefined : chunkWalkOf(preamble);
 
 			if (walk === undefined) {
-				throw new Error("Not a WAV stream");
+				throw notWavErrorOf(path);
 			}
 
 			for (;;) {
 				const chunkHeader = await bytes.read(CHUNK_HEADER_SIZE);
 
 				if (chunkHeader.length < CHUNK_HEADER_SIZE) {
-					throw new Error("Invalid WAV stream: it ends before a data chunk");
+					throw invalidWavErrorOf(path);
 				}
 
 				let payloadBytesRead = 0;
 				const step = await stepChunk(walk, chunkHeader, async (byteCount) => {
 					payloadBytesRead = byteCount;
 
-					return bytes.readExactly(byteCount);
+					const payload = await bytes.read(byteCount);
+
+					if (payload.length < byteCount) {
+						throw invalidWavErrorOf(path);
+					}
+
+					return payload;
 				});
 
 				if (step.kind === "data") {
