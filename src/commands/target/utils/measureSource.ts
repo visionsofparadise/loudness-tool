@@ -1,4 +1,5 @@
 import { AmplitudeHistogramAccumulator } from "../../../measurement/AmplitudeHistogramAccumulator";
+import { channelWeightsOf } from "../../../measurement/channelWeights";
 import { IntegratedLufsAccumulator } from "../../../measurement/IntegratedLufsAccumulator";
 import { computeLoudnessRange, getLraConsideredStats } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
@@ -36,6 +37,7 @@ export interface SourceMeasurement {
 	readonly detectionEnvelope: SampleFile;
 	readonly sampleRate: number;
 	readonly channelCount: number;
+	readonly weights: Float64Array;
 	readonly frameCount: number;
 	readonly bitDepth: SourceBitDepth;
 }
@@ -77,6 +79,7 @@ const writeMaxAcrossChannels = (
 
 const writeFrameEnergies = (
 	channels: ReadonlyArray<Float64Array>,
+	weights: Float64Array,
 	frames: number,
 	ring: Float64Array,
 	firstFrameIndex: number,
@@ -84,10 +87,10 @@ const writeFrameEnergies = (
 	for (let frameOffset = 0; frameOffset < frames; frameOffset++) {
 		let energy = 0;
 
-		for (const channel of channels) {
-			const sample = channel[frameOffset] ?? 0;
+		for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
+			const sample = channels[channelIndex]?.[frameOffset] ?? 0;
 
-			energy += sample * sample;
+			energy += sample * sample * (weights[channelIndex] ?? 1);
 		}
 
 		ring[(firstFrameIndex + frameOffset) % ring.length] = energy;
@@ -164,11 +167,12 @@ export const measureSource = async (args: {
 	const detectionEnvelope = await SampleFile.create(scratch, "detection");
 
 	try {
-		const { sampleRate, channelCount, bitDepth } = source.format;
+		const { sampleRate, channelCount, channelMask, bitDepth } = source.format;
+		const weights = channelWeightsOf(channelCount, channelMask);
 		const halfWidth = halfWidthOf(sampleRate);
 		const truePeak = new TruePeakAccumulator(channelCount);
-		const integrated = new IntegratedLufsAccumulator(sampleRate, channelCount);
-		const shortTerm = new ShortTermLoudnessAccumulator(sampleRate, channelCount);
+		const integrated = new IntegratedLufsAccumulator(sampleRate, weights);
+		const shortTerm = new ShortTermLoudnessAccumulator(sampleRate, weights);
 		const levelHistogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
 		const heldHistogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
 		const slidingWindow = new SlidingWindowMaxStream(halfWidth);
@@ -281,7 +285,7 @@ export const measureSource = async (args: {
 			}
 
 			writeMaxAcrossChannels(upChannels, levelsScratch, upChunkLength);
-			writeFrameEnergies(block.channels, frames, energyRing, frameIndex);
+			writeFrameEnergies(block.channels, weights, frames, energyRing, frameIndex);
 			frameIndex += frames;
 
 			await pushAlignedDetection(upChunkLength);
@@ -327,6 +331,7 @@ export const measureSource = async (args: {
 			detectionEnvelope,
 			sampleRate,
 			channelCount,
+			weights,
 			frameCount: frameIndex,
 			bitDepth,
 		};

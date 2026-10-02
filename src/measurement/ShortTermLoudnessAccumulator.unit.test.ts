@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { channelWeightsOf } from "./channelWeights";
 import { createLevelSegments, createSine } from "../utils/testSignals";
 import { computeLoudnessRange } from "./loudnessRange";
 import { ShortTermLoudnessAccumulator } from "./ShortTermLoudnessAccumulator";
@@ -8,7 +9,7 @@ const LUFS_OFFSET = -0.691;
 const POWER_FLOOR_LUFS = LUFS_OFFSET + 10 * Math.log10(1e-10);
 
 const measure = (channels: ReadonlyArray<Float64Array>, sampleRate: number): Float64Array => {
-	const accumulator = new ShortTermLoudnessAccumulator(sampleRate, channels.length);
+	const accumulator = new ShortTermLoudnessAccumulator(sampleRate, channelWeightsOf(channels.length, 0));
 
 	accumulator.push(channels, channels[0]?.length ?? 0);
 
@@ -21,7 +22,7 @@ const measureChunked = (
 	chunkFrames: number,
 ): Float64Array => {
 	const frameCount = channels[0]?.length ?? 0;
-	const accumulator = new ShortTermLoudnessAccumulator(sampleRate, channels.length);
+	const accumulator = new ShortTermLoudnessAccumulator(sampleRate, channelWeightsOf(channels.length, 0));
 
 	for (let offset = 0; offset < frameCount; offset += chunkFrames) {
 		const frames = Math.min(chunkFrames, frameCount - offset);
@@ -95,8 +96,28 @@ describe("ShortTermLoudnessAccumulator", () => {
 		expect(Array.from(measureChunked(channels, SAMPLE_RATE, 7777))).toEqual(Array.from(oneShot));
 	});
 
+	it("weights each channel's short-term loudness by its weight", () => {
+		const [sine = new Float64Array(0)] = createSine(SAMPLE_RATE * 4, 1, SAMPLE_RATE, 1000, 0.1);
+		const silence = new Float64Array(sine.length);
+		const weights = Float64Array.from([1, 1.41]);
+		const measureWeighted = (channels: ReadonlyArray<Float64Array>): Array<number> => {
+			const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, weights);
+
+			accumulator.push(channels, sine.length);
+
+			return Array.from(accumulator.finalize().subarray(0, accumulator.sourceWindowCount));
+		};
+		const first = measureWeighted([sine, silence]);
+		const second = measureWeighted([silence, sine]);
+
+		expect(first.length).toBeGreaterThan(0);
+		second.forEach((value, index) => {
+			expect(value - (first[index] ?? 0)).toBeCloseTo(10 * Math.log10(1.41), 9);
+		});
+	});
+
 	it("finalize is idempotent and rejects every later push", () => {
-		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
+		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, channelWeightsOf(1, 0));
 
 		accumulator.push([new Float64Array(SAMPLE_RATE).fill(0.1)], SAMPLE_RATE);
 
@@ -108,7 +129,7 @@ describe("ShortTermLoudnessAccumulator", () => {
 	});
 
 	it("throws with its own prefix when channelCount is not positive", () => {
-		expect(() => new ShortTermLoudnessAccumulator(SAMPLE_RATE, 0)).toThrow(
+		expect(() => new ShortTermLoudnessAccumulator(SAMPLE_RATE, channelWeightsOf(0, 0))).toThrow(
 			"ShortTermLoudnessAccumulator: channelCount must be positive, got 0",
 		);
 	});
@@ -118,7 +139,7 @@ describe("ShortTermLoudnessAccumulator", () => {
 		const blockStep = Math.round(0.1 * SAMPLE_RATE);
 		const windowsOf = (sourceFrames: number): { sourceWindowCount: number; seriesLength: number } => {
 			const channels = createSine(sourceFrames, 1, SAMPLE_RATE, 1000, 0.1);
-			const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
+			const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, channelWeightsOf(1, 0));
 
 			accumulator.push(channels, sourceFrames);
 

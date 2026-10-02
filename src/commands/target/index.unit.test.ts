@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { channelWeightsOf } from "../../measurement/channelWeights";
 import { createProgram } from "../../cli";
 import { IntegratedLufsAccumulator } from "../../measurement/IntegratedLufsAccumulator";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
@@ -10,7 +11,9 @@ import { dbToLinear, linearToDb } from "../../utils/db";
 import { SampleFile } from "../../utils/SampleFile";
 import { Scratch } from "../../utils/Scratch";
 import { createSine } from "../../utils/testSignals";
+import { writeExtensibleWav } from "../../utils/testWav";
 import { WavWriter } from "../../wav/WavWriter";
+import { stats } from "../stats";
 import { pushWavBlocks, withWavReader } from "../utils/withWavReader";
 import { target } from "./index";
 
@@ -47,7 +50,10 @@ const makeCrossAxis = (seconds: number): Float64Array => {
 
 const measureFile = async (path: string): Promise<{ integratedLufs: number; truePeakDb: number }> =>
 	withWavReader(path, async (reader) => {
-		const lufs = new IntegratedLufsAccumulator(reader.format.sampleRate, reader.format.channelCount);
+		const lufs = new IntegratedLufsAccumulator(
+			reader.format.sampleRate,
+			channelWeightsOf(reader.format.channelCount, reader.format.channelMask),
+		);
 		const truePeak = new TruePeakAccumulator(reader.format.channelCount);
 
 		await pushWavBlocks(reader, [lufs, truePeak]);
@@ -429,16 +435,71 @@ describe("target", () => {
 		expect(explicit.stderr).not.toMatch(/pivot auto-derivation/);
 	}, 60_000);
 
-	it("rejects a 4-channel source", async () => {
-		const inputPath = join(workingDirectory, "quad.wav");
-		const outputPath = join(workingDirectory, "quad-out.wav");
-
-		await writeWav(inputPath, createSine(64, 4, SAMPLE_RATE, 440, 0.5));
-
-		await expect(target(inputPath, { output: outputPath, lufs: -16 })).rejects.toThrow(
-			`${inputPath}: 4 channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+	it("lands loudness on --lufs for a 5.1 source with its signal on the front channels", async () => {
+		const inputPath = join(workingDirectory, "surround.wav");
+		const outputPath = join(workingDirectory, "surround-out.wav");
+		const targetLufs = -20;
+		const tolerance = 0.5;
+		const front = makeCrossAxis(3);
+		const channels = Array.from({ length: 6 }, (_channel, index) =>
+			index < 3 ? front : new Float64Array(front.length),
 		);
-	});
+
+		await writeExtensibleWav(inputPath, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			bitDepth: "32f",
+			channelMask: 0x3f,
+			channels,
+		});
+
+		const { stdout, exitCode } = await capture(() =>
+			target(inputPath, { output: outputPath, lufs: targetLufs, limitDb: -10, tolerance }),
+		);
+		const statsRun = await capture(() => stats([outputPath], { json: true }));
+		const [measured] = JSON.parse(statsRun.stdout) as Array<{ channelCount: number; integratedLufs: number }>;
+
+		expect(exitCode).toBeUndefined();
+		expect(measured?.channelCount).toBe(6);
+		expect(Math.abs((measured?.integratedLufs ?? 0) - targetLufs)).toBeLessThan(tolerance);
+		expect(Math.abs(reportedFigureOf(stdout, "output integrated") - (measured?.integratedLufs ?? 0))).toBeLessThan(
+			0.01,
+		);
+	}, 30_000);
+
+	it("reports and lands --lufs by the stated weights for a 5.1 source with its signal on BL and LFE", async () => {
+		const inputPath = join(workingDirectory, "surround-rear.wav");
+		const outputPath = join(workingDirectory, "surround-rear-out.wav");
+		const targetLufs = -20;
+		const tolerance = 0.5;
+		const rear = makeCrossAxis(3);
+		const channels = Array.from({ length: 6 }, (_channel, index) =>
+			index === 3 || index === 4 ? rear : new Float64Array(rear.length),
+		);
+
+		await writeExtensibleWav(inputPath, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			bitDepth: "32f",
+			channelMask: 0x3f,
+			channels,
+		});
+
+		const { stdout, exitCode } = await capture(() =>
+			target(inputPath, { output: outputPath, lufs: targetLufs, limitDb: -10, tolerance }),
+		);
+		const weightedOutputLufs = await withWavReader(outputPath, async (reader) => {
+			const lufs = new IntegratedLufsAccumulator(reader.format.sampleRate, channelWeightsOf(6, 0x3f));
+
+			await pushWavBlocks(reader, [lufs]);
+
+			return lufs.finalize();
+		});
+
+		expect(exitCode).toBeUndefined();
+		expect(Math.abs(weightedOutputLufs - targetLufs)).toBeLessThan(tolerance);
+		expect(Math.abs(reportedFigureOf(stdout, "output integrated") - weightedOutputLufs)).toBeLessThan(0.01);
+	}, 30_000);
 
 	it("copies an unmeasurable source byte-identically", async () => {
 		const inputPath = join(workingDirectory, "silence.wav");

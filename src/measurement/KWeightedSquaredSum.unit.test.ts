@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { channelWeightsOf } from "./channelWeights";
 import { preFilterCoefficients, rlbFilterCoefficients } from "./kWeighting";
 import { KWeightedSquaredSum } from "./KWeightedSquaredSum";
 
@@ -68,7 +69,7 @@ describe("KWeightedSquaredSum", () => {
 			preFilter.a2,
 		);
 		const filtered = applyBiquad(preFiltered, rlbFilter.b0, rlbFilter.b1, rlbFilter.b2, rlbFilter.a1, rlbFilter.a2);
-		const accumulator = new KWeightedSquaredSum(sampleRate, 1);
+		const accumulator = new KWeightedSquaredSum(sampleRate, channelWeightsOf(1, 0));
 		const output = new Float64Array(frameCount);
 
 		accumulator.push([input], frameCount, output);
@@ -85,8 +86,8 @@ describe("KWeightedSquaredSum", () => {
 		const sine = generateSine(1000, 0.1, sampleRate, 0.05);
 		const sineCopy = Float64Array.from(sine);
 		const frameCount = sine.length;
-		const mono = new KWeightedSquaredSum(sampleRate, 1);
-		const stereo = new KWeightedSquaredSum(sampleRate, 2);
+		const mono = new KWeightedSquaredSum(sampleRate, channelWeightsOf(1, 0));
+		const stereo = new KWeightedSquaredSum(sampleRate, channelWeightsOf(2, 0));
 		const monoOut = new Float64Array(frameCount);
 		const stereoOut = new Float64Array(frameCount);
 
@@ -98,16 +99,33 @@ describe("KWeightedSquaredSum", () => {
 		}
 	});
 
+	it("scales each channel's energy by its weight and leaves a weight-0 channel out", () => {
+		const sampleRate = 48000;
+		const sine = generateSine(1000, 0.1, sampleRate, 0.05);
+		const frameCount = sine.length;
+		const mono = new KWeightedSquaredSum(sampleRate, channelWeightsOf(1, 0));
+		const weighted = new KWeightedSquaredSum(sampleRate, Float64Array.from([1, 0, 1.41]));
+		const monoOut = new Float64Array(frameCount);
+		const weightedOut = new Float64Array(frameCount);
+
+		mono.push([sine], frameCount, monoOut);
+		weighted.push([sine, sine, sine], frameCount, weightedOut);
+
+		for (let index = 100; index < frameCount; index++) {
+			expect(weightedOut[index]).toBeCloseTo(2.41 * (monoOut[index] ?? 0), 12);
+		}
+	});
+
 	it("chunked pushes are bit-equal to one whole push", () => {
 		const sampleRate = 48000;
 		const sine = generateSine(1000, 0.1, sampleRate, 1);
 		const frameCount = sine.length;
-		const oneShot = new KWeightedSquaredSum(sampleRate, 1);
+		const oneShot = new KWeightedSquaredSum(sampleRate, channelWeightsOf(1, 0));
 		const oneShotOut = new Float64Array(frameCount);
 
 		oneShot.push([sine], frameCount, oneShotOut);
 
-		const streamed = new KWeightedSquaredSum(sampleRate, 1);
+		const streamed = new KWeightedSquaredSum(sampleRate, channelWeightsOf(1, 0));
 		const streamedOut = new Float64Array(frameCount);
 		const chunkSize = 4096;
 
@@ -123,7 +141,7 @@ describe("KWeightedSquaredSum", () => {
 	});
 
 	it("throws when the channel count does not match", () => {
-		const accumulator = new KWeightedSquaredSum(48000, 2);
+		const accumulator = new KWeightedSquaredSum(48000, channelWeightsOf(2, 0));
 		const buffer = new Float64Array(64);
 		const output = new Float64Array(64);
 
@@ -131,7 +149,7 @@ describe("KWeightedSquaredSum", () => {
 	});
 
 	it("throws when a channel is shorter than frameCount", () => {
-		const accumulator = new KWeightedSquaredSum(48000, 1);
+		const accumulator = new KWeightedSquaredSum(48000, channelWeightsOf(1, 0));
 		const buffer = new Float64Array(32);
 		const output = new Float64Array(64);
 
@@ -139,7 +157,7 @@ describe("KWeightedSquaredSum", () => {
 	});
 
 	it("throws when the output is shorter than frameCount", () => {
-		const accumulator = new KWeightedSquaredSum(48000, 1);
+		const accumulator = new KWeightedSquaredSum(48000, channelWeightsOf(1, 0));
 		const buffer = new Float64Array(64);
 		const output = new Float64Array(32);
 
@@ -147,7 +165,7 @@ describe("KWeightedSquaredSum", () => {
 	});
 
 	it("throws when channelCount is not positive", () => {
-		expect(() => new KWeightedSquaredSum(48000, 0)).toThrow(/positive/);
+		expect(() => new KWeightedSquaredSum(48000, channelWeightsOf(0, 0))).toThrow(/positive/);
 	});
 
 	it("keeps sub-Float32 squared contributions in Float64", () => {
@@ -159,7 +177,7 @@ describe("KWeightedSquaredSum", () => {
 			input[index] = 1e-20 * Math.sin(0.1 * index);
 		}
 
-		const accumulator = new KWeightedSquaredSum(sampleRate, 1);
+		const accumulator = new KWeightedSquaredSum(sampleRate, channelWeightsOf(1, 0));
 		const output = new Float64Array(frameCount);
 
 		accumulator.push([input], frameCount, output);

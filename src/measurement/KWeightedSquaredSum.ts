@@ -5,6 +5,7 @@ import { preFilterCoefficients, rlbFilterCoefficients } from "./kWeighting";
 
 export class KWeightedSquaredSum {
 	private readonly channelCount: number;
+	private readonly weights: Float64Array;
 
 	private readonly preB0: number;
 	private readonly preB1: number;
@@ -26,12 +27,15 @@ export class KWeightedSquaredSum {
 	private readonly rlbY1: Float64Array;
 	private readonly rlbY2: Float64Array;
 
-	constructor(sampleRate: number, channelCount: number) {
+	constructor(sampleRate: number, weights: Float64Array) {
+		const channelCount = weights.length;
+
 		if (channelCount <= 0) {
 			throw new Error(`KWeightedSquaredSum: channelCount must be positive, got ${channelCount}`);
 		}
 
 		this.channelCount = channelCount;
+		this.weights = weights;
 
 		const preFilter = preFilterCoefficients(sampleRate);
 		const rlbFilter = rlbFilterCoefficients(sampleRate);
@@ -95,6 +99,12 @@ export class KWeightedSquaredSum {
 		output.fill(-0, 0, frameCount);
 
 		for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
+			const weight = this.weights[channelIndex] ?? 1;
+
+			if (weight === 0) {
+				continue;
+			}
+
 			const channel = channels[channelIndex] ?? channels[0] ?? new Float64Array(0);
 			let preX1 = this.preX1[channelIndex] ?? 0;
 			let preX2 = this.preX2[channelIndex] ?? 0;
@@ -121,7 +131,7 @@ export class KWeightedSquaredSum {
 				rlbY2 = rlbY1;
 				rlbY1 = rlbY;
 
-				output[frameIndex] = (output[frameIndex] ?? 0) + rlbY * rlbY;
+				output[frameIndex] = (output[frameIndex] ?? 0) + rlbY * rlbY * weight;
 			}
 
 			this.preX1[channelIndex] = preX1;

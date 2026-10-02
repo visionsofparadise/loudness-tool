@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../cli";
-import { dbToLinear } from "../utils/db";
+import { dbToLinear, linearToDb } from "../utils/db";
 import { createSine } from "../utils/testSignals";
 import { WavReader, type AudioBlock } from "../wav/WavReader";
+import { writeExtensibleWav } from "../utils/testWav";
 import { WavWriter } from "../wav/WavWriter";
 import { lufsNorm } from "./lufsNorm";
 
@@ -370,15 +371,36 @@ describe("lufs-norm", () => {
 		expect(Math.abs((await measureFileIndependent(zeroPath)) - 0)).toBeLessThan(0.1);
 	});
 
-	it("rejects a 4-channel source", async () => {
-		const inputPath = join(workingDirectory, "quad.wav");
-		const outputPath = join(workingDirectory, "quad-out.wav");
-
-		await writeWav(inputPath, createSine(64, 4, SAMPLE_RATE, 440, 0.5));
-
-		await expect(lufsNorm(inputPath, { output: outputPath, lufs: -16 })).rejects.toThrow(
-			`${inputPath}: 4 channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+	it("normalizes a 5.1 source by the loudness its channel mask weights", async () => {
+		const inputPath = join(workingDirectory, "surround.wav");
+		const outputPath = join(workingDirectory, "surround-out.wav");
+		const frameCount = SAMPLE_RATE * 3;
+		const [sine = new Float64Array(0)] = createSine(frameCount, 1, SAMPLE_RATE, 997, dbToLinear(-20));
+		const channels = Array.from({ length: 6 }, (_channel, index) =>
+			index === 4 ? sine : new Float64Array(frameCount),
 		);
+		const expectedSourceLufs = measureIndependent([sine], SAMPLE_RATE) + 10 * Math.log10(1.41);
+
+		await writeExtensibleWav(inputPath, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			bitDepth: "32f",
+			channelMask: 0x3f,
+			channels,
+		});
+
+		const { stdout, exitCode } = await capture(() => lufsNorm(inputPath, { output: outputPath, lufs: -16 }));
+		const sourceLufs = Number(/^source integrated +(-?\d+\.\d{2}) LUFS/m.exec(stdout)?.[1]);
+		const appliedGainDb = Number(/^applied gain +(-?\d+\.\d{2}) dB/m.exec(stdout)?.[1]);
+		const output = await readAll(outputPath);
+
+		expect(exitCode).toBeUndefined();
+		expect(Math.abs(sourceLufs - expectedSourceLufs)).toBeLessThan(0.01);
+		expect(Math.abs(appliedGainDb - (-16 - expectedSourceLufs))).toBeLessThan(0.01);
+		expect(output).toHaveLength(6);
+		expect(
+			linearToDb((output[4] ?? new Float64Array(0)).reduce((peak, sample) => Math.max(peak, sample), 0)),
+		).toBeCloseTo(-20 + appliedGainDb, 1);
 	});
 
 	it("warns when predicted output true peak exceeds 0 dBTP", async () => {

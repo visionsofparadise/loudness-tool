@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { channelWeightsOf } from "./channelWeights";
 import { createSine } from "../utils/testSignals";
 import { IntegratedLufsAccumulator } from "./IntegratedLufsAccumulator";
 import { preFilterCoefficients, rlbFilterCoefficients } from "./kWeighting";
@@ -30,7 +31,7 @@ describe("rlbFilterCoefficients", () => {
 describe("K-weighting response", () => {
 	it.each([48000, 44100, 96000, 88200, 32000])("full-scale 997 Hz measures -3.01 LKFS ±0.1 at %i Hz", (sampleRate) => {
 		const channels = createSine(sampleRate * 5, 1, sampleRate, 997, 1);
-		const accumulator = new IntegratedLufsAccumulator(sampleRate, 1);
+		const accumulator = new IntegratedLufsAccumulator(sampleRate, channelWeightsOf(1, 0));
 
 		accumulator.push(channels, channels[0]?.length ?? 0);
 

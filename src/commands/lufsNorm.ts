@@ -1,4 +1,5 @@
 import { InvalidArgumentError, type Command } from "commander";
+import { channelWeightsOf } from "../measurement/channelWeights";
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
 import { dbToLinear } from "../utils/db";
@@ -40,8 +41,8 @@ const parseTargetLufs = (value: string): number => {
 const measureIntegratedAndTruePeak = async (
 	source: BlockSource,
 ): Promise<{ readonly integratedLufs: number; readonly truePeak: number }> => {
-	const { sampleRate, channelCount } = source.format;
-	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
+	const { sampleRate, channelCount, channelMask } = source.format;
+	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelWeightsOf(channelCount, channelMask));
 	const truePeakAccumulator = new TruePeakAccumulator(channelCount);
 
 	await pushWavBlocks(source, [lufsAccumulator, truePeakAccumulator]);
@@ -57,17 +58,7 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 
 	assertTargetLufs(target, target);
 
-	const measurement = await withWavReader(inputPath, async (reader) => {
-		const { channelCount } = reader.format;
-
-		if (channelCount > 2) {
-			throw new Error(
-				`${inputPath}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
-			);
-		}
-
-		return measureIntegratedAndTruePeak(reader);
-	});
+	const measurement = await withWavReader(inputPath, measureIntegratedAndTruePeak);
 
 	if (!Number.isFinite(measurement.integratedLufs)) {
 		await copyUnchanged(inputPath, options.output);

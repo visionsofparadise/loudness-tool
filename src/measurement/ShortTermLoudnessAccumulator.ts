@@ -23,16 +23,16 @@ export class ShortTermLoudnessAccumulator {
 	private finalizedResult: Float64Array | undefined;
 	private sourceFrames = 0;
 
-	constructor(sampleRate: number, channelCount: number) {
-		if (channelCount <= 0) {
-			throw new Error(`ShortTermLoudnessAccumulator: channelCount must be positive, got ${channelCount}`);
+	constructor(sampleRate: number, weights: Float64Array) {
+		if (weights.length <= 0) {
+			throw new Error(`ShortTermLoudnessAccumulator: channelCount must be positive, got ${weights.length}`);
 		}
 
 		this.blockSize = Math.round(BLOCK_DURATION_SECONDS * sampleRate);
 		this.blockStep = Math.round(BLOCK_STEP_SECONDS * sampleRate);
-		this.channelCount = channelCount;
+		this.channelCount = weights.length;
 		this.tailFrames = Math.round(FILE_LRA_TAIL_SECONDS * sampleRate);
-		this.weightedSquaredSum = new KWeightedSquaredSum(sampleRate, channelCount);
+		this.weightedSquaredSum = new KWeightedSquaredSum(sampleRate, weights);
 		this.blocks = new BlockSumAccumulator(this.blockSize, this.blockStep);
 	}
 

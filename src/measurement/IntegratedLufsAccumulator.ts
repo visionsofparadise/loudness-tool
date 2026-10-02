@@ -16,16 +16,16 @@ export class IntegratedLufsAccumulator {
 	private outputBuffer: Float64Array = new Float64Array(0);
 	private finalizedResult: number | undefined;
 
-	constructor(sampleRate: number, channelCount: number) {
-		if (channelCount <= 0) {
-			throw new Error(`IntegratedLufsAccumulator: channelCount must be positive, got ${channelCount}`);
+	constructor(sampleRate: number, weights: Float64Array) {
+		if (weights.length <= 0) {
+			throw new Error(`IntegratedLufsAccumulator: channelCount must be positive, got ${weights.length}`);
 		}
 
 		this.blockSize = Math.round(BLOCK_DURATION_SECONDS * sampleRate);
 
 		const blockStep = Math.round(BLOCK_STEP_SECONDS * sampleRate);
 
-		this.weightedSquaredSum = new KWeightedSquaredSum(sampleRate, channelCount);
+		this.weightedSquaredSum = new KWeightedSquaredSum(sampleRate, weights);
 		this.blocks = new BlockSumAccumulator(this.blockSize, blockStep);
 	}
 

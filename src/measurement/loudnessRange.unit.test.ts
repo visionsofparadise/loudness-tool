@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { channelWeightsOf } from "./channelWeights";
 import { createLevelSegments } from "../utils/testSignals";
 import { computeLoudnessRange, getLraConsideredStats } from "./loudnessRange";
 import { ShortTermLoudnessAccumulator } from "./ShortTermLoudnessAccumulator";
 
 const measureLra = (channels: ReadonlyArray<Float64Array>, sampleRate: number): number => {
-	const accumulator = new ShortTermLoudnessAccumulator(sampleRate, channels.length);
+	const accumulator = new ShortTermLoudnessAccumulator(sampleRate, channelWeightsOf(channels.length, 0));
 
 	accumulator.push(channels, channels[0]?.length ?? 0);
 

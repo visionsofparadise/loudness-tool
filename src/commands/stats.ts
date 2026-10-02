@@ -1,3 +1,4 @@
+import { channelWeightsOf } from "../measurement/channelWeights";
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
 import { computeLoudnessRange } from "../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../measurement/ShortTermLoudnessAccumulator";
@@ -51,17 +52,11 @@ const errorMessageOf = (error: unknown, inputPath: string): string => {
 
 const measureStats = async (inputPath: string): Promise<StatsJson> =>
 	withWavReader(inputPath, async (reader) => {
-		const { sampleRate, channelCount, bitDepth } = reader.format;
-
-		if (channelCount > 2) {
-			throw new Error(
-				`${inputPath}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
-			);
-		}
-
+		const { sampleRate, channelCount, channelMask, bitDepth } = reader.format;
+		const weights = channelWeightsOf(channelCount, channelMask);
 		const truePeakAccumulator = new TruePeakAccumulator(channelCount);
-		const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
-		const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, channelCount);
+		const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, weights);
+		const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, weights);
 
 		const frameCount = await pushWavBlocks(reader, [truePeakAccumulator, lufsAccumulator, shortTermAccumulator]);
 

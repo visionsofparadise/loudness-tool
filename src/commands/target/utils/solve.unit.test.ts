@@ -381,6 +381,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
@@ -435,6 +436,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
@@ -481,6 +483,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
@@ -531,6 +534,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
@@ -580,6 +584,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
@@ -643,6 +648,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: null,
@@ -690,6 +696,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: null,
@@ -740,6 +747,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: null,
@@ -791,6 +799,7 @@ describe("iterateForTargets", () => {
 			scratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
+			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			anchorBase: {
 				floorDb: null,
@@ -859,6 +868,7 @@ describe("iterateForTargets", () => {
 				scratch,
 				sampleRate: measurement.sampleRate,
 				channelCount: measurement.channelCount,
+				weights: measurement.weights,
 				frameCount: measurement.frameCount,
 				anchorBase: {
 					floorDb: null,
@@ -927,6 +937,7 @@ describe("iterateForTargets", () => {
 				scratch,
 				sampleRate: measurement.sampleRate,
 				channelCount: measurement.channelCount,
+				weights: measurement.weights,
 				frameCount: measurement.frameCount,
 				anchorBase: {
 					floorDb: null,
@@ -997,6 +1008,7 @@ describe("iterateForTargets", () => {
 				scratch,
 				sampleRate: measurement.sampleRate,
 				channelCount: measurement.channelCount,
+				weights: measurement.weights,
 				frameCount: measurement.frameCount,
 				anchorBase: {
 					floorDb: null,

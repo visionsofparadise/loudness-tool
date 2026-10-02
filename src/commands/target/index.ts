@@ -157,22 +157,14 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	let winningEnvelope: SampleFile | undefined;
 
 	try {
-		const measurement = await withWavReader(inputPath, async (reader) => {
-			const { channelCount } = reader.format;
-
-			if (channelCount > 2) {
-				throw new Error(
-					`${inputPath}: ${channelCount} channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
-				);
-			}
-
-			return measureSource({
+		const measurement = await withWavReader(inputPath, async (reader) =>
+			measureSource({
 				source: reader,
 				scratch,
 				limitPercentile,
 				halfWidthOf: (sampleRate) => windowSamplesFromMs(smoothingMs, sampleRate),
-			});
-		});
+			}),
+		);
 
 		winningEnvelope = measurement.detectionEnvelope;
 
@@ -212,6 +204,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 				scratch,
 				sampleRate: measurement.sampleRate,
 				channelCount: measurement.channelCount,
+				weights: measurement.weights,
 				frameCount: measurement.frameCount,
 				anchorBase: { floorDb: effectiveFloorDb, pivotDb: effectivePivotDb },
 				smoothingMs,

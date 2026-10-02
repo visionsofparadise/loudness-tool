@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { channelWeightsOf } from "./channelWeights";
 import { IntegratedLufsAccumulator } from "./IntegratedLufsAccumulator";
 
 const generateSine = (
@@ -18,7 +19,7 @@ const generateSine = (
 };
 
 const measure = (channels: ReadonlyArray<Float64Array>, sampleRate: number): number => {
-	const accumulator = new IntegratedLufsAccumulator(sampleRate, channels.length);
+	const accumulator = new IntegratedLufsAccumulator(sampleRate, channelWeightsOf(channels.length, 0));
 
 	accumulator.push(channels, channels[0]?.length ?? 0);
 
@@ -26,7 +27,7 @@ const measure = (channels: ReadonlyArray<Float64Array>, sampleRate: number): num
 };
 
 const measureChunked = (input: Float64Array, sampleRate: number, chunkFrames: number): number => {
-	const accumulator = new IntegratedLufsAccumulator(sampleRate, 1);
+	const accumulator = new IntegratedLufsAccumulator(sampleRate, channelWeightsOf(1, 0));
 
 	for (let offset = 0; offset < input.length; offset += chunkFrames) {
 		const frames = Math.min(chunkFrames, input.length - offset);
@@ -114,7 +115,7 @@ describe("IntegratedLufsAccumulator", () => {
 		const sampleRate = 48000;
 		const sine = generateSine(1000, 0.1, sampleRate, 5);
 		const oneShot = measure([sine], sampleRate);
-		const accumulator = new IntegratedLufsAccumulator(sampleRate, 1);
+		const accumulator = new IntegratedLufsAccumulator(sampleRate, channelWeightsOf(1, 0));
 		const headFrames = sine.length - 2;
 
 		accumulator.push([sine.subarray(0, headFrames)], headFrames);
@@ -124,7 +125,7 @@ describe("IntegratedLufsAccumulator", () => {
 	});
 
 	it("finalize is idempotent and rejects every later push", () => {
-		const accumulator = new IntegratedLufsAccumulator(48000, 1);
+		const accumulator = new IntegratedLufsAccumulator(48000, channelWeightsOf(1, 0));
 
 		accumulator.push([new Float64Array(48000).fill(0.1)], 48000);
 
@@ -136,7 +137,7 @@ describe("IntegratedLufsAccumulator", () => {
 	});
 
 	it("throws with its own prefix when channelCount is not positive", () => {
-		expect(() => new IntegratedLufsAccumulator(48000, 0)).toThrow(
+		expect(() => new IntegratedLufsAccumulator(48000, channelWeightsOf(0, 0))).toThrow(
 			"IntegratedLufsAccumulator: channelCount must be positive, got 0",
 		);
 	});

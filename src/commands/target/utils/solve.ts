@@ -363,11 +363,12 @@ const measureAttemptOutput = async (args: {
 	inputPath: string;
 	sampleRate: number;
 	channelCount: number;
+	weights: Float64Array;
 	envelope: SampleFile;
 }): Promise<{ outputLufs: number; outputLra: number; outputTruePeakDb: number }> => {
-	const { inputPath, sampleRate, channelCount, envelope } = args;
-	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelCount);
-	const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, channelCount);
+	const { inputPath, sampleRate, channelCount, weights, envelope } = args;
+	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, weights);
+	const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, weights);
 	const truePeakAccumulator = new TruePeakAccumulator(channelCount);
 
 	await forEachEnvelopedBlock(inputPath, envelope, (channels, frameCount) => {
@@ -391,6 +392,7 @@ export const iterateForTargets = async (
 		scratch: Scratch;
 		sampleRate: number;
 		channelCount: number;
+		weights: Float64Array;
 		frameCount: number;
 		anchorBase: { floorDb: number | null; pivotDb: number };
 		smoothingMs: number;
@@ -411,6 +413,7 @@ export const iterateForTargets = async (
 		scratch,
 		sampleRate,
 		channelCount,
+		weights,
 		frameCount,
 		anchorBase,
 		smoothingMs,
@@ -534,6 +537,7 @@ export const iterateForTargets = async (
 					inputPath,
 					sampleRate,
 					channelCount,
+					weights,
 					envelope: dest,
 				});
 			} catch (error: unknown) {

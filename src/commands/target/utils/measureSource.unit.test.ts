@@ -2,11 +2,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { channelWeightsOf } from "../../../measurement/channelWeights";
 import { getLraConsideredStats } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { dbToLinear } from "../../../utils/db";
 import { createLevelSegments, createNoise, createSine } from "../../../utils/testSignals";
 import { Scratch } from "../../../utils/Scratch";
+import { writeExtensibleWav } from "../../../utils/testWav";
 import { BLOCK_FRAMES, WavReader, type AudioBlock, type BlockSource } from "../../../wav/WavReader";
 import { WavWriter } from "../../../wav/WavWriter";
 import type { SampleFile } from "../../../utils/SampleFile";
@@ -210,7 +212,7 @@ describe("measureSource", () => {
 			limitPercentile: 0.995,
 			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
 		});
-		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
+		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, channelWeightsOf(1, 0));
 
 		accumulator.push(channels, frameCount);
 
@@ -249,7 +251,7 @@ describe("measureSource", () => {
 			limitPercentile: 0.995,
 			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
 		});
-		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, 1);
+		const accumulator = new ShortTermLoudnessAccumulator(SAMPLE_RATE, channelWeightsOf(1, 0));
 
 		accumulator.push(channels, channels[0]?.length ?? 0);
 
@@ -362,6 +364,40 @@ describe("measureSource", () => {
 
 		expect(Math.abs(massAbove(heldEnergy, heldBucketMax) / burstEnergy - 1)).toBeLessThan(0.01);
 		expect(Math.abs(massAbove(levelCounts, levelBucketMax) - burstFrames)).toBeLessThanOrEqual(12);
+	});
+
+	it("weights each channel's held energy by its stated position", async () => {
+		scratch = await Scratch.create();
+
+		const frameCount = SAMPLE_RATE;
+		const [sine = new Float64Array(0)] = createSine(frameCount, 1, SAMPLE_RATE, 997, 0.5);
+		const channels = Array.from({ length: 6 }, (_channel, index) =>
+			index === 3 || index === 4 ? sine : new Float64Array(frameCount),
+		);
+		const inputPath = join(workingDirectory, "surround.wav");
+
+		await writeExtensibleWav(inputPath, {
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			bitDepth: "32f",
+			channelMask: 0x3f,
+			channels,
+		});
+
+		const measurement = await measureFile({
+			inputPath,
+			scratch,
+			limitPercentile: 0.995,
+			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+		});
+
+		await measurement.detectionEnvelope.close();
+
+		const sineEnergy = sine.reduce((sum, sample) => sum + Math.fround(sample) * Math.fround(sample), 0);
+		const heldTotal = measurement.detectionHistogram.heldEnergy.reduce((sum, energy) => sum + energy, 0);
+
+		expect(Array.from(measurement.weights)).toEqual([1, 1, 1, 0, 1.41, 1.41]);
+		expect(Math.abs(heldTotal / (1.41 * sineEnergy) - 1)).toBeLessThan(1e-9);
 	});
 
 	const measureImpulseEnvelope = async (

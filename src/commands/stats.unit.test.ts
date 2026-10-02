@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linearToDb } from "../utils/db";
 import { createSine } from "../utils/testSignals";
+import { writeExtensibleWav } from "../utils/testWav";
 import { WavWriter } from "../wav/WavWriter";
 import { stats } from "./stats";
 
@@ -281,7 +282,7 @@ describe("stats", () => {
 		expect(parsed.map((entry) => entry.path)).toEqual([firstPath, lastPath]);
 	});
 
-	it("rejects a 4-channel file, measures the rest, and exits non-zero", async () => {
+	it("measures a 4-channel file among the rest and exits zero", async () => {
 		const firstPath = join(workingDirectory, "first.wav");
 		const quadPath = join(workingDirectory, "quad.wav");
 		const lastPath = join(workingDirectory, "last.wav");
@@ -291,12 +292,139 @@ describe("stats", () => {
 		await writeWav(lastPath, createSine(240, 1, SAMPLE_RATE, 440, 0.2));
 
 		const { stdout, stderr, exitCode } = await capture(() => stats([firstPath, quadPath, lastPath], { json: true }));
-		const parsed = JSON.parse(stdout) as Array<{ path: string }>;
+		const parsed = JSON.parse(stdout) as Array<{ path: string; channelCount: number }>;
 
-		expect(exitCode).toBe(1);
-		expect(stderr).toContain(
-			`${quadPath}: 4 channels unsupported; loudness measurement beyond stereo needs BS.1770 Table 3 channel weighting`,
+		expect(exitCode).toBeUndefined();
+		expect(stderr).toBe("");
+		expect(parsed.map((entry) => [entry.path, entry.channelCount])).toEqual([
+			[firstPath, 1],
+			[quadPath, 4],
+			[lastPath, 1],
+		]);
+	});
+
+	describe("channel weighting", () => {
+		const FULL_SCALE_FRAMES = SAMPLE_RATE * 3;
+		const SURROUND_OFFSET_DB = 10 * Math.log10(1.41);
+
+		const sineOnChannel = (channelCount: number, channelIndex: number): Array<Float64Array> => {
+			const [sine = new Float64Array(0)] = createSine(FULL_SCALE_FRAMES, 1, SAMPLE_RATE, 997, 1);
+
+			return Array.from({ length: channelCount }, (_channel, index) =>
+				index === channelIndex ? sine : new Float64Array(FULL_SCALE_FRAMES),
+			);
+		};
+
+		const measureJson = async (
+			path: string,
+		): Promise<{ integratedLufs: number | null; truePeakDb: number | null }> => {
+			const { stdout } = await capture(() => stats([path], { json: true }));
+			const [result] = JSON.parse(stdout) as Array<{ integratedLufs: number | null; truePeakDb: number | null }>;
+
+			return { integratedLufs: result?.integratedLufs ?? null, truePeakDb: result?.truePeakDb ?? null };
+		};
+
+		const measureMasked = async (
+			channelCount: number,
+			channelMask: number | undefined,
+			channelIndex: number,
+		): Promise<{ integratedLufs: number | null; truePeakDb: number | null }> => {
+			const path = join(workingDirectory, `weighted-${channelCount}-${channelMask ?? "plain"}-${channelIndex}.wav`);
+			const channels = sineOnChannel(channelCount, channelIndex);
+
+			await (channelMask === undefined
+				? writeWav(path, channels)
+				: writeExtensibleWav(path, {
+						sampleRate: SAMPLE_RATE,
+						channelCount: channels.length,
+						bitDepth: "32f",
+						channelMask,
+						channels,
+					}));
+
+			return measureJson(path);
+		};
+
+		it("reads a full-scale 997 Hz sine on the centre of a 0x3F file within 0.05 LU of -3.01 LUFS", async () => {
+			const centre = await measureMasked(6, 0x3f, 2);
+
+			expect(centre.integratedLufs).toEqual(expect.any(Number));
+			expect(Math.abs((centre.integratedLufs ?? 0) - -3.01)).toBeLessThanOrEqual(0.05);
+		});
+
+		it.each([
+			{ name: "BL of 0x3F", channelCount: 6, channelMask: 0x3f, channelIndex: 4, offsetDb: SURROUND_OFFSET_DB },
+			{ name: "SL of 0x60F", channelCount: 6, channelMask: 0x60f, channelIndex: 4, offsetDb: SURROUND_OFFSET_DB },
+			{ name: "SR of 0x60F", channelCount: 6, channelMask: 0x60f, channelIndex: 5, offsetDb: SURROUND_OFFSET_DB },
+			{ name: "BL of 0x63F", channelCount: 8, channelMask: 0x63f, channelIndex: 4, offsetDb: 0 },
+			{ name: "BR of 0x63F", channelCount: 8, channelMask: 0x63f, channelIndex: 5, offsetDb: 0 },
+			{ name: "SL of 0x63F", channelCount: 8, channelMask: 0x63f, channelIndex: 6, offsetDb: SURROUND_OFFSET_DB },
+			{ name: "SR of 0x63F", channelCount: 8, channelMask: 0x63f, channelIndex: 7, offsetDb: SURROUND_OFFSET_DB },
+			{ name: "BC of 0x70F", channelCount: 7, channelMask: 0x70f, channelIndex: 4, offsetDb: 0 },
+			{ name: "BC of 0x107", channelCount: 4, channelMask: 0x107, channelIndex: 3, offsetDb: SURROUND_OFFSET_DB },
+			{
+				name: "the undefined third bit of 0x40003",
+				channelCount: 3,
+				channelMask: 0x40003,
+				channelIndex: 2,
+				offsetDb: 0,
+			},
+			{
+				name: "the first channel of 0x80000000",
+				channelCount: 2,
+				channelMask: 0x80000000,
+				channelIndex: 0,
+				offsetDb: 0,
+			},
+			{
+				name: "the second channel of 0x80000000",
+				channelCount: 2,
+				channelMask: 0x80000000,
+				channelIndex: 1,
+				offsetDb: 0,
+			},
+			{
+				name: "a channel past the popcount of 0x3F",
+				channelCount: 7,
+				channelMask: 0x3f,
+				channelIndex: 6,
+				offsetDb: 0,
+			},
+			{
+				name: "the LFE position of a plain 6-channel file",
+				channelCount: 6,
+				channelMask: undefined,
+				channelIndex: 3,
+				offsetDb: 0,
+			},
+		])(
+			"weights a sine on $name by its stated position",
+			async ({ channelCount, channelMask, channelIndex, offsetDb }) => {
+				const centre = await measureMasked(6, 0x3f, 2);
+				const measured = await measureMasked(channelCount, channelMask, channelIndex);
+
+				expect(measured.integratedLufs).toEqual(expect.any(Number));
+				expect(
+					Math.abs((measured.integratedLufs ?? 0) - (centre.integratedLufs ?? 0) - offsetDb),
+				).toBeLessThanOrEqual(0.01);
+			},
 		);
-		expect(parsed.map((entry) => entry.path)).toEqual([firstPath, lastPath]);
+
+		it("reads a sine on the LFE of a 0x3F file as silence while its true peak counts", async () => {
+			const lfe = await measureMasked(6, 0x3f, 3);
+
+			expect(lfe.integratedLufs).toBeNull();
+			expect(Math.abs((lfe.truePeakDb ?? -Infinity) - 0)).toBeLessThan(0.1);
+		});
+
+		it("leaves mono and stereo figures unchanged by a front mask", async () => {
+			const monoPlain = await measureMasked(1, undefined, 0);
+			const monoMasked = await measureMasked(1, 0x4, 0);
+			const stereoPlain = await measureMasked(2, undefined, 1);
+			const stereoMasked = await measureMasked(2, 0x3, 1);
+
+			expect(monoMasked).toEqual(monoPlain);
+			expect(stereoMasked).toEqual(stereoPlain);
+		});
 	});
 });
