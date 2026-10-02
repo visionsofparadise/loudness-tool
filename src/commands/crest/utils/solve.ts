@@ -1,4 +1,5 @@
 import { chainLevelOf, chainWalkOf, type ChainRegion, type ChainTables } from "./chain";
+import { chargeOf, windowPositionsOf } from "./charge";
 import { stretchFrameCountOf, type CrestLayout } from "./ladder";
 import { markFreeStretches, rangesOf, regionsOf, type StretchRange } from "./regions";
 import {
@@ -27,47 +28,8 @@ interface SolveArguments {
 	readonly layout: CrestLayout;
 	readonly bitDepth: WavBitDepth;
 	readonly channelCount: number;
+	readonly readings: Float64Array;
 }
-
-const windowPositionsOf = (layout: CrestLayout, stretchIndex: number): Array<number> => {
-	const firstFrame = stretchIndex * layout.stretchFrames;
-	const frameCount = stretchFrameCountOf(layout, stretchIndex);
-	const positions: Array<number> = [];
-
-	for (let offset = 0; offset < Math.min(TRUE_PEAK_TAIL_FRAMES, frameCount); offset++) {
-		positions.push(firstFrame + offset);
-	}
-
-	if (stretchIndex === layout.stretchCount - 1) {
-		for (let offset = 0; offset < TRUE_PEAK_TAIL_FRAMES; offset++) {
-			positions.push(layout.frameCount + offset);
-		}
-	}
-
-	return positions;
-};
-
-const addContribution = (
-	values: Float64Array,
-	measure: StretchMeasure,
-	firstFrame: number,
-	endFrame: number,
-	position: number,
-	stride: number,
-): void => {
-	const isInside = position <= endFrame;
-	const offset = isInside ? position - firstFrame : position - endFrame - 1;
-
-	if (offset < 0 || offset >= TRUE_PEAK_TAIL_FRAMES) {
-		return;
-	}
-
-	const table = isInside ? measure.head : measure.carry;
-
-	for (let index = 0; index < stride; index++) {
-		values[index] = (values[index] ?? 0) + (table[offset * stride + index] ?? 0);
-	}
-};
 
 const loudestStretchOf = (readings: Float64Array): number => {
 	let loudest = 0;
@@ -82,7 +44,7 @@ const loudestStretchOf = (readings: Float64Array): number => {
 };
 
 const solveWithGate = async (args: SolveArguments, isGated: boolean): Promise<CrestSolution> => {
-	const { layout, bitDepth, channelCount } = args;
+	const { layout, bitDepth, channelCount, readings } = args;
 	const pairs = stepPairsOf(layout.steps.length);
 	const quantize = quantizerOf(bitDepth);
 	const stride = OVERSAMPLE_FACTOR * channelCount;
@@ -93,7 +55,6 @@ const solveWithGate = async (args: SolveArguments, isGated: boolean): Promise<Cr
 	const scratch = new Float64Array(layout.stretchFrames * OVERSAMPLE_FACTOR);
 	const tailScratch = new Float64Array(TRUE_PEAK_TAIL_FRAMES * OVERSAMPLE_FACTOR);
 	const values = new Float64Array(stride);
-	const readings = new Float64Array(layout.stretchCount);
 	const soloLevels = new Map<number, Float64Array>();
 	const levels = new Map<number, Float64Array>();
 	const identicalFrames = new Map<number, Int32Array>();
@@ -106,41 +67,24 @@ const solveWithGate = async (args: SolveArguments, isGated: boolean): Promise<Cr
 		identicalFrames,
 	};
 
-	const chargeOf = (
+	const chargeAt = (
 		stretchIndex: number,
 		positions: ReadonlyArray<number>,
 		measure: StretchMeasure,
 		previousMeasure: StretchMeasure | undefined,
 	): number => {
 		const firstFrame = stretchIndex * layout.stretchFrames;
-		const endFrame = firstFrame + stretchFrameCountOf(layout, stretchIndex) - 1;
-		let peak = measure.peak;
 
-		for (const position of positions) {
-			values.fill(0);
-			addContribution(values, measure, firstFrame, endFrame, position, stride);
-
-			if (previousMeasure !== undefined) {
-				addContribution(
-					values,
-					previousMeasure,
-					firstFrame - layout.stretchFrames,
-					firstFrame - 1,
-					position,
-					stride,
-				);
-			}
-
-			for (let index = 0; index < stride; index++) {
-				const magnitude = Math.abs(values[index] ?? 0);
-
-				if (magnitude > peak) {
-					peak = magnitude;
-				}
-			}
-		}
-
-		return peak;
+		return chargeOf({
+			measure,
+			previousMeasure,
+			firstFrame,
+			endFrame: firstFrame + stretchFrameCountOf(layout, stretchIndex) - 1,
+			stretchFrames: layout.stretchFrames,
+			positions,
+			values,
+			stride,
+		});
 	};
 
 	const measureAllPairs = (chunk: StretchChunk, stretchIndex: number): Array<StretchMeasure | undefined> => {
@@ -184,7 +128,11 @@ const solveWithGate = async (args: SolveArguments, isGated: boolean): Promise<Cr
 		measures: ReadonlyArray<StretchMeasure | undefined>,
 		previousMeasures: ReadonlyArray<StretchMeasure | undefined> | undefined,
 	): void => {
-		const positions = windowPositionsOf(layout, stretchIndex);
+		const positions = windowPositionsOf(
+			stretchIndex * layout.stretchFrames,
+			stretchFrameCountOf(layout, stretchIndex),
+			stretchIndex === layout.stretchCount - 1,
+		);
 
 		if (!soloLevels.has(stretchIndex)) {
 			const solo = new Float64Array(pairs.pairCount).fill(Infinity);
@@ -197,7 +145,7 @@ const solveWithGate = async (args: SolveArguments, isGated: boolean): Promise<Cr
 					continue;
 				}
 
-				solo[pairIndex] = printedDbOf(chargeOf(stretchIndex, positions, measure, undefined));
+				solo[pairIndex] = printedDbOf(chargeAt(stretchIndex, positions, measure, undefined));
 				counts[pairIndex] = measure.identicalFrames;
 			}
 
@@ -227,51 +175,12 @@ const solveWithGate = async (args: SolveArguments, isGated: boolean): Promise<Cr
 				}
 
 				stretchLevels[carryPair * DELTA_COUNT + code] = printedDbOf(
-					chargeOf(stretchIndex, positions, measure, previousMeasure),
+					chargeAt(stretchIndex, positions, measure, previousMeasure),
 				);
 			}
 		}
 
 		levels.set(stretchIndex, stretchLevels);
-	};
-
-	const meterSource = async (): Promise<void> => {
-		let previousMeasure: StretchMeasure | undefined;
-
-		await forEachStretchChunk({
-			path: args.inputPath,
-			layout,
-			ranges: layout.stretchCount === 0 ? [] : [{ firstStretch: 0, lastStretch: layout.stretchCount - 1 }],
-			stepIndicesOf: () => [layout.zeroStepIndex],
-			handle: (chunk) => {
-				for (let offset = 0; offset < chunk.stretchCount; offset++) {
-					const stretchIndex = chunk.firstStretch + offset;
-
-					renderStretch({
-						chunk,
-						layout,
-						stretchIndex,
-						beginStepIndex: layout.zeroStepIndex,
-						endStepIndex: layout.zeroStepIndex,
-						quantize,
-						output: sourceFrames,
-					});
-
-					const measure = measureStretch({
-						output: sourceFrames,
-						sourceFrames,
-						frameCount: stretchFrameCountOf(layout, stretchIndex),
-						scratch,
-						tailScratch,
-					});
-
-					readings[stretchIndex] = printedDbOf(
-						chargeOf(stretchIndex, windowPositionsOf(layout, stretchIndex), measure, previousMeasure),
-					);
-					previousMeasure = measure;
-				}
-			},
-		});
 	};
 
 	const measureRegions = async (regions: ReadonlyArray<StretchRange>): Promise<void> => {
@@ -314,8 +223,6 @@ const solveWithGate = async (args: SolveArguments, isGated: boolean): Promise<Cr
 			},
 		});
 	};
-
-	await meterSource();
 
 	if (layout.stretchCount === 0) {
 		return { walk: new Int32Array(1), level: printedDbOf(0), activeStretchCount: 0, widenCount: 0 };

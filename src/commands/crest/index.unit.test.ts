@@ -8,7 +8,7 @@ import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
 import { createNoise, createSine } from "../../utils/testSignals";
 import { WavReader, type AudioBlock } from "../../wav/WavReader";
 import { WavWriter } from "../../wav/WavWriter";
-import { printedDbOf } from "./utils/rounding";
+import { printedDbOf, quantizerOf } from "./utils/rounding";
 import { crest } from "./index";
 import type { WavBitDepth } from "../../wav/utils/wavFormat";
 
@@ -167,6 +167,30 @@ describe("crest", () => {
 			].join("\n"),
 		);
 		expect(outputPeak).toBeLessThan(sourcePeak);
+	});
+
+	it("reports the source true peak of the raw samples, not of the quantized frames it meters", async () => {
+		const inputPath = join(workingDirectory, "full-scale.wav");
+		const outputPath = join(workingDirectory, "full-scale-out.wav");
+		const channel = Float64Array.from({ length: 400 }, (_sample, index) =>
+			index % 2 === 0 ? 32763 / 0x7fff : 16382 / 0x7fff,
+		);
+
+		await writeWav(inputPath, [channel], "16");
+
+		const { channels } = await readAll(inputPath);
+		const quantize = quantizerOf("16");
+		const quantized = (channels[0] ?? new Float64Array(0)).map(quantize);
+		const quantizedAccumulator = new TruePeakAccumulator(1);
+
+		quantizedAccumulator.push([quantized], quantized.length);
+
+		const rawDb = printedDbOf(await truePeakOf(inputPath));
+		const quantizedDb = printedDbOf(quantizedAccumulator.finalize());
+		const stdout = await captureStdout(() => crest(inputPath, { output: outputPath, spread: 0.25, smoothing: 2 }));
+
+		expect(rawDb).not.toBe(quantizedDb);
+		expect(stdout).toContain(`source true peak    ${rawDb.toFixed(2)} dBTP`);
 	});
 
 	it("preserves the frame count, sample rate, channel count, and writable bit depth", async () => {

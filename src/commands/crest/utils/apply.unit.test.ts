@@ -10,6 +10,7 @@ import { dispersionKernelOf } from "./dispersion";
 import { crestLayoutOf, stretchFrameCountOf, type CrestLayout } from "./ladder";
 import { printedDbOf, quantizerOf } from "./rounding";
 import { solveCrest } from "./solve";
+import { SourceMeter } from "./SourceMeter";
 
 const SAMPLE_RATE = 48000;
 
@@ -120,7 +121,17 @@ describe("applyWalk", () => {
 			sampleRate: SAMPLE_RATE,
 			frameCount: channel.length,
 		});
-		const solution = await solveCrest({ inputPath, layout, bitDepth: "32f", channelCount: 1 });
+		const meter = new SourceMeter({ stretchFrames: layout.stretchFrames, channelCount: 1, bitDepth: "32f" });
+
+		meter.push([channel], channel.length);
+
+		const solution = await solveCrest({
+			inputPath,
+			layout,
+			bitDepth: "32f",
+			channelCount: 1,
+			readings: meter.finish(),
+		});
 		const measured = await applyWalk({
 			inputPath,
 			outputPath,

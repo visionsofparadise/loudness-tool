@@ -30,6 +30,13 @@ export const stepMagnitudesOf = (spreadMs: number, sampleRate: number): Array<nu
 	return magnitudes;
 };
 
+export const stretchFramesOf = (args: { spreadMs: number; smoothingMs: number; sampleRate: number }): number =>
+	framesFromMs(
+		args.smoothingMs / stepMagnitudesOf(args.spreadMs, args.sampleRate).length,
+		args.sampleRate,
+		MINIMUM_STRETCH_FRAMES,
+	);
+
 export const crestLayoutOf = (args: {
 	spreadMs: number;
 	smoothingMs: number;
@@ -41,7 +48,7 @@ export const crestLayoutOf = (args: {
 
 	steps.push(0, ...magnitudes);
 
-	const stretchFrames = framesFromMs(args.smoothingMs / magnitudes.length, args.sampleRate, MINIMUM_STRETCH_FRAMES);
+	const stretchFrames = stretchFramesOf(args);
 
 	return {
 		steps,

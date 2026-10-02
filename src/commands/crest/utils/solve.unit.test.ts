@@ -8,6 +8,7 @@ import { dispersionKernelOf } from "./dispersion";
 import { crestLayoutOf, stretchFrameCountOf, type CrestLayout } from "./ladder";
 import { printedDbOf, quantizerOf } from "./rounding";
 import { solveCrest, solveCrestUngated, type CrestSolution } from "./solve";
+import { SourceMeter } from "./SourceMeter";
 import type { WavBitDepth } from "../../../wav/utils/wavFormat";
 
 interface SolveArguments {
@@ -15,6 +16,7 @@ interface SolveArguments {
 	readonly layout: CrestLayout;
 	readonly bitDepth: WavBitDepth;
 	readonly channelCount: number;
+	readonly readings: Float64Array;
 }
 
 const SAMPLE_RATE = 48000;
@@ -186,11 +188,20 @@ describe("solveCrest", () => {
 			sampleRate: SAMPLE_RATE,
 			frameCount: channels[0]?.length ?? 0,
 		});
+		const meter = new SourceMeter({
+			stretchFrames: layout.stretchFrames,
+			channelCount: channels.length,
+			bitDepth: "32f",
+		});
+
+		meter.push(channels, layout.frameCount);
+
 		const solution = await solver({
 			inputPath: path,
 			layout,
 			bitDepth: "32f",
 			channelCount: channels.length,
+			readings: meter.finish(),
 		});
 
 		return { layout, walk: [...solution.walk], solution };
