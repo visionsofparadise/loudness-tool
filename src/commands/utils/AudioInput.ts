@@ -1,8 +1,9 @@
 import { Scratch } from "../../utils/Scratch";
-import { WavReader, type BlockSource } from "../../wav/WavReader";
 import { WavSpool } from "../../wav/WavSpool";
 import { WavStreamReader } from "../../wav/WavStreamReader";
 import { STDIO_PATH } from "./stdioPath";
+import { withWavReader } from "./withWavReader";
+import type { BlockSource } from "../../wav/WavReader";
 import type { Command } from "commander";
 
 const SPOOL_LABEL = "input.wav";
@@ -40,15 +41,11 @@ export class AudioInput {
 		this.isFirstPassStarted = true;
 
 		if (this.label !== STDIO_PATH) {
-			const reader = await WavReader.open(this.label);
+			const result = await withWavReader(this.label, consume);
 
-			try {
-				return await consume(reader);
-			} finally {
-				await reader.close();
+			this.isReplayable = true;
 
-				this.isReplayable = true;
-			}
+			return result;
 		}
 
 		const { scratch } = this;

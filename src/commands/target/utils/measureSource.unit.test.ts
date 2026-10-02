@@ -577,9 +577,6 @@ describe("measureSource", () => {
 			);
 			const [left = new Float64Array(0)] = channels;
 
-			// AmplitudeHistogramAccumulator rebins when a chunk raises its maximum, so the multi-block
-			// source holds its peak at frame 100, in its first block. The 1- to 7-frame sources put it on
-			// their last frame and still compare exactly.
 			left[Math.min(100, frameCount - 1)] = 0.99;
 
 			await writeWav(inputPath, channels);

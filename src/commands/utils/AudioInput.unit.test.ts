@@ -77,6 +77,15 @@ describe("AudioInput", () => {
 		expect(existsSync(scratchDirectory)).toBe(false);
 	});
 
+	it("has no replay when a file input's first pass fails to open it", async () => {
+		const missingPath = join(workingDirectory, "missing.wav");
+
+		await withAudioInput(missingPath, { replayable: true, scratchDirectory: undefined }, async (input) => {
+			await expect(input.withFirstPass(async (source) => collect(source.blocks()))).rejects.toThrow(/ENOENT/);
+			expect(() => input.replayPath()).toThrow(/no replay/);
+		});
+	});
+
 	it("spools stdin into the scratch directory during the first pass and removes it on dispose", async () => {
 		const scratchDirectory = join(workingDirectory, "scratch");
 
