@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../../cli";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
-import { runSilenceOnStdin, runStdioCombinations } from "../../utils/testCli";
+import { captureWrites, runSilenceOnStdin, runStdioCombinations } from "../../utils/testCli";
 import { createNoise, createSine } from "../../utils/testSignals";
 import { WavReader, type AudioBlock } from "../../wav/WavReader";
 import { WavWriter } from "../../wav/WavWriter";
@@ -85,11 +85,9 @@ const truePeakOf = async (path: string): Promise<number> => {
 
 const captureStdout = async (run: () => Promise<void>): Promise<string> => {
 	const stdout: Array<string> = [];
-	const writeOut = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-		stdout.push(String(chunk));
-
-		return true;
-	});
+	const writeOut = vi
+		.spyOn(process.stdout, "write")
+		.mockImplementation(captureWrites((chunk) => stdout.push(chunk.toString("utf8"))));
 
 	try {
 		await run();

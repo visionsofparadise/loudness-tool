@@ -75,3 +75,6 @@ export const writeToStream = async (stream: NodeJS.WritableStream, buffer: Buffe
 		});
 	});
 };
+
+export const writeTextToStream = async (stream: NodeJS.WritableStream, text: string): Promise<void> =>
+	writeToStream(stream, Buffer.from(text, "utf8"));

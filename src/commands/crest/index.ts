@@ -2,7 +2,7 @@ import { InvalidArgumentError, type Command } from "commander";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
 import { nearestWritableBitDepth, type WavBitDepth } from "../../wav/utils/wavFormat";
 import { scratchDirectoryOf, withAudioInput } from "../utils/AudioInput";
-import { sinkOf, summaryStreamOf } from "../utils/sinks";
+import { sinkOf, writeSummary } from "../utils/sinks";
 import { pushWavBlocks } from "../utils/withWavReader";
 import { applyWalk } from "./utils/apply";
 import { crestLayoutOf, stretchFramesOf } from "./utils/ladder";
@@ -110,7 +110,8 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 		const sourceDb = printedDbOf(measurement.truePeak);
 		const outputDb = printedDbOf(outputTruePeak);
 
-		summaryStreamOf(options.output).write(
+		await writeSummary(
+			options.output,
 			`${[
 				alignedLine("source true peak", `${sourceDb.toFixed(2)} dBTP`),
 				alignedLine("output true peak", `${outputDb.toFixed(2)} dBTP`),

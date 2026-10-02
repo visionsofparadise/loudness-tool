@@ -4,6 +4,7 @@ import { computeLoudnessRange } from "../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
 import { linearToDb } from "../utils/db";
+import { writeTextToStream } from "../utils/writeToStream";
 import { withAudioInput } from "./utils/AudioInput";
 import { STDIO_PATH } from "./utils/stdioPath";
 import { pushWavBlocks } from "./utils/withWavReader";
@@ -91,26 +92,26 @@ export const stats = async (inputs: Array<string>, options: StatsOptions): Promi
 	let failed = false;
 
 	for (const inputPath of inputs) {
+		let result: StatsJson | undefined;
+
 		try {
-			const result = await measureStats(inputPath);
-
-			results.push(result);
-
-			if (options.json !== true) {
-				if (results.length > 1) {
-					process.stdout.write("\n");
-				}
-
-				process.stdout.write(formatHuman(result));
-			}
+			result = await measureStats(inputPath);
 		} catch (error: unknown) {
 			failed = true;
 			process.stderr.write(`error: ${errorMessageOf(error, inputPath)}\n`);
 		}
+
+		if (result !== undefined) {
+			results.push(result);
+
+			if (options.json !== true) {
+				await writeTextToStream(process.stdout, `${results.length > 1 ? "\n" : ""}${formatHuman(result)}`);
+			}
+		}
 	}
 
 	if (options.json === true) {
-		process.stdout.write(`${JSON.stringify(results)}\n`);
+		await writeTextToStream(process.stdout, `${JSON.stringify(results)}\n`);
 	}
 
 	if (failed) {

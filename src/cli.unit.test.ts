@@ -1,9 +1,10 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { createProgram, runProgram } from "./cli";
-import { runCli } from "./utils/testCli";
+import { captureWrites, runCli } from "./utils/testCli";
 import { createSine } from "./utils/testSignals";
 import { WavWriter } from "./wav/WavWriter";
 
@@ -130,6 +131,68 @@ describe("cli", () => {
 				}
 			}
 		} finally {
+			await rm(workingDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("ends a broken stdout as one error line and exit code 1 on every command", async () => {
+		const workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-cli-"));
+		const stderr: Array<string> = [];
+		const stderrSpy = vi
+			.spyOn(process.stderr, "write")
+			.mockImplementation(captureWrites((chunk) => stderr.push(chunk.toString("utf8"))));
+		const previousExitCode = process.exitCode;
+
+		try {
+			const inputPath = join(workingDirectory, "input.wav");
+			const outputPath = join(workingDirectory, "output.wav");
+			const writer = await WavWriter.create(
+				{ kind: "file", path: inputPath },
+				{ sampleRate: 48000, channelCount: 1, channelMask: 0, bitDepth: "16", frameCount: 48000 },
+			);
+
+			await writer.write(createSine(48000, 1, 48000, 997, 0.5));
+			await writer.close();
+
+			const commands = [
+				["stats", inputPath, inputPath],
+				["stats", inputPath, "--json"],
+				...[outputPath, "-"].flatMap((output) => [
+					["tp-norm", inputPath, "-o", output],
+					["lufs-norm", inputPath, "-o", output],
+					["crest", inputPath, "-o", output],
+					["target", inputPath, "-o", output, "--lufs", "-16"],
+				]),
+			];
+
+			for (const command of commands) {
+				const brokenStdout = new Writable({
+					write: (_chunk, _encoding, callback) => {
+						callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+					},
+				});
+				const stdoutSpy = vi
+					.spyOn(process, "stdout", "get")
+					.mockReturnValue(brokenStdout as unknown as typeof process.stdout);
+
+				stderr.length = 0;
+				process.exitCode = undefined;
+
+				try {
+					await runProgram(["node", "loudness-tool", ...command]);
+				} finally {
+					stdoutSpy.mockRestore();
+				}
+
+				expect({ command, exitCode: process.exitCode, stderr: stderr.join("") }).toEqual({
+					command,
+					exitCode: 1,
+					stderr: expect.stringMatching(/(?:^|\n)error: write EPIPE\n$/),
+				});
+			}
+		} finally {
+			stderrSpy.mockRestore();
+			process.exitCode = previousExitCode;
 			await rm(workingDirectory, { recursive: true, force: true });
 		}
 	});

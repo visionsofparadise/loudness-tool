@@ -4,7 +4,7 @@ import { applyUniformGain } from "./utils/applyUniformGain";
 import { scratchDirectoryOf, withAudioInput } from "./utils/AudioInput";
 import { copyUnchanged } from "./utils/copyUnchanged";
 import { measureTruePeak } from "./utils/measureTruePeak";
-import { sinkOf, summaryStreamOf } from "./utils/sinks";
+import { sinkOf, writeSummary } from "./utils/sinks";
 
 interface TpNormOptions {
 	readonly output: string;
@@ -56,7 +56,8 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 		const sourceTpDb = 20 * Math.log10(measurement.truePeak);
 		const gainDb = 20 * Math.log10(gain);
 
-		summaryStreamOf(options.output).write(
+		await writeSummary(
+			options.output,
 			`${[
 				alignedLine("source true peak", `${sourceTpDb.toFixed(2)} dBTP`),
 				alignedLine("target", `${target.toFixed(2)} dBTP`),

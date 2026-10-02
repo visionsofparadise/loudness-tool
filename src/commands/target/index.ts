@@ -3,7 +3,7 @@ import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
 import { scratchDirectoryOf, withAudioInput, type AudioInput } from "../utils/AudioInput";
 import { copyUnchanged } from "../utils/copyUnchanged";
-import { sinkOf, summaryStreamOf } from "../utils/sinks";
+import { sinkOf, writeSummary } from "../utils/sinks";
 import { withWavWriter } from "../utils/withWavWriter";
 import { forEachEnvelopedBlock } from "./utils/apply";
 import { measureSource } from "./utils/measureSource";
@@ -219,7 +219,8 @@ const fitInput = async (
 
 			await applyEnvelopeAndWrite(input.replayPath(), sinkOf(options.output), result.bestSmoothedEnvelope);
 
-			summaryStreamOf(options.output).write(
+			await writeSummary(
+				options.output,
 				`${[
 					alignedLine("output integrated", figureOf(result.winnerOutputLufs, "LUFS")),
 					alignedLine("output true peak", figureOf(result.winnerOutputTruePeakDb, "dBTP")),

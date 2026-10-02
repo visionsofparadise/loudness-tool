@@ -7,7 +7,7 @@ import { isMultipleOf } from "../utils/multipleOf";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { scratchDirectoryOf, withAudioInput } from "./utils/AudioInput";
 import { copyUnchanged } from "./utils/copyUnchanged";
-import { sinkOf, summaryStreamOf } from "./utils/sinks";
+import { sinkOf, writeSummary } from "./utils/sinks";
 import { pushWavBlocks } from "./utils/withWavReader";
 import type { BlockSource } from "../wav/WavReader";
 
@@ -85,7 +85,8 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 			);
 		}
 
-		summaryStreamOf(options.output).write(
+		await writeSummary(
+			options.output,
 			`${[
 				alignedLine("source integrated", `${measurement.integratedLufs.toFixed(2)} LUFS`),
 				alignedLine("target", `${target.toFixed(2)} LUFS`),

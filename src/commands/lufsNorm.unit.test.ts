@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../cli";
 import { dbToLinear, linearToDb } from "../utils/db";
-import { runSilenceOnStdin, runStdioCombinations } from "../utils/testCli";
+import { captureWrites, runSilenceOnStdin, runStdioCombinations } from "../utils/testCli";
 import { createSine } from "../utils/testSignals";
 import { WavReader, type AudioBlock } from "../wav/WavReader";
 import { writeExtensibleWav } from "../utils/testWav";
@@ -188,16 +188,12 @@ const capture = async (
 ): Promise<{ stdout: string; stderr: string; exitCode: number | undefined }> => {
 	const stdout: Array<string> = [];
 	const stderr: Array<string> = [];
-	const writeOut = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-		stdout.push(String(chunk));
-
-		return true;
-	});
-	const writeErr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-		stderr.push(String(chunk));
-
-		return true;
-	});
+	const writeOut = vi
+		.spyOn(process.stdout, "write")
+		.mockImplementation(captureWrites((chunk) => stdout.push(chunk.toString("utf8"))));
+	const writeErr = vi
+		.spyOn(process.stderr, "write")
+		.mockImplementation(captureWrites((chunk) => stderr.push(chunk.toString("utf8"))));
 	const previousExitCode = process.exitCode;
 
 	process.exitCode = undefined;

@@ -11,10 +11,10 @@ interface CliRun {
 	readonly exitCode: string | number | null | undefined;
 }
 
-const capture =
-	(chunks: Array<Buffer>) =>
+export const captureWrites =
+	(onChunk: (chunk: Buffer) => void) =>
 	(chunk: string | Uint8Array, ...rest: Array<unknown>): boolean => {
-		chunks.push(Buffer.from(chunk));
+		onChunk(Buffer.from(chunk));
 
 		const callback = rest.find((argument) => typeof argument === "function");
 
@@ -30,8 +30,12 @@ export const runCli = async (argv: ReadonlyArray<string>, stdin?: Buffer): Promi
 	const stderrChunks: Array<Buffer> = [];
 	const stdinStream = new PassThrough();
 	const stdinSpy = vi.spyOn(process, "stdin", "get").mockReturnValue(stdinStream as unknown as typeof process.stdin);
-	const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(capture(stdoutChunks));
-	const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(capture(stderrChunks));
+	const stdoutSpy = vi
+		.spyOn(process.stdout, "write")
+		.mockImplementation(captureWrites((chunk) => stdoutChunks.push(chunk)));
+	const stderrSpy = vi
+		.spyOn(process.stderr, "write")
+		.mockImplementation(captureWrites((chunk) => stderrChunks.push(chunk)));
 	const previousExitCode = process.exitCode;
 
 	process.exitCode = undefined;
