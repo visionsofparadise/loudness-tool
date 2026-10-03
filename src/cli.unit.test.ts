@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { createProgram, runProgram } from "./cli";
+import { STREAM_OPTIONS_HELP } from "./commands/utils/streamOptions";
 import { captureWrites, runCli } from "./utils/testCli";
 import { createSine } from "./utils/testSignals";
 import { WavWriter } from "./wav/WavWriter";
@@ -207,6 +208,52 @@ describe("cli", () => {
 			if (command.name() !== "stats") {
 				expect(help).toContain("output WAV path, or - for stdout");
 			}
+		}
+	});
+
+	it("ends every command's help with the stream options and leaves the help command's own help", async () => {
+		for (const command of createProgram().commands) {
+			let help = "";
+
+			command.configureOutput({
+				writeOut: (text) => {
+					help += text;
+				},
+			});
+			command.outputHelp();
+
+			expect(help).toContain(STREAM_OPTIONS_HELP);
+		}
+
+		const helpRun = await runCli(["help", "help"]);
+
+		expect(helpRun.stdout.toString("utf8") + helpRun.stderr).toContain("Usage: loudness-tool");
+		expect(helpRun.stdout.toString("utf8") + helpRun.stderr).not.toContain(STREAM_OPTIONS_HELP);
+	});
+
+	it("warns of stream options after the last file and runs without them", async () => {
+		const workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-cli-"));
+
+		try {
+			const inputPath = join(workingDirectory, "input.wav");
+			const writer = await WavWriter.create(
+				{ kind: "file", path: inputPath },
+				{ sampleRate: 48000, channelCount: 1, channelMask: 0, bitDepth: "16", frameCount: 4800 },
+			);
+
+			await writer.write(createSine(4800, 1, 48000, 997, 0.5));
+			await writer.close();
+
+			const input = await readFile(inputPath);
+			const plain = await runCli(["tp-norm", "-", "-o", "-"], input);
+			const trailing = await runCli(["tp-norm", "-", "-o", "-", "-f", "f32le"], input);
+
+			expect(trailing.exitCode).toBeUndefined();
+			expect(trailing.stderr).toBe(`warning: -f f32le follows the last file and is ignored
+${plain.stderr}`);
+			expect(trailing.stdout.equals(plain.stdout)).toBe(true);
+		} finally {
+			await rm(workingDirectory, { recursive: true, force: true });
 		}
 	});
 });
