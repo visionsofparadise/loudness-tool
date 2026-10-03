@@ -1,8 +1,12 @@
 import { linearToDb } from "../../../utils/db";
 import { integerScalesOf } from "../../../wav/utils/sampleCodec";
-import type { WavBitDepth } from "../../../wav/utils/wavFormat";
+import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
-export const quantizerOf = (bitDepth: WavBitDepth): ((sample: number) => number) => {
+export const quantizerOf = (bitDepth: SourceBitDepth): ((sample: number) => number) => {
+	if (bitDepth === "64f") {
+		return (sample) => sample;
+	}
+
 	const scales = integerScalesOf(bitDepth);
 
 	if (scales === undefined) {

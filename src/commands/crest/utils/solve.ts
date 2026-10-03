@@ -14,7 +14,7 @@ import {
 } from "./render";
 import { printedDbOf, quantizerOf } from "./rounding";
 import { beginStepIndexOf, endStepIndexOf, pairIndexOf, stepPairsOf, DELTA_COUNT } from "./walk";
-import type { WavBitDepth } from "../../../wav/utils/wavFormat";
+import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
 export interface CrestSolution {
 	readonly walk: Int32Array;
@@ -26,7 +26,7 @@ export interface CrestSolution {
 interface SolveArguments {
 	readonly inputPath: string;
 	readonly layout: CrestLayout;
-	readonly bitDepth: WavBitDepth;
+	readonly bitDepth: SourceBitDepth;
 	readonly channelCount: number;
 	readonly readings: Float64Array;
 }

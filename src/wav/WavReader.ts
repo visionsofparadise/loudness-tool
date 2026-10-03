@@ -44,9 +44,10 @@ export class WavReader implements BlockSource {
 
 	readonly format: AudioFormat;
 
+	readonly dataOffset: number;
+	readonly blockAlign: number;
+
 	private readonly fileHandle: FileHandle;
-	private readonly dataOffset: number;
-	private readonly blockAlign: number;
 	private readonly bitDepth: SourceBitDepth;
 	private isClosed = false;
 

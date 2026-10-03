@@ -1,6 +1,6 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
-import { nearestWritableBitDepth, type WavBitDepth } from "../../wav/utils/wavFormat";
+import { wavOutputBitDepthOf, type WavBitDepth } from "../../wav/utils/wavFormat";
 import { scratchDirectoryOf, withAudioInput } from "../utils/AudioInput";
 import { sinkOf, writeSummary } from "../utils/sinks";
 import { pushWavBlocks } from "../utils/withWavReader";
@@ -57,7 +57,7 @@ const meterSource = async (
 	readonly readings: Float64Array;
 }> => {
 	const { sampleRate, channelCount } = source.format;
-	const bitDepth = nearestWritableBitDepth(source.format.bitDepth);
+	const bitDepth = wavOutputBitDepthOf(source.format.bitDepth);
 	const meter = new SourceMeter({
 		stretchFrames: stretchFramesOf({ ...ladder, sampleRate }),
 		channelCount,

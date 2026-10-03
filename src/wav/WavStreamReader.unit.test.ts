@@ -203,6 +203,84 @@ describe("WavStreamReader", () => {
 		);
 	});
 
+	const readRawBlocks = async (
+		bytes: Buffer,
+		format: WavStreamReader["format"],
+		writeSize: number,
+		spoolPath?: string,
+	): Promise<{ reader: WavStreamReader; blocks: Array<AudioBlock> }> => {
+		const { stream, isFed } = feed(bytes, writeSize);
+		const reader = await WavStreamReader.openRaw(
+			stream,
+			format,
+			spoolPath === undefined
+				? undefined
+				: async (spoolFormat, blockAlign) => WavSpool.create(spoolPath, spoolFormat, blockAlign),
+		);
+
+		try {
+			const blocks = await collect(reader);
+
+			await isFed;
+
+			return { reader, blocks };
+		} finally {
+			await reader.close();
+		}
+	};
+
+	describe.each([
+		["1-byte", 1],
+		["7-byte", 7],
+		["whole", Number.MAX_SAFE_INTEGER],
+	])("openRaw fed in %s writes", (_label, writeSize) => {
+		it.each([
+			["16", 2, 1001],
+			["24", 6, 1001],
+			["8", 1, BLOCK_FRAMES + 3],
+			["64f", 3, 1001],
+			["32f", 2, 2 * BLOCK_FRAMES],
+			["32", 1, 1001],
+		] as const)(
+			"yields the blocks open yields for %s data bytes on %i channels over %i frames",
+			async (bitDepth, channelCount, frameCount) => {
+				const { file, data } = wavBytesOf({ channels: createNoise(frameCount, channelCount, 23), bitDepth });
+				const expected = await readFileBlocks(file);
+				const { frameCount: _frameCount, ...format } = expected.format;
+				const { reader, blocks } = await readRawBlocks(data, format, writeSize);
+
+				expect(reader.format).toEqual(format);
+				expect(blockFramesOf(blocks)).toEqual(blockFramesOf(expected.blocks));
+				expect(blocks).toEqual(expected.blocks);
+				expect(reader.hasReachedEnd).toBe(true);
+			},
+		);
+	});
+
+	it("openRaw drops a partial final frame and yields no block for an empty stream", async () => {
+		const { data } = wavBytesOf({ channels: createNoise(10, 2, 3), bitDepth: "16" });
+		const format = { sampleRate: SAMPLE_RATE, channelCount: 2, channelMask: 0, bitDepth: "16" } as const;
+		const partial = await readRawBlocks(data.subarray(0, data.length - 3), format, 7);
+		const empty = await readRawBlocks(Buffer.alloc(0), format, 7);
+
+		expect(blockFramesOf(partial.blocks)).toEqual([9]);
+		expect(empty.blocks).toEqual([]);
+		expect(empty.reader.hasReachedEnd).toBe(true);
+	});
+
+	it("openRaw spools data that replays through WavReader with the same samples and mask", async () => {
+		const spoolPath = join(workingDirectory, "raw-spool.wav");
+		const { data } = wavBytesOf({ channels: createNoise(BLOCK_FRAMES + 77, 6, 31), bitDepth: "24" });
+		const format = { sampleRate: SAMPLE_RATE, channelCount: 6, channelMask: 0x3f, bitDepth: "24" } as const;
+		const { blocks } = await readRawBlocks(data, format, 4093, spoolPath);
+		const spool = await readFile(spoolPath);
+		const replay = await readFileBlocks(spool);
+
+		expect(spool.subarray(SPOOL_HEADER_SIZE).equals(data)).toBe(true);
+		expect(replay.format.channelMask).toBe(0x3f);
+		expect(replay.blocks).toEqual(blocks);
+	});
+
 	it("drops the final partial frame as the file reader does", async () => {
 		const { file } = wavBytesOf({
 			channels: createNoise(300, 2, 3),

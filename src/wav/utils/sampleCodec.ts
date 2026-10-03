@@ -1,4 +1,4 @@
-import type { SourceBitDepth, WavBitDepth } from "./wavFormat";
+import type { SourceBitDepth } from "./wavFormat";
 
 export const bytesPerSampleOf = (bitDepth: SourceBitDepth): number => {
 	switch (bitDepth) {
@@ -61,6 +61,7 @@ export const decodeFrames = (
 };
 
 const INTEGER_SCALES = {
+	"8": { negative: 0x80, positive: 0x7f },
 	"16": { negative: 0x8000, positive: 0x7fff },
 	"24": { negative: 0x800000, positive: 0x7fffff },
 	"32": { negative: 0x80000000, positive: 0x7fffffff },
@@ -68,11 +69,18 @@ const INTEGER_SCALES = {
 
 type IntegerBitDepth = keyof typeof INTEGER_SCALES;
 
-export const integerScalesOf = (bitDepth: WavBitDepth): { negative: number; positive: number } | undefined =>
-	bitDepth === "32f" ? undefined : INTEGER_SCALES[bitDepth];
+const isFloatBitDepth = (bitDepth: SourceBitDepth): bitDepth is "32f" | "64f" =>
+	bitDepth === "32f" || bitDepth === "64f";
+
+export const integerScalesOf = (bitDepth: SourceBitDepth): { negative: number; positive: number } | undefined =>
+	isFloatBitDepth(bitDepth) ? undefined : INTEGER_SCALES[bitDepth];
 
 const writeIntegerCode = (buffer: Buffer, offset: number, code: number, bitDepth: IntegerBitDepth): number => {
 	switch (bitDepth) {
+		case "8":
+			buffer[offset] = code + 0x80;
+
+			return offset + 1;
 		case "16":
 			buffer.writeInt16LE(code, offset);
 
@@ -90,11 +98,17 @@ const writeIntegerCode = (buffer: Buffer, offset: number, code: number, bitDepth
 	}
 };
 
-export const encodeSample = (buffer: Buffer, offset: number, sample: number, bitDepth: WavBitDepth): number => {
+export const encodeSample = (buffer: Buffer, offset: number, sample: number, bitDepth: SourceBitDepth): number => {
 	if (bitDepth === "32f") {
 		buffer.writeFloatLE(sample, offset);
 
 		return offset + 4;
+	}
+
+	if (bitDepth === "64f") {
+		buffer.writeDoubleLE(sample, offset);
+
+		return offset + 8;
 	}
 
 	const { negative, positive } = INTEGER_SCALES[bitDepth];
@@ -107,9 +121,9 @@ export const encodeQuantizedSample = (
 	buffer: Buffer,
 	offset: number,
 	sample: number,
-	bitDepth: WavBitDepth,
+	bitDepth: SourceBitDepth,
 ): number => {
-	if (bitDepth === "32f") {
+	if (isFloatBitDepth(bitDepth)) {
 		return encodeSample(buffer, offset, sample, bitDepth);
 	}
 

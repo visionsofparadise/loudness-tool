@@ -2,7 +2,7 @@ import { writeToStream } from "../utils/writeToStream";
 import { bytesPerSampleOf, encodeQuantizedSample, encodeSample } from "./utils/sampleCodec";
 import { TemporaryFile } from "./utils/TemporaryFile";
 import { wavHeaderOf } from "./utils/wavHeader";
-import type { WavBitDepth } from "./utils/wavFormat";
+import type { SourceBitDepth } from "./utils/wavFormat";
 
 export type WavSink =
 	| { readonly kind: "file"; readonly path: string }
@@ -12,7 +12,7 @@ interface WavWriterFormat {
 	readonly sampleRate: number;
 	readonly channelCount: number;
 	readonly channelMask: number;
-	readonly bitDepth: WavBitDepth;
+	readonly bitDepth: SourceBitDepth;
 	readonly frameCount: number;
 }
 
@@ -35,12 +35,28 @@ export const sinkOutputOf = async (sink: WavSink): Promise<WavOutput> =>
 
 export class WavWriter {
 	static async create(sink: WavSink, format: WavWriterFormat): Promise<WavWriter> {
+		return WavWriter.createWithHeader(sink, format, (blockAlign) =>
+			wavHeaderOf({ ...format, blockAlign }, format.frameCount * blockAlign),
+		);
+	}
+
+	static async createRaw(sink: WavSink, format: WavWriterFormat): Promise<WavWriter> {
+		return WavWriter.createWithHeader(sink, format, () => Buffer.alloc(0));
+	}
+
+	private static async createWithHeader(
+		sink: WavSink,
+		format: WavWriterFormat,
+		headerOf: (blockAlign: number) => Buffer,
+	): Promise<WavWriter> {
 		const blockAlign = format.channelCount * bytesPerSampleOf(format.bitDepth);
-		const header = wavHeaderOf({ ...format, blockAlign }, format.frameCount * blockAlign);
+		const header = headerOf(blockAlign);
 		const output = await sinkOutputOf(sink);
 
 		try {
-			await output.write(header, 0);
+			if (header.length > 0) {
+				await output.write(header, 0);
+			}
 		} catch (error) {
 			await output.discard();
 

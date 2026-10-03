@@ -1,4 +1,4 @@
-import { decodeFrames } from "./utils/sampleCodec";
+import { bytesPerSampleOf, decodeFrames } from "./utils/sampleCodec";
 import { chunkWalkOf, invalidWavErrorOf, notWavErrorOf, stepChunk } from "./utils/wavFormat";
 import { BLOCK_FRAMES, type AudioBlock, type BlockSource, type StreamFormat } from "./WavReader";
 import type { WavSpool } from "./WavSpool";
@@ -145,6 +145,29 @@ export class WavStreamReader implements BlockSource {
 
 				await bytes.skip(step.byteCount - payloadBytesRead);
 			}
+		} catch (error) {
+			await bytes.cancel();
+
+			throw error;
+		}
+	}
+
+	static async openRaw(
+		stream: NodeJS.ReadableStream,
+		format: StreamFormat,
+		spool?: (format: StreamFormat, blockAlign: number) => Promise<WavSpool>,
+	): Promise<WavStreamReader> {
+		const bytes = new StreamBytes(stream);
+		const blockAlign = format.channelCount * bytesPerSampleOf(format.bitDepth);
+
+		try {
+			return new WavStreamReader(
+				bytes,
+				format,
+				blockAlign,
+				Number.POSITIVE_INFINITY,
+				await spool?.(format, blockAlign),
+			);
 		} catch (error) {
 			await bytes.cancel();
 

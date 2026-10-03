@@ -4,14 +4,14 @@ import { stretchFrameCountOf, type CrestLayout } from "./ladder";
 import { allocateChannels, forEachStretchChunk, renderStretch } from "./render";
 import { quantizerOf } from "./rounding";
 import type { StretchRange } from "./regions";
-import type { WavBitDepth } from "../../../wav/utils/wavFormat";
+import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 import type { WavSink } from "../../../wav/WavWriter";
 
 export const applyWalk = async (args: {
 	inputPath: string;
 	sink: WavSink;
 	layout: CrestLayout;
-	bitDepth: WavBitDepth;
+	bitDepth: SourceBitDepth;
 	channelCount: number;
 	walk: Int32Array;
 }): Promise<number> => {

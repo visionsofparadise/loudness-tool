@@ -7,7 +7,7 @@ import {
 	type StretchMeasure,
 } from "./render";
 import { printedDbOf, quantizerOf } from "./rounding";
-import type { WavBitDepth } from "../../../wav/utils/wavFormat";
+import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
 interface HeldStretch {
 	readonly measure: StretchMeasure;
@@ -28,7 +28,7 @@ export class SourceMeter {
 	private held: HeldStretch | undefined;
 	private previousMeasure: StretchMeasure | undefined;
 
-	constructor(args: { stretchFrames: number; channelCount: number; bitDepth: WavBitDepth }) {
+	constructor(args: { stretchFrames: number; channelCount: number; bitDepth: SourceBitDepth }) {
 		this.stretchFrames = args.stretchFrames;
 		this.quantize = quantizerOf(args.bitDepth);
 		this.stride = OVERSAMPLE_FACTOR * args.channelCount;

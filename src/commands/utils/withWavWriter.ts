@@ -1,4 +1,4 @@
-import { nearestWritableBitDepth } from "../../wav/utils/wavFormat";
+import { wavOutputBitDepthOf } from "../../wav/utils/wavFormat";
 import { WavReader } from "../../wav/WavReader";
 import { WavWriter, type WavSink } from "../../wav/WavWriter";
 
@@ -15,7 +15,7 @@ export const withWavWriter = async (
 			sampleRate: reader.format.sampleRate,
 			channelCount: reader.format.channelCount,
 			channelMask: reader.format.channelMask,
-			bitDepth: nearestWritableBitDepth(reader.format.bitDepth),
+			bitDepth: wavOutputBitDepthOf(reader.format.bitDepth),
 			frameCount: reader.format.frameCount,
 		});
 

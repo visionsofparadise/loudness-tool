@@ -7,7 +7,7 @@ import { WavWriter } from "./WavWriter";
 import { bytesPerSampleOf } from "./utils/sampleCodec";
 import { createNoise, createRamp } from "../utils/testSignals";
 import { encodePlanar, writeExtensibleWav } from "../utils/testWav";
-import { nearestWritableBitDepth, type SourceBitDepth, type WavBitDepth } from "./utils/wavFormat";
+import { wavOutputBitDepthOf, type SourceBitDepth, type WavBitDepth } from "./utils/wavFormat";
 
 const SAMPLE_RATE = 48000;
 
@@ -165,7 +165,7 @@ describe("WavReader", () => {
 		expect(read.format.sampleRate).toBe(SAMPLE_RATE);
 		expect(read.format.channelCount).toBe(1);
 		expect(read.format.frameCount).toBe(32);
-		expect(nearestWritableBitDepth(read.format.bitDepth)).toBe("16");
+		expect(wavOutputBitDepthOf(read.format.bitDepth)).toBe("16");
 
 		for (let frameIndex = 0; frameIndex < 32; frameIndex++) {
 			expect(Math.abs((read.channels[0]?.[frameIndex] ?? 0) - (channels[0]?.[frameIndex] ?? 0))).toBeLessThanOrEqual(
@@ -190,7 +190,7 @@ describe("WavReader", () => {
 		expect(read.format.bitDepth).toBe("64f");
 		expect(read.format.channelCount).toBe(2);
 		expect(read.format.frameCount).toBe(16);
-		expect(nearestWritableBitDepth(read.format.bitDepth)).toBe("32f");
+		expect(wavOutputBitDepthOf(read.format.bitDepth)).toBe("32f");
 		expect(Array.from(read.channels[0] ?? [])).toEqual(Array.from(channels[0] ?? []));
 		expect(Array.from(read.channels[1] ?? [])).toEqual(Array.from(channels[1] ?? []));
 	});

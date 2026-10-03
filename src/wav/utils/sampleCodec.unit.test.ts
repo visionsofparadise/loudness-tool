@@ -130,6 +130,24 @@ describe("encodeSample", () => {
 		expect(next).toBe(4);
 	});
 
+	it("writes 8-bit unsigned with 0x7f positive and 0x80 negative scales and clamps beyond full scale", () => {
+		const buffer = Buffer.alloc(6);
+
+		[-1, 0, 0.5, 1, 2, -2].forEach((sample, index) => encodeSample(buffer, index, sample, "8"));
+
+		expect([...buffer]).toEqual([0x00, 0x80, 0xc0, 0xff, 0xff, 0x00]);
+		expect(encodeSample(buffer, 2, 0, "8")).toBe(3);
+	});
+
+	it("round-trips 64-bit float bit for bit", () => {
+		const buffer = Buffer.alloc(8);
+
+		for (const sample of [0.1, -0.30000000000000004, 1e-300, 1.5, -2.5e10, Math.PI]) {
+			expect(encodeSample(buffer, 0, sample, "64f")).toBe(8);
+			expect(decodeSample(buffer, 0, "64f")).toBe(sample);
+		}
+	});
+
 	it("writes 32-bit float verbatim", () => {
 		const buffer = Buffer.alloc(4);
 		const next = encodeSample(buffer, 0, 0.123, "32f");
@@ -157,8 +175,10 @@ describe("encodeSample/decodeSample round trip", () => {
 });
 
 describe("encodeQuantizedSample", () => {
-	const codeOf = (buffer: Buffer, bitDepth: "16" | "24" | "32"): number => {
+	const codeOf = (buffer: Buffer, bitDepth: "8" | "16" | "24" | "32"): number => {
 		switch (bitDepth) {
+			case "8":
+				return (buffer[0] ?? 0) - 0x80;
 			case "16":
 				return buffer.readInt16LE(0);
 			case "24":
@@ -167,7 +187,7 @@ describe("encodeQuantizedSample", () => {
 				return buffer.readInt32LE(0);
 		}
 	};
-	const writtenCodes = (code: number, bitDepth: "16" | "24" | "32"): { quantized: number; encoded: number } => {
+	const writtenCodes = (code: number, bitDepth: "8" | "16" | "24" | "32"): { quantized: number; encoded: number } => {
 		const source = Buffer.alloc(4);
 		const quantized = Buffer.alloc(4);
 		const encoded = Buffer.alloc(4);
@@ -181,14 +201,21 @@ describe("encodeQuantizedSample", () => {
 
 		return { quantized: codeOf(quantized, bitDepth), encoded: codeOf(encoded, bitDepth) };
 	};
-	it("writes every 16-bit code it decodes back as that code, where encodeSample drifts above half scale", () => {
-		for (let code = -0x8000; code <= 0x7fff; code++) {
-			const { quantized, encoded } = writtenCodes(code, "16");
 
-			expect(quantized).toBe(code);
-			expect(encoded).toBe(code > 0x4000 ? code - 1 : code);
-		}
-	});
+	it.each([
+		["8", 0x80],
+		["16", 0x8000],
+	] as const)(
+		"writes every %s-bit code it decodes back as that code, where encodeSample drifts above half scale",
+		(bitDepth, full) => {
+			for (let code = -full; code < full; code++) {
+				const { quantized, encoded } = writtenCodes(code, bitDepth);
+
+				expect(quantized).toBe(code);
+				expect(encoded).toBe(code > full / 2 ? code - 1 : code);
+			}
+		},
+	);
 
 	it("writes the 24- and 32-bit codes at zero, one, half scale and the extremes back as themselves", () => {
 		for (const bitDepth of ["24", "32"] as const) {
@@ -222,8 +249,8 @@ describe("encodeQuantizedSample", () => {
 		}
 	});
 
-	it("clamps beyond the codes and writes 32f as encodeSample does", () => {
-		const buffer = Buffer.alloc(4);
+	it("clamps beyond the codes and writes 32f and 64f as encodeSample does", () => {
+		const buffer = Buffer.alloc(8);
 
 		encodeQuantizedSample(buffer, 0, 1, "16");
 		expect(buffer.readInt16LE(0)).toBe(0x7fff);
@@ -231,5 +258,9 @@ describe("encodeQuantizedSample", () => {
 		expect(buffer.readInt16LE(0)).toBe(-0x8000);
 		encodeQuantizedSample(buffer, 0, 0.123, "32f");
 		expect(buffer.readFloatLE(0)).toBe(Math.fround(0.123));
+		encodeQuantizedSample(buffer, 0, 1, "8");
+		expect(buffer[0]).toBe(0xff);
+		encodeQuantizedSample(buffer, 0, 0.1, "64f");
+		expect(buffer.readDoubleLE(0)).toBe(0.1);
 	});
 });

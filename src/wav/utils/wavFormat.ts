@@ -25,7 +25,7 @@ export const notWavErrorOf = (path: string): Error => new Error(`Not a WAV file:
 
 export const invalidWavErrorOf = (path: string): Error => new Error(`Invalid WAV file: "${path}"`);
 
-export const nearestWritableBitDepth = (bitDepth: SourceBitDepth): WavBitDepth => {
+export const wavOutputBitDepthOf = (bitDepth: SourceBitDepth): WavBitDepth => {
 	switch (bitDepth) {
 		case "8":
 			return "16";

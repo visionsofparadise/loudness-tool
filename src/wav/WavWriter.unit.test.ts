@@ -466,4 +466,85 @@ describe("WavWriter", () => {
 
 		await writer.abort();
 	});
+
+	const rawBytesOf = async (format: WavWriterFormatOf, channels: ReadonlyArray<Float64Array>): Promise<Buffer> => {
+		const chunks: Array<Buffer> = [];
+		const stream = new PassThrough();
+
+		stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+		const writer = await WavWriter.createRaw({ kind: "stream", stream }, format);
+
+		await writer.write(channels);
+		await writer.close();
+
+		return Buffer.concat(chunks);
+	};
+
+	it.each([
+		["8", 1],
+		["8", 6],
+		["16", 1],
+		["16", 6],
+		["24", 1],
+		["24", 6],
+		["32", 1],
+		["32", 6],
+		["32f", 1],
+		["32f", 6],
+		["64f", 1],
+		["64f", 6],
+	] as const)(
+		"createRaw writes %s on %i channel(s) as create's file output after its header",
+		async (bitDepth, channelCount) => {
+			const path = join(workingDirectory, `raw-${bitDepth}-${channelCount}.wav`);
+			const channels = createNoise(777, channelCount, 41);
+			const format = {
+				sampleRate: SAMPLE_RATE,
+				channelCount,
+				channelMask: channelCount === 6 ? 0x3f : 0,
+				bitDepth,
+				frameCount: 777,
+			};
+			const writer = await WavWriter.create({ kind: "file", path }, format);
+
+			await writer.write(channels);
+			await writer.close();
+
+			const reader = await WavReader.open(path);
+			const { dataOffset } = reader;
+
+			await reader.close();
+
+			const file = await fsPromises.readFile(path);
+			const raw = await rawBytesOf(format, channels);
+
+			expect(raw.length).toBe(777 * channelCount * bytesPerSampleOf(bitDepth));
+			expect(raw.equals(file.subarray(dataOffset))).toBe(true);
+		},
+	);
+
+	it("createRaw writes nothing for 0 frames and rejects a close short of its frame count", async () => {
+		const format = {
+			sampleRate: SAMPLE_RATE,
+			channelCount: 2,
+			channelMask: 0,
+			bitDepth: "16",
+			frameCount: 0,
+		} as const;
+		const empty = await rawBytesOf(format, [new Float64Array(0), new Float64Array(0)]);
+		const writer = await WavWriter.createRaw(
+			{ kind: "stream", stream: new PassThrough() },
+			{ ...format, frameCount: 10 },
+		);
+
+		await writer.write(createNoise(9, 2, 2));
+
+		expect(empty.length).toBe(0);
+		await expect(writer.close()).rejects.toThrow(
+			"Frame count mismatch: the header declares 10 frames, 9 were written",
+		);
+	});
 });
+
+type WavWriterFormatOf = Parameters<typeof WavWriter.createRaw>[1];
