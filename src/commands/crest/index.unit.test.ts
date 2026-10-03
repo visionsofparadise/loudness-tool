@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../../cli";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
-import { captureWrites, runSilenceOnStdin, runStdioCombinations } from "../../utils/testCli";
+import {
+	captureWrites,
+	expectRawMatchesFileMode,
+	runSilenceOnStdin,
+	runStdioCombinations,
+	writeTestWav,
+} from "../../utils/testCli";
 import { createNoise, createSine } from "../../utils/testSignals";
 import { WavReader, type AudioBlock } from "../../wav/WavReader";
 import { WavWriter } from "../../wav/WavWriter";
@@ -400,4 +406,27 @@ describe("crest on stdin and stdout", () => {
 		expect(runs.fileSamples).toEqual(runs.inputSamples);
 		expect(runs.pipeSamples).toEqual(runs.inputSamples);
 	});
+});
+
+describe("crest on raw PCM", () => {
+	let workingDirectory: string;
+
+	beforeEach(async () => {
+		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-crest-raw-"));
+	});
+
+	afterEach(async () => {
+		await rm(workingDirectory, { recursive: true, force: true });
+	});
+
+	it("writes the file-mode output's data bytes for raw s24le in and out, and its samples from a raw file", async () => {
+		const inputPath = join(workingDirectory, "input.wav");
+
+		await writeTestWav(inputPath, createNoise(96000, 2, 7), { bitDepth: "24" });
+		await expectRawMatchesFileMode({
+			command: ["crest"],
+			inputPath,
+			directory: workingDirectory,
+		});
+	}, 60_000);
 });

@@ -1,5 +1,5 @@
 import { Command, type ParseOptionsResult } from "commander";
-import { DEFAULT_STREAM_OPTIONS, scopeStreamArguments, type StreamScopes } from "./streamOptions";
+import { DEFAULT_STREAM_OPTIONS, scopeStreamArguments, type StreamOptions, type StreamScopes } from "./streamOptions";
 
 const scopesByCommand = new WeakMap<Command, StreamScopes>();
 
@@ -21,3 +21,19 @@ export class AudioProgram extends Command {
 
 export const streamScopesOf = (command: Command): StreamScopes =>
 	scopesByCommand.get(command) ?? { inputs: [], output: DEFAULT_STREAM_OPTIONS };
+
+export const audioOptionsOf = (
+	command: Command,
+): {
+	readonly scratchDir: string | undefined;
+	readonly inputStream: StreamOptions;
+	readonly outputStream: StreamOptions;
+} => {
+	const scopes = streamScopesOf(command);
+
+	return {
+		scratchDir: command.optsWithGlobals<{ readonly scratchDir?: string }>().scratchDir,
+		inputStream: scopes.inputs[0] ?? DEFAULT_STREAM_OPTIONS,
+		outputStream: scopes.output,
+	};
+};

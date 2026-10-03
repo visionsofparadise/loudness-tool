@@ -1,8 +1,8 @@
 import { withWavWriter } from "./withWavWriter";
-import type { WavSink } from "../../wav/WavWriter";
+import type { AudioOutput } from "./sinks";
 
-export const applyUniformGain = async (inputPath: string, sink: WavSink, gain: number): Promise<void> => {
-	await withWavWriter(inputPath, sink, async (reader, writer) => {
+export const applyUniformGain = async (inputPath: string, output: AudioOutput, gain: number): Promise<void> => {
+	await withWavWriter(inputPath, output, async (reader, writer) => {
 		for await (const block of reader.blocks()) {
 			for (const channel of block.channels) {
 				for (let frameIndex = 0; frameIndex < channel.length; frameIndex++) {

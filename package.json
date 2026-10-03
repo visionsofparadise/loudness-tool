@@ -1,7 +1,7 @@
 {
 	"name": "loudness-tool",
 	"version": "0.1.0",
-	"description": "WAV loudness processing",
+	"description": "WAV and raw PCM loudness processing",
 	"type": "module",
 	"bin": {
 		"loudness-tool": "./dist/cli.js"

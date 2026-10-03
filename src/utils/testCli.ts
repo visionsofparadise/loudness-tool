@@ -1,13 +1,16 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { runProgram } from "../cli";
 import { WavReader } from "../wav/WavReader";
+import { WavWriter } from "../wav/WavWriter";
+import type { SourceBitDepth } from "../wav/utils/wavFormat";
 
 interface CliRun {
 	readonly stdout: Buffer;
 	readonly stderr: string;
+	readonly stderrBytes: Buffer;
 	readonly exitCode: string | number | null | undefined;
 }
 
@@ -47,6 +50,7 @@ export const runCli = async (argv: ReadonlyArray<string>, stdin?: Buffer): Promi
 		return {
 			stdout: Buffer.concat(stdoutChunks),
 			stderr: Buffer.concat(stderrChunks).toString("utf8"),
+			stderrBytes: Buffer.concat(stderrChunks),
 			exitCode: process.exitCode,
 		};
 	} finally {
@@ -139,4 +143,62 @@ export const runSilenceOnStdin = async (args: {
 		fileRun,
 		pipeRun,
 	};
+};
+
+export const writeTestWav = async (
+	path: string,
+	channels: ReadonlyArray<Float64Array>,
+	format: { readonly bitDepth: SourceBitDepth; readonly channelMask?: number; readonly sampleRate?: number },
+): Promise<void> => {
+	const writer = await WavWriter.create(
+		{ kind: "file", path },
+		{
+			sampleRate: format.sampleRate ?? 48000,
+			channelCount: channels.length,
+			channelMask: format.channelMask ?? 0,
+			bitDepth: format.bitDepth,
+			frameCount: channels[0]?.length ?? 0,
+		},
+	);
+
+	await writer.write(channels);
+	await writer.close();
+};
+
+export const dataBytesOf = async (path: string): Promise<Buffer> => {
+	const reader = await WavReader.open(path);
+	const { dataOffset, blockAlign } = reader;
+	const { frameCount } = reader.format;
+
+	await reader.close();
+
+	return (await readFile(path)).subarray(dataOffset, dataOffset + frameCount * blockAlign);
+};
+
+export const expectRawMatchesFileMode = async (args: {
+	readonly command: ReadonlyArray<string>;
+	readonly inputPath: string;
+	readonly directory: string;
+}): Promise<void> => {
+	const { command, inputPath, directory } = args;
+	const [name = "", ...options] = command;
+	const raw = ["-f", "s24le", "-ar", "48000", "-ac", "2"];
+	const filePath = join(directory, "raw-file-mode.wav");
+	const rawPath = join(directory, "raw-input.raw");
+	const rawOutputPath = join(directory, "raw-file-output.wav");
+	const fileRun = await runCli([name, inputPath, "-o", filePath, ...options]);
+	const rawData = await dataBytesOf(inputPath);
+
+	await writeFile(rawPath, rawData);
+
+	const pipeRun = await runCli([name, ...raw, "-", "-f", "s24le", "-o", "-", ...options], rawData);
+	const rawFileRun = await runCli([name, ...raw, rawPath, "-o", rawOutputPath, ...options]);
+	const summary = fileRun.stdout.toString("utf8").replace(filePath, "-");
+
+	expect([fileRun.exitCode, pipeRun.exitCode, rawFileRun.exitCode]).toEqual([undefined, undefined, undefined]);
+	expect(pipeRun.stdout.equals(await dataBytesOf(filePath))).toBe(true);
+	expect(pipeRun.stdout.length).toBeGreaterThan(0);
+	expect(pipeRun.stderr).toBe(`${fileRun.stderr}${summary}`);
+	expect(pipeRun.stderr).toMatch(/\noutput {4,}-\n$/);
+	expect(await decodedSamplesOf(rawOutputPath)).toEqual(await decodedSamplesOf(filePath));
 };

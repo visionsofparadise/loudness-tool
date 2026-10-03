@@ -1,21 +1,25 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
-import { wavOutputBitDepthOf, type WavBitDepth } from "../../wav/utils/wavFormat";
-import { scratchDirectoryOf, withAudioInput } from "../utils/AudioInput";
-import { sinkOf, writeSummary } from "../utils/sinks";
+import { replayableInputOptionsOf, withAudioInput } from "../utils/AudioInput";
+import { audioOptionsOf } from "../utils/AudioProgram";
+import { writeSummary } from "../utils/sinks";
 import { pushWavBlocks } from "../utils/withWavReader";
 import { applyWalk } from "./utils/apply";
 import { crestLayoutOf, stretchFramesOf } from "./utils/ladder";
 import { printedDbOf } from "./utils/rounding";
 import { solveCrest } from "./utils/solve";
 import { SourceMeter } from "./utils/SourceMeter";
+import type { SourceBitDepth } from "../../wav/utils/wavFormat";
 import type { BlockSource } from "../../wav/WavReader";
+import type { StreamOptions } from "../utils/streamOptions";
 
 interface CrestOptions {
 	readonly output: string;
 	readonly spread?: number;
 	readonly smoothing?: number;
 	readonly scratchDir?: string;
+	readonly inputStream?: StreamOptions;
+	readonly outputStream?: StreamOptions;
 }
 
 const LABEL_WIDTH = 16;
@@ -48,16 +52,15 @@ const parseSmoothing = (value: string): number => {
 const meterSource = async (
 	source: BlockSource,
 	ladder: { spreadMs: number; smoothingMs: number },
+	bitDepth: SourceBitDepth,
 ): Promise<{
 	readonly sampleRate: number;
 	readonly channelCount: number;
-	readonly bitDepth: WavBitDepth;
 	readonly frameCount: number;
 	readonly truePeak: number;
 	readonly readings: Float64Array;
 }> => {
 	const { sampleRate, channelCount } = source.format;
-	const bitDepth = wavOutputBitDepthOf(source.format.bitDepth);
 	const meter = new SourceMeter({
 		stretchFrames: stretchFramesOf({ ...ladder, sampleRate }),
 		channelCount,
@@ -69,7 +72,6 @@ const meterSource = async (
 	return {
 		sampleRate,
 		channelCount,
-		bitDepth,
 		frameCount,
 		truePeak: truePeakAccumulator.finalize(),
 		readings: meter.finish(),
@@ -82,9 +84,12 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 		smoothingMs: options.smoothing ?? DEFAULT_SMOOTHING_MS,
 	};
 
-	await withAudioInput(inputPath, { replayable: true, scratchDirectory: options.scratchDir }, async (input) => {
-		const measurement = await input.withFirstPass(async (source) => meterSource(source, ladder));
-		const { sampleRate, channelCount, bitDepth, readings } = measurement;
+	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) => {
+		const measurement = await input.withFirstPass(async (source) =>
+			meterSource(source, ladder, input.output().bitDepth),
+		);
+		const { sampleRate, channelCount, readings } = measurement;
+		const { bitDepth } = input.output();
 		const layout = crestLayoutOf({ ...ladder, sampleRate, frameCount: measurement.frameCount });
 
 		if (readings.length !== layout.stretchCount) {
@@ -101,9 +106,8 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 		});
 		const outputTruePeak = await applyWalk({
 			inputPath: replayPath,
-			sink: sinkOf(options.output),
+			output: input.output(),
 			layout,
-			bitDepth,
 			channelCount,
 			walk: solution.walk,
 		});
@@ -125,9 +129,12 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 export const addCrestCommand = (program: Command): void => {
 	const command = program.command("crest");
 
-	command.description("Lower the true peak of a WAV file by dispersing phase");
-	command.argument("<input>", "input WAV path, or - for stdin");
-	command.requiredOption("-o, --output <path>", "output WAV path, or - for stdout");
+	command.description("Lower the true peak of audio by dispersing phase");
+	command.argument("<input>", "input path, WAV unless -f names a raw format, or - or pipe: for a pipe");
+	command.requiredOption(
+		"-o, --output <path>",
+		"output path, WAV unless -f names a raw format, or - or pipe: for a pipe",
+	);
 	command.option("--spread <ms>", "furthest energy is moved in milliseconds", parseSpread, DEFAULT_SPREAD_MS);
 	command.option(
 		"--smoothing <ms>",
@@ -136,6 +143,6 @@ export const addCrestCommand = (program: Command): void => {
 		DEFAULT_SMOOTHING_MS,
 	);
 	command.action(async (input: string, options: CrestOptions) =>
-		crest(input, { ...options, scratchDir: scratchDirectoryOf(command) }),
+		crest(input, { ...options, ...audioOptionsOf(command) }),
 	);
 };

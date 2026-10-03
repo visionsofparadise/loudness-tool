@@ -5,10 +5,19 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../cli";
 import { dbToLinear, linearToDb } from "../utils/db";
-import { captureWrites, runSilenceOnStdin, runStdioCombinations } from "../utils/testCli";
-import { createSine } from "../utils/testSignals";
+import {
+	captureWrites,
+	dataBytesOf,
+	expectRawMatchesFileMode,
+	runCli,
+	runSilenceOnStdin,
+	runStdioCombinations,
+	writeTestWav,
+} from "../utils/testCli";
+import { createNoise, createSine } from "../utils/testSignals";
 import { WavReader, type AudioBlock } from "../wav/WavReader";
 import { writeExtensibleWav } from "../utils/testWav";
+import { WavStreamReader } from "../wav/WavStreamReader";
 import { WavWriter } from "../wav/WavWriter";
 import { lufsNorm } from "./lufsNorm";
 
@@ -475,5 +484,224 @@ describe("lufs-norm on stdin and stdout", () => {
 		expect(runs.pipeRun.stderr).toContain("passed through unchanged");
 		expect(runs.fileSamples).toEqual(runs.inputSamples);
 		expect(runs.pipeSamples).toEqual(runs.inputSamples);
+	});
+});
+
+describe("lufs-norm on raw PCM and stream options", () => {
+	let workingDirectory: string;
+
+	beforeEach(async () => {
+		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-lufs-norm-raw-"));
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await rm(workingDirectory, { recursive: true, force: true });
+	});
+
+	const pathOf = (name: string): string => join(workingDirectory, name);
+
+	const surroundSignal = (channelCount: number): Array<Float64Array> =>
+		createNoise(48000, channelCount, 11).map((channel, index) =>
+			channel.map((sample) => sample * (0.2 + 0.1 * index)),
+		);
+
+	const appliedGainOf = (run: { readonly stdout: Buffer }): number =>
+		Number(/applied gain\s+(-?[\d.]+) dB/.exec(run.stdout.toString("utf8"))?.[1]);
+
+	const maskOf = async (path: string): Promise<number> => {
+		const reader = await WavReader.open(path);
+
+		await reader.close();
+
+		return reader.format.channelMask;
+	};
+
+	it("writes the file-mode output's data bytes for raw s24le in and out, and its samples from a raw file", async () => {
+		const inputPath = pathOf("input.wav");
+
+		await writeTestWav(inputPath, createNoise(96000, 2, 7), { bitDepth: "24" });
+		await expectRawMatchesFileMode({
+			command: ["lufs-norm", "--lufs", "-20"],
+			inputPath,
+			directory: workingDirectory,
+		});
+	});
+
+	it("refuses -ar on a WAV input, ignores -ac, and refuses a -ch_layout of another count", async () => {
+		const inputPath = pathOf("stereo.wav");
+
+		await writeTestWav(inputPath, createNoise(48000, 2, 5), { bitDepth: "16" });
+
+		const plain = await runCli(["lufs-norm", inputPath, "-o", "-"]);
+		const rate = await runCli(["lufs-norm", "-ar", "48000", inputPath, "-o", "-"]);
+		const sampleRate = await runCli(["lufs-norm", "-sample_rate", "22050", inputPath, "-o", "-"]);
+		const six = await runCli(["lufs-norm", "-ac", "6", inputPath, "-o", "-"]);
+		const zero = await runCli(["lufs-norm", "-ac", "0", inputPath, "-o", "-"]);
+		const layout = await runCli(["lufs-norm", "-ch_layout", "5.1", inputPath, "-o", "-"]);
+
+		expect(rate.stderr).toBe(`error: -ar applies to a raw input, and "${inputPath}" is WAV\n`);
+		expect(sampleRate.stderr).toBe(`error: -sample_rate applies to a raw input, and "${inputPath}" is WAV\n`);
+		expect(six.stdout.equals(plain.stdout)).toBe(true);
+		expect(zero.stdout.equals(plain.stdout)).toBe(true);
+		expect(layout.stderr).toBe(`error: Channel layout "5.1" has 6 channels, and "${inputPath}" has 2\n`);
+		expect([rate.exitCode, sampleRate.exitCode, layout.exitCode]).toEqual([1, 1, 1]);
+	});
+
+	it("weighs a plain stereo WAV's channels as side channels under -ch_layout SL+SR", async () => {
+		const inputPath = pathOf("stereo.wav");
+		const sidePath = pathOf("side.wav");
+		const silentPath = pathOf("silent.wav");
+		const silentSidePath = pathOf("silent-side.wav");
+
+		await writeTestWav(inputPath, createNoise(96000, 2, 5), { bitDepth: "16" });
+		await writeTestWav(silentPath, [new Float64Array(4800), new Float64Array(4800)], { bitDepth: "16" });
+
+		const plain = await runCli(["lufs-norm", inputPath, "-o", pathOf("plain.wav")]);
+		const side = await runCli(["lufs-norm", "-ch_layout", "SL+SR", inputPath, "-o", sidePath]);
+		const silent = await runCli(["lufs-norm", "-ch_layout", "SL+SR", silentPath, "-o", silentSidePath]);
+
+		expect(appliedGainOf(plain) - appliedGainOf(side)).toBeCloseTo(10 * Math.log10(1.41), 1);
+		expect(Math.abs(appliedGainOf(plain) - appliedGainOf(side) - 10 * Math.log10(1.41))).toBeLessThanOrEqual(0.01);
+		expect(await maskOf(sidePath)).toBe(0x600);
+		expect(silent.stderr).toContain("passed through unchanged");
+		expect(await maskOf(silentSidePath)).toBe(0x600);
+		expect((await dataBytesOf(silentSidePath)).equals(await dataBytesOf(silentPath))).toBe(true);
+	});
+
+	it("relabels a raw input with no layout through an output -ch_layout, weighing it as an input -ch_layout does", async () => {
+		const sourcePath = pathOf("six.wav");
+
+		await writeTestWav(sourcePath, surroundSignal(6), { bitDepth: "16" });
+
+		const raw = await dataBytesOf(sourcePath);
+		const relabelled = await runCli(
+			["lufs-norm", "-f", "s16le", "-ac", "6", "-", "-ch_layout", "5.1", "-o", pathOf("a.wav")],
+			raw,
+		);
+		const stated = await runCli(["lufs-norm", "-f", "s16le", "-ch_layout", "5.1", "-", "-o", pathOf("b.wav")], raw);
+		const unstated = await runCli(["lufs-norm", "-f", "s16le", "-ac", "6", "-", "-o", pathOf("c.wav")], raw);
+
+		expect([relabelled.exitCode, stated.exitCode, unstated.exitCode]).toEqual([undefined, undefined, undefined]);
+		expect((await readFile(pathOf("a.wav"))).equals(await readFile(pathOf("b.wav")))).toBe(true);
+		expect(await maskOf(pathOf("a.wav"))).toBe(0x3f);
+		expect(appliedGainOf(relabelled)).toBe(appliedGainOf(stated));
+		expect(appliedGainOf(relabelled)).not.toBe(appliedGainOf(unstated));
+	});
+
+	it("fails an output -ar that would resample before the reader opens or reads a block", async () => {
+		const sourcePath = pathOf("rate.wav");
+
+		await writeTestWav(sourcePath, createNoise(4800, 2, 3), { bitDepth: "16" });
+
+		const openRaw = vi.spyOn(WavStreamReader, "openRaw");
+		const blocks = vi.spyOn(WavStreamReader.prototype, "blocks");
+		const raw = await runCli(
+			["lufs-norm", "-f", "s16le", "-ar", "48000", "-ac", "2", "-", "-ar", "44100", "-o", "-"],
+			await dataBytesOf(sourcePath),
+		);
+		const wav = await runCli(["lufs-norm", "-", "-ar", "44100", "-o", "-"], await readFile(sourcePath));
+		const message =
+			"error: loudness-tool keeps the input's sample rate: output -ar 44100 differs from the input's 48000\n";
+
+		expect([raw.stderr, wav.stderr]).toEqual([message, message]);
+		expect([raw.exitCode, wav.exitCode]).toEqual([1, 1]);
+		expect(openRaw).not.toHaveBeenCalled();
+		expect(blocks).not.toHaveBeenCalled();
+		expect(raw.stdout.length + wav.stdout.length).toBe(0);
+	});
+
+	it("accepts BAG's output arguments on a matching raw input", async () => {
+		const sourcePath = pathOf("bag.wav");
+
+		await writeTestWav(sourcePath, createNoise(48000, 2, 3), { bitDepth: "32f" });
+
+		const bag = ["-f", "f32le", "-ar", "48000", "-ac", "2"];
+		const run = await runCli(["lufs-norm", ...bag, "pipe:0", ...bag, "-o", "pipe:1"], await dataBytesOf(sourcePath));
+
+		expect(run.exitCode).toBeUndefined();
+		expect(run.stdout.length).toBe(48000 * 2 * 4);
+	});
+
+	it.each([
+		[
+			"5.1 input, output -ac 2 -ch_layout 5.1",
+			["-f", "s16le", "-ch_layout", "5.1"],
+			["-ac", "2", "-ch_layout", "5.1"],
+			6,
+			0x3f,
+		],
+		["5.1 input, output -ac 6", ["-f", "s16le", "-ch_layout", "5.1"], ["-ac", "6"], 6, 0x3f],
+		["raw -ac 6 input, output -ac 6", ["-f", "s16le", "-ac", "6"], ["-ac", "6"], 6, 0],
+		["raw -ac 9 input, output -ac 9", ["-f", "s16le", "-ac", "9"], ["-ac", "9"], 9, 0],
+		["5.1 input, output -ar 0", ["-f", "s16le", "-ch_layout", "5.1"], ["-ar", "0"], 6, 0x3f],
+		["5.1 input, output -ac 0", ["-f", "s16le", "-ch_layout", "5.1"], ["-ac", "0"], 6, 0x3f],
+		["5.1 input, output -ch_layout 6C", ["-f", "s16le", "-ch_layout", "5.1"], ["-ch_layout", "6C"], 6, 0x3f],
+	] as const)("accepts a %s", async (_label, input, output, channelCount, channelMask) => {
+		const sourcePath = pathOf("source.wav");
+		const outputPath = pathOf("out.wav");
+
+		await writeTestWav(sourcePath, surroundSignal(channelCount), { bitDepth: "16" });
+
+		const run = await runCli(
+			["lufs-norm", ...input, "-ar", "48000", "-", ...output, "-o", outputPath],
+			await dataBytesOf(sourcePath),
+		);
+		const reader = await WavReader.open(outputPath);
+
+		await reader.close();
+
+		expect(run.exitCode).toBeUndefined();
+		expect(reader.format).toMatchObject({ sampleRate: 48000, channelCount, channelMask });
+	});
+
+	it.each([
+		[
+			["-ch_layout", "5.1"],
+			["-ch_layout", "5.1(side)"],
+			"output -ch_layout 5.1(side) differs from the input's layout 0x3f",
+		],
+		[["-ch_layout", "5.1"], ["-ch_layout", "6.0"], "output -ch_layout 6.0 differs from the input's layout 0x3f"],
+		[["-ac", "6"], ["-ch_layout", "stereo"], "output -ch_layout stereo has 2 channels, the input 6"],
+		[
+			["-ch_layout", "5.1(side)"],
+			["-ac", "6"],
+			"output -ac 6 would rematrix the input's layout 0x60f to 6's default layout",
+		],
+		[["-ac", "6"], ["-ac", "2"], "output -ac 2 differs from the input's 6"],
+	])("refuses input %j with output %j", async (input, output, message) => {
+		const run = await runCli(
+			["lufs-norm", "-f", "s16le", ...input, "-", ...output, "-o", "-"],
+			Buffer.alloc(2 * 6 * 4800),
+		);
+
+		expect(run.stderr).toBe(`error: loudness-tool keeps the input's channels: ${message}\n`);
+		expect(run.exitCode).toBe(1);
+	});
+
+	it.each([
+		[["-ar", "-1"], "error: Invalid sample rate: -1\n"],
+		[["-ac", "-1"], "error: Invalid channel count: -1\n"],
+	])("refuses the output option %j", async (output, message) => {
+		const run = await runCli(["lufs-norm", "-f", "s16le", "-ac", "2", "-", ...output, "-o", "-"], Buffer.alloc(400));
+
+		expect(run.stderr).toBe(message);
+		expect(run.exitCode).toBe(1);
+	});
+
+	it("passes raw silence through as its input bytes, as zero floats under -f f32le, and an 8-bit WAV as its data bytes under -f u8", async () => {
+		const silence = Buffer.alloc(2 * 2 * 4800);
+		const raw = ["-f", "s16le", "-ar", "48000", "-ac", "2", "-"];
+		const same = await runCli(["lufs-norm", ...raw, "-f", "s16le", "-o", "-"], silence);
+		const floats = await runCli(["lufs-norm", ...raw, "-f", "f32le", "-o", "-"], silence);
+		const eightBitPath = pathOf("silent8.wav");
+
+		await writeTestWav(eightBitPath, [new Float64Array(4800), new Float64Array(4800)], { bitDepth: "8" });
+
+		const eightBit = await runCli(["lufs-norm", eightBitPath, "-f", "u8", "-o", "-"]);
+
+		expect(same.stdout.equals(silence)).toBe(true);
+		expect(floats.stdout.equals(Buffer.alloc(4 * 2 * 4800))).toBe(true);
+		expect(eightBit.stdout.equals(await dataBytesOf(eightBitPath))).toBe(true);
 	});
 });

@@ -4,20 +4,18 @@ import { stretchFrameCountOf, type CrestLayout } from "./ladder";
 import { allocateChannels, forEachStretchChunk, renderStretch } from "./render";
 import { quantizerOf } from "./rounding";
 import type { StretchRange } from "./regions";
-import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
-import type { WavSink } from "../../../wav/WavWriter";
+import type { AudioOutput } from "../../utils/sinks";
 
 export const applyWalk = async (args: {
 	inputPath: string;
-	sink: WavSink;
+	output: AudioOutput;
 	layout: CrestLayout;
-	bitDepth: SourceBitDepth;
 	channelCount: number;
 	walk: Int32Array;
 }): Promise<number> => {
-	const { inputPath, sink, layout, bitDepth, channelCount, walk } = args;
+	const { inputPath, output, layout, channelCount, walk } = args;
 	const accumulator = new TruePeakAccumulator(channelCount);
-	const quantize = quantizerOf(bitDepth);
+	const quantize = quantizerOf(output.bitDepth);
 	const stretchOutput = allocateChannels(channelCount, layout.stretchFrames);
 	const stepIndicesOf = (range: StretchRange): Array<number> => {
 		const stepIndices = new Set<number>([layout.zeroStepIndex]);
@@ -29,7 +27,7 @@ export const applyWalk = async (args: {
 		return [...stepIndices];
 	};
 
-	await withWavWriter(inputPath, sink, async (reader, writer) => {
+	await withWavWriter(inputPath, output, async (reader, writer) => {
 		await reader.close();
 		await forEachStretchChunk({
 			path: inputPath,

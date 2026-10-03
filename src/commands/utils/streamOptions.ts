@@ -47,7 +47,7 @@ const NEGATIVE_NUMBER = /^-(\d+|\d*\.\d+)(e[+-]?\d+)?$/;
 const STREAM_OPTION = /^-(f|ar|ac|ch_layout|channel_layout|sample_rate)(?::(.*))?$/s;
 const LAYOUT_OPTIONS = ["ch_layout", "channel_layout"];
 
-const rawBitDepthOf = (format: RawFormatName): SourceBitDepth => RAW_BIT_DEPTHS[format];
+export const rawBitDepthOf = (format: RawFormatName): SourceBitDepth => RAW_BIT_DEPTHS[format];
 
 const isRawFormatName = (value: string): value is RawFormatName => Object.hasOwn(RAW_BIT_DEPTHS, value);
 

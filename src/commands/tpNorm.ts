@@ -1,15 +1,19 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { dbToLinear } from "../utils/db";
 import { applyUniformGain } from "./utils/applyUniformGain";
-import { scratchDirectoryOf, withAudioInput } from "./utils/AudioInput";
+import { replayableInputOptionsOf, withAudioInput } from "./utils/AudioInput";
+import { audioOptionsOf } from "./utils/AudioProgram";
 import { copyUnchanged } from "./utils/copyUnchanged";
 import { measureTruePeak } from "./utils/measureTruePeak";
-import { sinkOf, writeSummary } from "./utils/sinks";
+import { writeSummary } from "./utils/sinks";
+import type { StreamOptions } from "./utils/streamOptions";
 
 interface TpNormOptions {
 	readonly output: string;
 	readonly tp?: number;
 	readonly scratchDir?: string;
+	readonly inputStream?: StreamOptions;
+	readonly outputStream?: StreamOptions;
 }
 
 const LABEL_WIDTH = 16;
@@ -38,12 +42,11 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 
 	assertTargetDb(target, target);
 
-	await withAudioInput(inputPath, { replayable: true, scratchDirectory: options.scratchDir }, async (input) => {
+	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) => {
 		const measurement = await input.withFirstPass(measureTruePeak);
-		const sink = sinkOf(options.output);
 
 		if (measurement.truePeak <= 0) {
-			await copyUnchanged(input.replayPath(), sink);
+			await copyUnchanged(input.replayPath(), input.output());
 			process.stderr.write("source has no measurable true peak; passed through unchanged\n");
 
 			return;
@@ -51,7 +54,7 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 
 		const gain = dbToLinear(target) / measurement.truePeak;
 
-		await applyUniformGain(input.replayPath(), sink, gain);
+		await applyUniformGain(input.replayPath(), input.output(), gain);
 
 		const sourceTpDb = 20 * Math.log10(measurement.truePeak);
 		const gainDb = 20 * Math.log10(gain);
@@ -71,11 +74,11 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 export const addTpNormCommand = (program: Command): void => {
 	program
 		.command("tp-norm")
-		.description("Normalize a WAV file to a true-peak target")
-		.argument("<input>", "input WAV path, or - for stdin")
-		.requiredOption("-o, --output <path>", "output WAV path, or - for stdout")
+		.description("Normalize audio to a true-peak target")
+		.argument("<input>", "input path, WAV unless -f names a raw format, or - or pipe: for a pipe")
+		.requiredOption("-o, --output <path>", "output path, WAV unless -f names a raw format, or - or pipe: for a pipe")
 		.option("--tp <dBTP>", "target true peak in dBTP", parseTargetDb, DEFAULT_TARGET_DB)
 		.action(async (input: string, options: TpNormOptions, command: Command) =>
-			tpNorm(input, { ...options, scratchDir: scratchDirectoryOf(command) }),
+			tpNorm(input, { ...options, ...audioOptionsOf(command) }),
 		);
 };

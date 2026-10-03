@@ -9,6 +9,7 @@ import { decodedSamplesOf } from "../../utils/testCli";
 import { BLOCK_FRAMES, type AudioBlock } from "../../wav/WavReader";
 import { WavWriter } from "../../wav/WavWriter";
 import { AudioInput, withAudioInput } from "./AudioInput";
+import { DEFAULT_STREAM_OPTIONS } from "./streamOptions";
 
 const SAMPLE_RATE = 48000;
 
@@ -66,13 +67,17 @@ describe("AudioInput", () => {
 	it("replays a file input from its own path once its first pass has run", async () => {
 		const scratchDirectory = join(workingDirectory, "scratch");
 
-		await withAudioInput(inputPath, { replayable: true, scratchDirectory }, async (input) => {
-			expect(input.label).toBe(inputPath);
-			expect(() => input.replayPath()).toThrow(/no replay/);
-			expect(await input.withFirstPass(async (source) => collect(source.blocks()))).toBe(BLOCK_FRAMES + 100);
-			expect(input.replayPath()).toBe(inputPath);
-			await expect(input.withFirstPass(async () => 0)).rejects.toThrow(/already run/);
-		});
+		await withAudioInput(
+			inputPath,
+			{ replayable: true, scratchDirectory, stream: DEFAULT_STREAM_OPTIONS, output: undefined },
+			async (input) => {
+				expect(input.label).toBe(inputPath);
+				expect(() => input.replayPath()).toThrow(/no replay/);
+				expect(await input.withFirstPass(async (source) => collect(source.blocks()))).toBe(BLOCK_FRAMES + 100);
+				expect(input.replayPath()).toBe(inputPath);
+				await expect(input.withFirstPass(async () => 0)).rejects.toThrow(/already run/);
+			},
+		);
 
 		expect(existsSync(scratchDirectory)).toBe(false);
 	});
@@ -80,10 +85,14 @@ describe("AudioInput", () => {
 	it("has no replay when a file input's first pass fails to open it", async () => {
 		const missingPath = join(workingDirectory, "missing.wav");
 
-		await withAudioInput(missingPath, { replayable: true, scratchDirectory: undefined }, async (input) => {
-			await expect(input.withFirstPass(async (source) => collect(source.blocks()))).rejects.toThrow(/ENOENT/);
-			expect(() => input.replayPath()).toThrow(/no replay/);
-		});
+		await withAudioInput(
+			missingPath,
+			{ replayable: true, scratchDirectory: undefined, stream: DEFAULT_STREAM_OPTIONS, output: undefined },
+			async (input) => {
+				await expect(input.withFirstPass(async (source) => collect(source.blocks()))).rejects.toThrow(/ENOENT/);
+				expect(() => input.replayPath()).toThrow(/no replay/);
+			},
+		);
 	});
 
 	it("spools stdin into the scratch directory during the first pass and removes it on dispose", async () => {
@@ -91,17 +100,21 @@ describe("AudioInput", () => {
 
 		spyStdin(await readFile(inputPath));
 
-		await withAudioInput("-", { replayable: true, scratchDirectory }, async (input) => {
-			expect(input.label).toBe("-");
-			expect(() => input.replayPath()).toThrow(/no replay/);
-			expect(await input.withFirstPass(async (source) => collect(source.blocks()))).toBe(BLOCK_FRAMES + 100);
+		await withAudioInput(
+			"-",
+			{ replayable: true, scratchDirectory, stream: DEFAULT_STREAM_OPTIONS, output: undefined },
+			async (input) => {
+				expect(input.label).toBe("-");
+				expect(() => input.replayPath()).toThrow(/no replay/);
+				expect(await input.withFirstPass(async (source) => collect(source.blocks()))).toBe(BLOCK_FRAMES + 100);
 
-			const replayPath = input.replayPath();
+				const replayPath = input.replayPath();
 
-			expect(replayPath.startsWith(join(scratchDirectory, `loudness-tool-${process.pid}-`))).toBe(true);
-			expect(replayPath.endsWith("input.wav")).toBe(true);
-			expect(await decodedSamplesOf(replayPath)).toEqual(await decodedSamplesOf(inputPath));
-		});
+				expect(replayPath.startsWith(join(scratchDirectory, `loudness-tool-${process.pid}-`))).toBe(true);
+				expect(replayPath.endsWith("input.wav")).toBe(true);
+				expect(await decodedSamplesOf(replayPath)).toEqual(await decodedSamplesOf(inputPath));
+			},
+		);
 
 		expect(await readdir(scratchDirectory)).toEqual([]);
 	});
@@ -111,10 +124,14 @@ describe("AudioInput", () => {
 
 		spyStdin(await readFile(inputPath));
 
-		await withAudioInput("-", { replayable: false, scratchDirectory }, async (input) => {
-			expect(await input.withFirstPass(async (source) => collect(source.blocks()))).toBe(BLOCK_FRAMES + 100);
-			expect(() => input.replayPath()).toThrow(/no replay/);
-		});
+		await withAudioInput(
+			"-",
+			{ replayable: false, scratchDirectory, stream: DEFAULT_STREAM_OPTIONS, output: undefined },
+			async (input) => {
+				expect(await input.withFirstPass(async (source) => collect(source.blocks()))).toBe(BLOCK_FRAMES + 100);
+				expect(() => input.replayPath()).toThrow(/no replay/);
+			},
+		);
 
 		expect(existsSync(scratchDirectory)).toBe(false);
 	});
@@ -122,7 +139,12 @@ describe("AudioInput", () => {
 	it("has no replay when the first pass stops before the end of stdin", async () => {
 		const scratchDirectory = join(workingDirectory, "scratch");
 		const stream = spyStdin(await readFile(inputPath));
-		const input = await AudioInput.of("-", { replayable: true, scratchDirectory });
+		const input = await AudioInput.of("-", {
+			replayable: true,
+			scratchDirectory,
+			stream: DEFAULT_STREAM_OPTIONS,
+			output: undefined,
+		});
 
 		try {
 			await expect(

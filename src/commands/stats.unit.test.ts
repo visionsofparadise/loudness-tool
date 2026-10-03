@@ -1,10 +1,12 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linearToDb } from "../utils/db";
-import { captureWrites, runCli } from "../utils/testCli";
-import { createSine } from "../utils/testSignals";
+import { captureWrites, runCli, writeTestWav } from "../utils/testCli";
+import { createNoise, createSine } from "../utils/testSignals";
+import { Scratch } from "../utils/Scratch";
+import { WavSpool } from "../wav/WavSpool";
 import { writeExtensibleWav } from "../utils/testWav";
 import { WavWriter } from "../wav/WavWriter";
 import { stats } from "./stats";
@@ -499,5 +501,176 @@ describe("stats on stdin", () => {
 
 		expect(run.exitCode).toBe(1);
 		expect(run.stderr).toBe('error: Cannot read "-": Invalid WAV file: channelCount 0\n');
+	});
+});
+
+describe("raw PCM and pipes across the commands", () => {
+	let workingDirectory: string;
+
+	beforeEach(async () => {
+		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-stats-raw-"));
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await rm(workingDirectory, { recursive: true, force: true });
+	});
+
+	const statsOf = (run: { readonly stdout: Buffer }): Array<Record<string, unknown>> =>
+		JSON.parse(run.stdout.toString("utf8")) as Array<Record<string, unknown>>;
+
+	it("reads a raw input at 44100 Hz mono by default, -ch_layout over -ac, and a 7-byte stereo stdin as one frame", async () => {
+		const mono = await runCli(["stats", "-f", "s16le", "-", "--json"], Buffer.alloc(882));
+		const layout = await runCli(
+			["stats", "-f", "s16le", "-ac", "2", "-ch_layout", "5.1", "-", "--json"],
+			Buffer.alloc(24),
+		);
+		const short = await runCli(["stats", "-f", "s16le", "-ac", "2", "-", "--json"], Buffer.alloc(7));
+
+		expect(statsOf(mono)[0]).toMatchObject({ path: "-", sampleRate: 44100, channelCount: 1, bitDepth: "16" });
+		expect(statsOf(mono)[0]?.durationSeconds).toBeCloseTo(441 / 44100, 9);
+		expect(statsOf(layout)[0]).toMatchObject({ channelCount: 6 });
+		expect(statsOf(short)[0]?.durationSeconds).toBeCloseTo(1 / 44100, 12);
+	});
+
+	it("applies an input -ch_layout where its specifier selects the stream, and refuses an output count form that would rematrix", async () => {
+		const wavPath = join(workingDirectory, "stereo.wav");
+
+		await writeTestWav(wavPath, createNoise(4800, 2, 4), { bitDepth: "16" });
+
+		const unselected = await runCli(["stats", "-ch_layout:v", "5.1", wavPath, "--json"]);
+		const side = await runCli(
+			["stats", "-f", "s16le", "-ch_layout:a", "5.1(side)", "-ch_layout:v", "5.1", "-", "--json"],
+			Buffer.alloc(24),
+		);
+		const mismatched = await runCli(
+			["stats", "-f", "s16le", "-ch_layout:a", "stereo", "-ch_layout:v", "mono", "-", "--json"],
+			Buffer.alloc(4),
+		);
+		const rematrix = await runCli(
+			["tp-norm", "-f", "s16le", "-ch_layout", "5.1(side)", "-", "-f", "s16le", "-ch_layout", "6C", "-o", "-"],
+			Buffer.alloc(24),
+		);
+
+		expect(unselected.exitCode).toBeUndefined();
+		expect(statsOf(unselected)[0]).toMatchObject({ channelCount: 2 });
+		expect(statsOf(side)[0]).toMatchObject({ channelCount: 6 });
+		expect(mismatched.exitCode).toBe(1);
+		expect(mismatched.stderr).toContain('Channel layout "stereo" has 2 channels, and "-" has 1');
+		expect(rematrix.exitCode).toBe(1);
+		expect(rematrix.stdout.length).toBe(0);
+		expect(rematrix.stderr).toContain(
+			"output -ch_layout 6C would rematrix the input's layout 0x60f to 6's default layout",
+		);
+	});
+
+	it("reports a raw stdin input and a WAV file each in its own format", async () => {
+		const wavPath = join(workingDirectory, "b.wav");
+
+		await writeTestWav(wavPath, createNoise(4800, 1, 2), { bitDepth: "24" });
+
+		const run = await runCli(
+			["stats", "-f", "f32le", "-ar", "48000", "-ac", "2", "-", wavPath, "--json"],
+			Buffer.alloc(8 * 4800),
+		);
+
+		expect(run.exitCode).toBeUndefined();
+		expect(statsOf(run)).toMatchObject([
+			{ path: "-", sampleRate: 48000, channelCount: 2, bitDepth: "32f" },
+			{ path: wavPath, sampleRate: 48000, channelCount: 1, bitDepth: "24" },
+		]);
+	});
+
+	it("reads stdin under pipe: names, prints each path as given, and reads a descriptor once", async () => {
+		const forms: Array<Awaited<ReturnType<typeof runCli>>> = [];
+
+		for (const path of ["pipe:", "pipe:0", "pipe: 0"]) {
+			forms.push(await runCli(["stats", "-f", "s16le", path, "--json"], Buffer.alloc(882)));
+		}
+
+		const twice = await runCli(["stats", "-f", "s16le", "-", "pipe:0", "--json"], Buffer.alloc(882));
+
+		expect(forms.map((run) => statsOf(run)[0]?.path)).toEqual(["pipe:", "pipe:0", "pipe: 0"]);
+		const descriptorTwice = await runCli(["stats", "pipe:5", "pipe:05", "--json"]);
+
+		expect(twice.stderr).toBe("error: stdin can be read once\n");
+		expect(descriptorTwice.stderr).toBe("error: file descriptor 5 can be read once\n");
+		expect(twice.exitCode).toBe(1);
+	});
+
+	it("reads a raw input without a spool or a scratch directory", async () => {
+		const spool = vi.spyOn(WavSpool, "create");
+		const scratch = vi.spyOn(Scratch, "create");
+		const rawPath = join(workingDirectory, "in.raw");
+
+		await writeFile(rawPath, Buffer.alloc(882));
+
+		const run = await runCli(["stats", "-f", "s16le", rawPath, "-f", "s16le", "-", "--json"], Buffer.alloc(882));
+
+		expect(run.exitCode).toBeUndefined();
+		expect(spool).not.toHaveBeenCalled();
+		expect(scratch).not.toHaveBeenCalled();
+	});
+
+	it("spools a raw file input inside --scratch-dir and leaves it empty", async () => {
+		const spool = vi.spyOn(WavSpool, "create");
+		const scratchDirectory = join(workingDirectory, "scratch");
+		const rawPath = join(workingDirectory, "in.raw");
+
+		await writeFile(rawPath, Buffer.alloc(2 * 2 * 4800, 1));
+
+		const run = await runCli([
+			"--scratch-dir",
+			scratchDirectory,
+			"tp-norm",
+			"-f",
+			"s16le",
+			"-ac",
+			"2",
+			rawPath,
+			"-o",
+			join(workingDirectory, "out.wav"),
+		]);
+		const spoolPath = spool.mock.calls[0]?.[0] ?? "";
+
+		expect(run.exitCode).toBeUndefined();
+		expect(relative(scratchDirectory, spoolPath).startsWith("..")).toBe(false);
+		expect(await readdir(scratchDirectory)).toEqual([]);
+	});
+
+	it.each([
+		["stats"],
+		["tp-norm", "-o", "-"],
+		["lufs-norm", "-o", "-"],
+		["crest", "-o", "-"],
+		["target", "-o", "-", "--lufs", "-16"],
+	])("fails a 4 Hz WAV input in %s", async (name, ...options) => {
+		const inputPath = join(workingDirectory, "slow.wav");
+
+		await writeTestWav(inputPath, createNoise(8, 2, 3), { bitDepth: "16", sampleRate: 4 });
+
+		const run = await runCli([name, inputPath, ...options]);
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toContain("Unsupported sample rate: 4\n");
+	});
+
+	it.each([
+		["stats"],
+		["tp-norm", "-o", "-"],
+		["lufs-norm", "-o", "-"],
+		["crest", "-o", "-"],
+		["target", "-o", "-", "--lufs", "-16"],
+	])("fails a WAV and a raw input above 768000 Hz in %s", async (name, ...options) => {
+		const inputPath = join(workingDirectory, "fast.wav");
+
+		await writeTestWav(inputPath, createNoise(8, 2, 3), { bitDepth: "16", sampleRate: 768001 });
+
+		const wav = await runCli([name, inputPath, ...options]);
+		const raw = await runCli([name, "-f", "s16le", "-ar", "768001", "-", ...options], Buffer.alloc(8));
+
+		expect([wav.exitCode, raw.exitCode]).toEqual([1, 1]);
+		expect(wav.stderr).toContain("Unsupported sample rate: 768001\n");
+		expect(raw.stderr).toContain("Unsupported sample rate: 768001\n");
 	});
 });

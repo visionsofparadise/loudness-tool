@@ -198,15 +198,19 @@ describe("cli", () => {
 		}
 	});
 
-	it("shows - for stdin and stdout and the program's --scratch-dir in every command's help", () => {
+	it("shows raw formats and pipes for the input and output and the program's --scratch-dir in every command's help", () => {
 		for (const command of createProgram().commands) {
-			const help = command.helpInformation();
+			const help = command.helpInformation().replace(/\s+/g, " ");
 
-			expect(help).toContain("- for stdin");
+			expect(help).toContain(
+				command.name() === "stats"
+					? "input paths, WAV unless -f names a raw format, or - or pipe: for a pipe"
+					: "input path, WAV unless -f names a raw format, or - or pipe: for a pipe",
+			);
 			expect(help).toContain("--scratch-dir <path>");
 
 			if (command.name() !== "stats") {
-				expect(help).toContain("output WAV path, or - for stdout");
+				expect(help).toContain("output path, WAV unless -f names a raw format, or - or pipe: for a pipe");
 			}
 		}
 	});

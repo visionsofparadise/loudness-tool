@@ -141,9 +141,8 @@ describe("applyWalk", () => {
 		});
 		const measured = await applyWalk({
 			inputPath,
-			sink: { kind: "file", path: outputPath },
+			output: { sink: { kind: "file", path: outputPath }, container: "wav", bitDepth, channelMask: 0 },
 			layout,
-			bitDepth,
 			channelCount: 1,
 			walk: solution.walk,
 		});

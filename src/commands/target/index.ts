@@ -1,17 +1,18 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
-import { scratchDirectoryOf, withAudioInput, type AudioInput } from "../utils/AudioInput";
+import { replayableInputOptionsOf, withAudioInput, type AudioInput } from "../utils/AudioInput";
+import { audioOptionsOf } from "../utils/AudioProgram";
 import { copyUnchanged } from "../utils/copyUnchanged";
-import { sinkOf, writeSummary } from "../utils/sinks";
+import { writeSummary, type AudioOutput } from "../utils/sinks";
 import { withWavWriter } from "../utils/withWavWriter";
 import { forEachEnvelopedBlock } from "./utils/apply";
 import { measureSource } from "./utils/measureSource";
 import { iterateForTargets } from "./utils/solve";
 import { windowSamplesFromMs } from "./utils/window";
+import type { StreamOptions } from "../utils/streamOptions";
 import type { IterationAttempt, Targets } from "./utils/solve";
 import type { SampleFile } from "../../utils/SampleFile";
-import type { WavSink } from "../../wav/WavWriter";
 
 interface TargetOptions {
 	readonly output: string;
@@ -25,6 +26,8 @@ interface TargetOptions {
 	readonly neverExpand?: boolean;
 	readonly tolerance?: number;
 	readonly scratchDir?: string;
+	readonly inputStream?: StreamOptions;
+	readonly outputStream?: StreamOptions;
 }
 
 const LABEL_WIDTH = 18;
@@ -124,8 +127,8 @@ const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets =>
 const figureOf = (value: number | null, unit: string): string =>
 	value === null ? "n/a" : `${value.toFixed(2)} ${unit}`;
 
-const applyEnvelopeAndWrite = async (replayPath: string, sink: WavSink, envelope: SampleFile): Promise<void> => {
-	await withWavWriter(replayPath, sink, async (reader, writer) => {
+const applyEnvelopeAndWrite = async (replayPath: string, output: AudioOutput, envelope: SampleFile): Promise<void> => {
+	await withWavWriter(replayPath, output, async (reader, writer) => {
 		await reader.close();
 		await forEachEnvelopedBlock(replayPath, envelope, async (channels) => {
 			await writer.write(channels);
@@ -162,7 +165,7 @@ const fitInput = async (
 		winningEnvelope = measurement.detectionEnvelope;
 
 		if (!Number.isFinite(measurement.integratedLufs)) {
-			await copyUnchanged(input.replayPath(), sinkOf(options.output));
+			await copyUnchanged(input.replayPath(), input.output());
 			process.stderr.write("source has no measurable loudness; passed through unchanged\n");
 		} else {
 			let effectivePivotDb: number;
@@ -217,7 +220,7 @@ const fitInput = async (
 
 			winningEnvelope = result.bestSmoothedEnvelope;
 
-			await applyEnvelopeAndWrite(input.replayPath(), sinkOf(options.output), result.bestSmoothedEnvelope);
+			await applyEnvelopeAndWrite(input.replayPath(), input.output(), result.bestSmoothedEnvelope);
 
 			await writeSummary(
 				options.output,
@@ -278,7 +281,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 
 	const targets = targetsOf(options.lufs, options.tp);
 
-	await withAudioInput(inputPath, { replayable: true, scratchDirectory: options.scratchDir }, async (input) =>
+	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) =>
 		fitInput(input, options, { targets, limitPercentile, smoothingMs, tolerance, neverExpand }),
 	);
 };
@@ -286,9 +289,12 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 export const addTargetCommand = (program: Command): void => {
 	const command = program.command("target");
 
-	command.description("Fit a WAV file to an integrated-loudness target, a true-peak target, or both");
-	command.argument("<input>", "input WAV path, or - for stdin");
-	command.requiredOption("-o, --output <path>", "output WAV path, or - for stdout");
+	command.description("Fit audio to an integrated-loudness target, a true-peak target, or both");
+	command.argument("<input>", "input path, WAV unless -f names a raw format, or - or pipe: for a pipe");
+	command.requiredOption(
+		"-o, --output <path>",
+		"output path, WAV unless -f names a raw format, or - or pipe: for a pipe",
+	);
 	command.option(
 		"--lufs <n>",
 		"target integrated loudness in LUFS; without it the body gain follows the limit gain",
@@ -317,6 +323,6 @@ export const addTargetCommand = (program: Command): void => {
 		DEFAULT_TOLERANCE,
 	);
 	command.action(async (input: string, options: TargetOptions) =>
-		target(input, { ...options, scratchDir: scratchDirectoryOf(command) }),
+		target(input, { ...options, ...audioOptionsOf(command) }),
 	);
 };

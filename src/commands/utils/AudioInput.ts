@@ -1,35 +1,53 @@
+import { open } from "node:fs/promises";
 import { Scratch } from "../../utils/Scratch";
 import { WavSpool } from "../../wav/WavSpool";
 import { WavStreamReader } from "../../wav/WavStreamReader";
-import { STDIO_PATH } from "./stdioPath";
+import { resolveOutput, type AudioOutput, type OutputRequest } from "./sinks";
+import { descriptorOf, readableOf } from "./stdioPath";
+import { DEFAULT_STREAM_OPTIONS, inputFormatOf, type StreamOptions } from "./streamOptions";
 import { withWavReader } from "./withWavReader";
-import type { BlockSource } from "../../wav/WavReader";
-import type { Command } from "commander";
+import type { BlockSource, StreamFormat } from "../../wav/WavReader";
 
 const SPOOL_LABEL = "input.wav";
 
 interface AudioInputOptions {
 	readonly replayable: boolean;
 	readonly scratchDirectory: string | undefined;
+	readonly stream: StreamOptions;
+	readonly output: OutputRequest | undefined;
 }
 
 export class AudioInput {
 	static async of(path: string, options: AudioInputOptions): Promise<AudioInput> {
-		if (path !== STDIO_PATH || !options.replayable) {
-			return new AudioInput(path, undefined);
-		}
+		const descriptor = descriptorOf(path, "input");
+		const isSpooled = options.replayable && (descriptor !== undefined || options.stream.format !== "wav");
 
-		return new AudioInput(path, await Scratch.create(options.scratchDirectory));
+		return new AudioInput(
+			path,
+			descriptor,
+			options,
+			isSpooled ? await Scratch.create(options.scratchDirectory) : undefined,
+		);
 	}
 
 	readonly label: string;
 
+	private readonly descriptor: number | undefined;
+	private readonly options: AudioInputOptions;
 	private readonly scratch: Scratch | undefined;
+	private resolvedOutput: AudioOutput | undefined;
 	private isFirstPassStarted = false;
 	private isReplayable = false;
 
-	private constructor(label: string, scratch: Scratch | undefined) {
+	private constructor(
+		label: string,
+		descriptor: number | undefined,
+		options: AudioInputOptions,
+		scratch: Scratch | undefined,
+	) {
 		this.label = label;
+		this.descriptor = descriptor;
+		this.options = options;
 		this.scratch = scratch;
 	}
 
@@ -40,8 +58,12 @@ export class AudioInput {
 
 		this.isFirstPassStarted = true;
 
-		if (this.label !== STDIO_PATH) {
-			const result = await withWavReader(this.label, consume);
+		const { stream } = this.options;
+
+		if (stream.format === "wav" && this.descriptor === undefined) {
+			const result = await withWavReader(this.label, async (reader) =>
+				consume(this.sourceOf(reader, inputFormatOf(stream, this.label, reader.format))),
+			);
 
 			this.isReplayable = true;
 
@@ -49,21 +71,44 @@ export class AudioInput {
 		}
 
 		const { scratch } = this;
-		const reader = await WavStreamReader.open(
-			process.stdin,
-			this.label,
+		const spool =
 			scratch === undefined
 				? undefined
-				: async (format, blockAlign) => WavSpool.create(scratch.filePath(SPOOL_LABEL), format, blockAlign),
-		);
+				: async (format: StreamFormat, blockAlign: number): Promise<WavSpool> =>
+						WavSpool.create(scratch.filePath(SPOOL_LABEL), format, blockAlign);
+		let reader: WavStreamReader;
+		let rawFormat: StreamFormat | undefined;
+
+		if (stream.format === "wav") {
+			reader = await WavStreamReader.open(readableOf(this.descriptor ?? 0), this.label, spool);
+		} else {
+			const format = inputFormatOf(stream, this.label, undefined);
+
+			rawFormat = this.resolve(format);
+
+			const bytes =
+				this.descriptor === undefined
+					? (await open(this.label, "r")).createReadStream()
+					: readableOf(this.descriptor);
+
+			reader = await WavStreamReader.openRaw(bytes, format, spool);
+		}
 
 		try {
-			return await consume(reader);
+			return await consume(this.sourceOf(reader, rawFormat ?? inputFormatOf(stream, this.label, reader.format)));
 		} finally {
 			await reader.close();
 
 			this.isReplayable = scratch !== undefined && reader.hasReachedEnd;
 		}
+	}
+
+	output(): AudioOutput {
+		if (this.resolvedOutput === undefined) {
+			throw new Error(`"${this.label}" has no output before its first pass has opened it`);
+		}
+
+		return this.resolvedOutput;
 	}
 
 	replayPath(): string {
@@ -77,7 +122,43 @@ export class AudioInput {
 	async dispose(): Promise<void> {
 		await this.scratch?.dispose();
 	}
+
+	private resolve(format: StreamFormat): StreamFormat {
+		const request = this.options.output;
+
+		if (request === undefined || this.resolvedOutput !== undefined) {
+			return format;
+		}
+
+		const resolved = resolveOutput(request, format);
+
+		this.resolvedOutput = resolved.output;
+
+		return resolved.format;
+	}
+
+	private sourceOf(reader: BlockSource, format: StreamFormat): BlockSource {
+		const resolved = this.resolve(format);
+
+		return {
+			format: resolved,
+			blocks: () => reader.blocks(),
+			close: async () => reader.close(),
+		};
+	}
 }
+
+export const replayableInputOptionsOf = (options: {
+	readonly output: string;
+	readonly scratchDir?: string;
+	readonly inputStream?: StreamOptions;
+	readonly outputStream?: StreamOptions;
+}): AudioInputOptions => ({
+	replayable: true,
+	scratchDirectory: options.scratchDir,
+	stream: options.inputStream ?? DEFAULT_STREAM_OPTIONS,
+	output: { path: options.output, stream: options.outputStream ?? DEFAULT_STREAM_OPTIONS },
+});
 
 export const withAudioInput = async <T>(
 	path: string,
@@ -92,6 +173,3 @@ export const withAudioInput = async <T>(
 		await input.dispose();
 	}
 };
-
-export const scratchDirectoryOf = (command: Command): string | undefined =>
-	command.optsWithGlobals<{ readonly scratchDir?: string }>().scratchDir;

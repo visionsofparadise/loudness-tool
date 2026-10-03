@@ -19,7 +19,7 @@ export const createProgram = (): Command => {
 
 	program
 		.name("loudness-tool")
-		.description("WAV loudness processing")
+		.description("WAV and raw PCM loudness processing")
 		.version(packageJson.version)
 		.configureHelp({ showGlobalOptions: true });
 	program.option("--scratch-dir <path>", "directory for temporary files");

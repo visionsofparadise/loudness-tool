@@ -10,8 +10,15 @@ import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
 import { dbToLinear, linearToDb } from "../../utils/db";
 import { SampleFile } from "../../utils/SampleFile";
 import { Scratch } from "../../utils/Scratch";
-import { captureWrites, runSilenceOnStdin, runStdioCombinations } from "../../utils/testCli";
-import { createSine } from "../../utils/testSignals";
+import {
+	captureWrites,
+	expectRawMatchesFileMode,
+	runCli,
+	runSilenceOnStdin,
+	runStdioCombinations,
+	writeTestWav,
+} from "../../utils/testCli";
+import { createNoise, createSine } from "../../utils/testSignals";
 import { writeExtensibleWav } from "../../utils/testWav";
 import { WavWriter } from "../../wav/WavWriter";
 import { stats } from "../stats";
@@ -682,5 +689,39 @@ describe("target on stdin and stdout", () => {
 		expect(runs.pipeRun.stderr).toContain("passed through unchanged");
 		expect(runs.fileSamples).toEqual(runs.inputSamples);
 		expect(runs.pipeSamples).toEqual(runs.inputSamples);
+	});
+});
+
+describe("target on raw PCM", () => {
+	let workingDirectory: string;
+
+	beforeEach(async () => {
+		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-target-raw-"));
+	});
+
+	afterEach(async () => {
+		await rm(workingDirectory, { recursive: true, force: true });
+	});
+
+	it("writes the file-mode output's data bytes for raw s24le in and out, and its samples from a raw file", async () => {
+		const inputPath = join(workingDirectory, "input.wav");
+
+		await writeTestWav(inputPath, createNoise(96000, 2, 7), { bitDepth: "24" });
+		await expectRawMatchesFileMode({
+			command: ["target", "--lufs", "-16"],
+			inputPath,
+			directory: workingDirectory,
+		});
+	}, 60_000);
+
+	it("passes raw silence through as its input bytes and as zero floats under -f f32le", async () => {
+		const silence = Buffer.alloc(2 * 2 * 4800);
+		const raw = ["-f", "s16le", "-ar", "48000", "-ac", "2", "-"];
+		const same = await runCli(["target", ...raw, "-f", "s16le", "-o", "-", "--lufs", "-16"], silence);
+		const floats = await runCli(["target", ...raw, "-f", "f32le", "-o", "-", "--lufs", "-16"], silence);
+
+		expect([same.exitCode, floats.exitCode]).toEqual([undefined, undefined]);
+		expect(same.stdout.equals(silence)).toBe(true);
+		expect(floats.stdout.equals(Buffer.alloc(4 * 2 * 4800))).toBe(true);
 	});
 });

@@ -6,11 +6,22 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../cli";
 import { dbToLinear, linearToDb } from "../utils/db";
-import { captureWrites, runSilenceOnStdin, runStdioCombinations } from "../utils/testCli";
-import { createSine } from "../utils/testSignals";
+import {
+	captureWrites,
+	dataBytesOf,
+	decodedSamplesOf,
+	expectRawMatchesFileMode,
+	runCli,
+	runSilenceOnStdin,
+	runStdioCombinations,
+	writeTestWav,
+} from "../utils/testCli";
+import { createNoise, createSine } from "../utils/testSignals";
 import { WavReader, type AudioBlock } from "../wav/WavReader";
+import { encodeSample } from "../wav/utils/sampleCodec";
 import { WavWriter } from "../wav/WavWriter";
 import { tpNorm } from "./tpNorm";
+import type { SourceBitDepth } from "../wav/utils/wavFormat";
 
 vi.mock("node:fs/promises", { spy: true });
 
@@ -453,5 +464,138 @@ describe("tp-norm on stdin and stdout", () => {
 		expect(runs.pipeRun.stderr).toContain("passed through unchanged");
 		expect(runs.fileSamples).toEqual(runs.inputSamples);
 		expect(runs.pipeSamples).toEqual(runs.inputSamples);
+	});
+});
+
+describe("tp-norm on raw PCM", () => {
+	let workingDirectory: string;
+
+	beforeEach(async () => {
+		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-tp-norm-raw-"));
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await rm(workingDirectory, { recursive: true, force: true });
+	});
+
+	const loudInput = async (bitDepth: SourceBitDepth, name = "input.wav"): Promise<string> => {
+		const inputPath = join(workingDirectory, name);
+
+		await writeTestWav(inputPath, createNoise(96000, 2, 7), { bitDepth });
+
+		return inputPath;
+	};
+
+	it("writes the file-mode output's data bytes for raw s24le in and out, and its samples from a raw file", async () => {
+		await expectRawMatchesFileMode({
+			command: ["tp-norm", "--tp", "-3"],
+			inputPath: await loudInput("24"),
+			directory: workingDirectory,
+		});
+	});
+
+	it("writes f32le, f64le and u8 outputs at the depth -f names", async () => {
+		const floatPath = await loudInput("32f");
+		const filePath = join(workingDirectory, "float.wav");
+		const fileRun = await runCli(["tp-norm", floatPath, "-o", filePath]);
+		const f32 = await runCli(["tp-norm", floatPath, "-f", "f32le", "-o", "-"]);
+		const f64 = await runCli(["tp-norm", floatPath, "-f", "f64le", "-o", "-"]);
+		const fileData = await dataBytesOf(filePath);
+		const doubles = Array.from({ length: f64.stdout.length / 8 }, (_, index) =>
+			Math.fround(f64.stdout.readDoubleLE(index * 8)),
+		);
+		const floats = Array.from({ length: fileData.length / 4 }, (_, index) => fileData.readFloatLE(index * 4));
+
+		expect([fileRun.exitCode, f32.exitCode, f64.exitCode]).toEqual([undefined, undefined, undefined]);
+		expect(f32.stdout.equals(fileData)).toBe(true);
+		expect(doubles).toEqual(floats);
+
+		const sixteenPath = await loudInput("16", "sixteen.wav");
+		const sixteenOutput = join(workingDirectory, "sixteen-out.wav");
+
+		await runCli(["tp-norm", sixteenPath, "-o", sixteenOutput]);
+
+		const u8 = await runCli(["tp-norm", sixteenPath, "-f", "u8", "-o", "-"]);
+		const sixteen = await decodedSamplesOf(sixteenOutput);
+		const interleaved = Array.from(sixteen[0] ?? []).flatMap((sample, index) => [sample, sixteen[1]?.[index] ?? 0]);
+
+		expect(u8.stdout.length).toBe(interleaved.length);
+		const code = Buffer.alloc(1);
+
+		interleaved.forEach((sample, index) => {
+			encodeSample(code, 0, sample, "8");
+			expect(Math.abs((u8.stdout[index] ?? 0) - (code[0] ?? 0))).toBeLessThanOrEqual(1);
+		});
+	});
+
+	it("fails a 4 Hz WAV input before any pass", async () => {
+		const inputPath = join(workingDirectory, "slow.wav");
+
+		await writeTestWav(inputPath, createNoise(8, 2, 3), { bitDepth: "16", sampleRate: 4 });
+
+		const run = await runCli(["tp-norm", inputPath, "-o", "-"]);
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toBe("error: Unsupported sample rate: 4\n");
+		expect(run.stdout.length).toBe(0);
+	});
+
+	it.each([
+		[["pipe:"], ["-o", "pipe:"]],
+		[["pipe:0"], ["-o", "pipe:1"]],
+		[["pipe: 0"], ["-o", "pipe:+1"]],
+		[["-"], ["-o", "-"]],
+	])("reads %j and writes %j as stdin and stdout", async (inputTokens, outputTokens) => {
+		const inputPath = await loudInput("16");
+		const rawData = await dataBytesOf(inputPath);
+		const raw = ["-f", "s16le", "-ar", "48000", "-ac", "2"];
+		const reference = await runCli(["tp-norm", ...raw, "-", "-f", "s16le", "-o", "-"], rawData);
+		const run = await runCli(["tp-norm", ...raw, ...inputTokens, "-f", "s16le", ...outputTokens], rawData);
+
+		expect(run.exitCode).toBeUndefined();
+		expect(run.stdout.equals(reference.stdout)).toBe(true);
+		expect(run.stderr).toBe(reference.stderr.replace(/-\n$/, `${outputTokens[1] ?? ""}\n`));
+	});
+
+	it("writes the audio to stderr for -o pipe:2 with the summary on stdout", async () => {
+		const inputPath = await loudInput("16");
+		const rawData = await dataBytesOf(inputPath);
+		const raw = ["-f", "s16le", "-ar", "48000", "-ac", "2"];
+		const reference = await runCli(["tp-norm", ...raw, "-", "-f", "s16le", "-o", "-"], rawData);
+		const run = await runCli(["tp-norm", ...raw, "-", "-f", "s16le", "-o", "pipe:2"], rawData);
+
+		expect(run.exitCode).toBeUndefined();
+		expect(run.stderrBytes.equals(reference.stdout)).toBe(true);
+		expect(run.stdout.toString("utf8")).toBe(reference.stderr.replace(/-\n$/, "pipe:2\n"));
+	});
+
+	it.each(["pipe:abc", "pipe:-1", "pipe:1 "])("fails the pipe name %j", async (path) => {
+		const asInput = await runCli(["tp-norm", "-f", "s16le", path, "-o", "-"]);
+		const asOutput = await runCli(["tp-norm", "-f", "s16le", "-", "-o", path], Buffer.alloc(4));
+
+		expect([asInput.exitCode, asOutput.exitCode]).toEqual([1, 1]);
+		expect(asInput.stderr).toMatch(/^error: Cannot open "pipe:/);
+		expect(asOutput.stderr).toMatch(/^error: Cannot open "pipe:/);
+	});
+
+	it("passes raw silence through as its input bytes, as zero floats under -f f32le, and an 8-bit WAV as its data bytes under -f u8", async () => {
+		const silence = Buffer.alloc(2 * 2 * 4800);
+		const raw = ["-f", "s16le", "-ar", "48000", "-ac", "2", "-"];
+		const same = await runCli(["tp-norm", ...raw, "-f", "s16le", "-o", "-"], silence);
+		const floats = await runCli(["tp-norm", ...raw, "-f", "f32le", "-o", "-"], silence);
+		const eightBitPath = join(workingDirectory, "silent8.wav");
+
+		await writeTestWav(eightBitPath, [new Float64Array(4800), new Float64Array(4800)], { bitDepth: "8" });
+
+		const eightBit = await runCli(["tp-norm", eightBitPath, "-f", "u8", "-o", "-"]);
+
+		expect(same.stdout.equals(silence)).toBe(true);
+		expect(floats.stdout.equals(Buffer.alloc(4 * 2 * 4800))).toBe(true);
+		expect(eightBit.stdout.equals(await dataBytesOf(eightBitPath))).toBe(true);
+		for (const run of [same, floats, eightBit]) {
+			expect(run.exitCode).toBeUndefined();
+			expect(run.stderr).toBe("source has no measurable true peak; passed through unchanged\n");
+		}
 	});
 });
