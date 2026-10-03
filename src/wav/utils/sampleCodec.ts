@@ -60,38 +60,65 @@ export const decodeFrames = (
 	});
 };
 
-export const encodeSample = (buffer: Buffer, offset: number, sample: number, bitDepth: WavBitDepth): number => {
-	switch (bitDepth) {
-		case "16": {
-			const clamped = Math.max(-1, Math.min(1, sample));
-			const quantized = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
+const INTEGER_SCALES = {
+	"16": { negative: 0x8000, positive: 0x7fff },
+	"24": { negative: 0x800000, positive: 0x7fffff },
+	"32": { negative: 0x80000000, positive: 0x7fffffff },
+} as const;
 
-			buffer.writeInt16LE(Math.round(quantized), offset);
+type IntegerBitDepth = keyof typeof INTEGER_SCALES;
+
+export const integerScalesOf = (bitDepth: WavBitDepth): { negative: number; positive: number } | undefined =>
+	bitDepth === "32f" ? undefined : INTEGER_SCALES[bitDepth];
+
+const writeIntegerCode = (buffer: Buffer, offset: number, code: number, bitDepth: IntegerBitDepth): number => {
+	switch (bitDepth) {
+		case "16":
+			buffer.writeInt16LE(code, offset);
 
 			return offset + 2;
-		}
-		case "24": {
-			const clamped = Math.max(-1, Math.min(1, sample));
-			const quantized = Math.round(clamped < 0 ? clamped * 0x800000 : clamped * 0x7fffff);
-
-			buffer[offset] = quantized & 0xff;
-			buffer[offset + 1] = (quantized >> 8) & 0xff;
-			buffer[offset + 2] = (quantized >> 16) & 0xff;
+		case "24":
+			buffer[offset] = code & 0xff;
+			buffer[offset + 1] = (code >> 8) & 0xff;
+			buffer[offset + 2] = (code >> 16) & 0xff;
 
 			return offset + 3;
-		}
-		case "32": {
-			const clamped = Math.max(-1, Math.min(1, sample));
-			const quantized = clamped < 0 ? clamped * 0x80000000 : clamped * 0x7fffffff;
-
-			buffer.writeInt32LE(Math.round(quantized), offset);
+		case "32":
+			buffer.writeInt32LE(code, offset);
 
 			return offset + 4;
-		}
-		case "32f": {
-			buffer.writeFloatLE(sample, offset);
-
-			return offset + 4;
-		}
 	}
+};
+
+export const encodeSample = (buffer: Buffer, offset: number, sample: number, bitDepth: WavBitDepth): number => {
+	if (bitDepth === "32f") {
+		buffer.writeFloatLE(sample, offset);
+
+		return offset + 4;
+	}
+
+	const { negative, positive } = INTEGER_SCALES[bitDepth];
+	const clamped = Math.max(-1, Math.min(1, sample));
+
+	return writeIntegerCode(buffer, offset, Math.round(clamped < 0 ? clamped * negative : clamped * positive), bitDepth);
+};
+
+export const encodeQuantizedSample = (
+	buffer: Buffer,
+	offset: number,
+	sample: number,
+	bitDepth: WavBitDepth,
+): number => {
+	if (bitDepth === "32f") {
+		return encodeSample(buffer, offset, sample, bitDepth);
+	}
+
+	const { negative } = INTEGER_SCALES[bitDepth];
+
+	return writeIntegerCode(
+		buffer,
+		offset,
+		Math.max(-negative, Math.min(negative - 1, Math.round(sample * negative))),
+		bitDepth,
+	);
 };

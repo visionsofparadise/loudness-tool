@@ -320,9 +320,9 @@ describe("crest", () => {
 		await writeWav(outputPath, createSine(64, 1, SAMPLE_RATE, 220, 0.2), "32f");
 
 		const original = await readFile(outputPath);
-		const writeThrough = WavWriter.prototype.write;
+		const writeThrough = WavWriter.prototype.writeQuantized;
 
-		vi.spyOn(WavWriter.prototype, "write").mockImplementation(async function (
+		vi.spyOn(WavWriter.prototype, "writeQuantized").mockImplementation(async function (
 			this: WavWriter,
 			channels: ReadonlyArray<Float64Array>,
 		): Promise<void> {

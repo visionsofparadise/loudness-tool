@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
 import { WavReader } from "../../../wav/WavReader";
 import { WavWriter } from "../../../wav/WavWriter";
@@ -11,6 +11,7 @@ import { crestLayoutOf, stretchFrameCountOf, type CrestLayout } from "./ladder";
 import { printedDbOf, quantizerOf } from "./rounding";
 import { solveCrest } from "./solve";
 import { SourceMeter } from "./SourceMeter";
+import type { WavBitDepth } from "../../../wav/utils/wavFormat";
 
 const SAMPLE_RATE = 48000;
 
@@ -103,6 +104,7 @@ describe("applyWalk", () => {
 		channel: Float64Array,
 		spreadMs: number,
 		smoothingMs: number,
+		bitDepth: WavBitDepth = "32f",
 	): Promise<{ layout: CrestLayout; walk: Int32Array; level: number; measured: number; written: Float64Array }> => {
 		const inputPath = join(workingDirectory, "in.wav");
 		const outputPath = join(workingDirectory, "out.wav");
@@ -112,7 +114,7 @@ describe("applyWalk", () => {
 				sampleRate: SAMPLE_RATE,
 				channelCount: 1,
 				channelMask: 0,
-				bitDepth: "32f",
+				bitDepth,
 				frameCount: channel.length,
 			},
 		);
@@ -126,14 +128,14 @@ describe("applyWalk", () => {
 			sampleRate: SAMPLE_RATE,
 			frameCount: channel.length,
 		});
-		const meter = new SourceMeter({ stretchFrames: layout.stretchFrames, channelCount: 1, bitDepth: "32f" });
+		const meter = new SourceMeter({ stretchFrames: layout.stretchFrames, channelCount: 1, bitDepth });
 
 		meter.push([channel], channel.length);
 
 		const solution = await solveCrest({
 			inputPath,
 			layout,
-			bitDepth: "32f",
+			bitDepth,
 			channelCount: 1,
 			readings: meter.finish(),
 		});
@@ -141,7 +143,7 @@ describe("applyWalk", () => {
 			inputPath,
 			sink: { kind: "file", path: outputPath },
 			layout,
-			bitDepth: "32f",
+			bitDepth,
 			channelCount: 1,
 			walk: solution.walk,
 		});
@@ -173,5 +175,27 @@ describe("applyWalk", () => {
 		const { level, measured } = await solveAndApply(channel, 4, 100);
 
 		expect(printedDbOf(measured)).toBe(level);
+	});
+
+	it("writes a full-scale 16-bit source's output as exactly the frames it measured", async () => {
+		const quantize16 = quantizerOf("16");
+		const channel = peakySource(4000, 29).map((sample, index) =>
+			quantize16(index % 2 === 0 ? 0.97 - Math.abs(sample) : -0.97 + Math.abs(sample)),
+		);
+		const push = vi.spyOn(TruePeakAccumulator.prototype, "push");
+		const { measured, written } = await solveAndApply(channel, 4, 100, "16");
+		const pushed = push.mock.calls.flatMap(([channels, frameCount]) =>
+			Array.from(channels[0]?.subarray(0, frameCount) ?? []),
+		);
+
+		push.mockRestore();
+
+		const accumulator = new TruePeakAccumulator(1);
+
+		accumulator.push([written], written.length);
+
+		expect(written.filter((sample) => sample > 0.5).length).toBeGreaterThan(1000);
+		expect(Array.from(written)).toEqual(pushed);
+		expect(printedDbOf(accumulator.finalize())).toBe(printedDbOf(measured));
 	});
 });

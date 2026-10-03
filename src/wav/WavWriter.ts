@@ -1,5 +1,5 @@
 import { writeToStream } from "../utils/writeToStream";
-import { bytesPerSampleOf, encodeSample } from "./utils/sampleCodec";
+import { bytesPerSampleOf, encodeQuantizedSample, encodeSample } from "./utils/sampleCodec";
 import { TemporaryFile } from "./utils/TemporaryFile";
 import { wavHeaderOf } from "./utils/wavHeader";
 import type { WavBitDepth } from "./utils/wavFormat";
@@ -64,6 +64,14 @@ export class WavWriter {
 	}
 
 	async write(channels: ReadonlyArray<Float64Array>): Promise<void> {
+		await this.encodeAndWrite(channels, encodeSample);
+	}
+
+	async writeQuantized(channels: ReadonlyArray<Float64Array>): Promise<void> {
+		await this.encodeAndWrite(channels, encodeQuantizedSample);
+	}
+
+	private async encodeAndWrite(channels: ReadonlyArray<Float64Array>, encode: typeof encodeSample): Promise<void> {
 		const { channelCount, bitDepth } = this.format;
 
 		if (channels.length !== channelCount) {
@@ -86,7 +94,7 @@ export class WavWriter {
 			for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
 				const sample = channels[channelIndex]?.[frameIndex] ?? 0;
 
-				offset = encodeSample(buffer, offset, sample, bitDepth);
+				offset = encode(buffer, offset, sample, bitDepth);
 			}
 		}
 

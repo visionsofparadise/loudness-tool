@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytesPerSampleOf, decodeSample, encodeSample } from "./sampleCodec";
+import { bytesPerSampleOf, decodeSample, encodeQuantizedSample, encodeSample } from "./sampleCodec";
 import { type WavBitDepth } from "./wavFormat";
 
 const roundTrip = (sample: number, bitDepth: WavBitDepth): number => {
@@ -153,5 +153,83 @@ describe("encodeSample/decodeSample round trip", () => {
 			expect(Math.abs(roundTrip(sample, "24") - sample)).toBeLessThanOrEqual(1.5 / 0x800000);
 			expect(Math.abs(roundTrip(sample, "32") - sample)).toBeLessThanOrEqual(1.5 / 0x80000000);
 		}
+	});
+});
+
+describe("encodeQuantizedSample", () => {
+	const codeOf = (buffer: Buffer, bitDepth: "16" | "24" | "32"): number => {
+		switch (bitDepth) {
+			case "16":
+				return buffer.readInt16LE(0);
+			case "24":
+				return buffer.readIntLE(0, 3);
+			case "32":
+				return buffer.readInt32LE(0);
+		}
+	};
+	const writtenCodes = (code: number, bitDepth: "16" | "24" | "32"): { quantized: number; encoded: number } => {
+		const source = Buffer.alloc(4);
+		const quantized = Buffer.alloc(4);
+		const encoded = Buffer.alloc(4);
+
+		encodeQuantizedSample(source, 0, code / 2 ** (bytesPerSampleOf(bitDepth) * 8 - 1), bitDepth);
+
+		const sample = decodeSample(source, 0, bitDepth);
+
+		encodeQuantizedSample(quantized, 0, sample, bitDepth);
+		encodeSample(encoded, 0, sample, bitDepth);
+
+		return { quantized: codeOf(quantized, bitDepth), encoded: codeOf(encoded, bitDepth) };
+	};
+	it("writes every 16-bit code it decodes back as that code, where encodeSample drifts above half scale", () => {
+		for (let code = -0x8000; code <= 0x7fff; code++) {
+			const { quantized, encoded } = writtenCodes(code, "16");
+
+			expect(quantized).toBe(code);
+			expect(encoded).toBe(code > 0x4000 ? code - 1 : code);
+		}
+	});
+
+	it("writes the 24- and 32-bit codes at zero, one, half scale and the extremes back as themselves", () => {
+		for (const bitDepth of ["24", "32"] as const) {
+			const full = 2 ** (bytesPerSampleOf(bitDepth) * 8 - 1);
+			const half = full / 2;
+
+			for (const code of [
+				0,
+				1,
+				-1,
+				half - 1,
+				half,
+				half + 1,
+				half + 2,
+				-half,
+				-half - 1,
+				full - 2,
+				full - 1,
+				-full,
+			]) {
+				expect(writtenCodes(code, bitDepth).quantized).toBe(code);
+			}
+
+			for (const code of [0, 1, -1, half - 1, half, -half, -full]) {
+				expect(writtenCodes(code, bitDepth).encoded).toBe(code);
+			}
+
+			for (const code of [half + 1024, full - 2, full - 1]) {
+				expect(writtenCodes(code, bitDepth).encoded).toBe(code - 1);
+			}
+		}
+	});
+
+	it("clamps beyond the codes and writes 32f as encodeSample does", () => {
+		const buffer = Buffer.alloc(4);
+
+		encodeQuantizedSample(buffer, 0, 1, "16");
+		expect(buffer.readInt16LE(0)).toBe(0x7fff);
+		encodeQuantizedSample(buffer, 0, -2, "16");
+		expect(buffer.readInt16LE(0)).toBe(-0x8000);
+		encodeQuantizedSample(buffer, 0, 0.123, "32f");
+		expect(buffer.readFloatLE(0)).toBe(Math.fround(0.123));
 	});
 });

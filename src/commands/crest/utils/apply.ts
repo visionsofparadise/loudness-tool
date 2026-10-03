@@ -69,7 +69,7 @@ export const applyWalk = async (args: {
 
 				accumulator.push(frames, written);
 
-				await writer.write(frames);
+				await writer.writeQuantized(frames);
 			},
 		});
 	});
