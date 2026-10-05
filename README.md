@@ -1,6 +1,6 @@
 # loudness-tool
 
-WAV and raw PCM loudness cli.
+loudness-tool is a command-line program for measuring and adjusting the loudness of audio. It reports true peak, integrated loudness and loudness range per ITU-R BS.1770 and EBU Tech 3342, and it can normalize audio to a true-peak or loudness target, lower its peaks while keeping its loudness, or bring it to both targets at once. It reads and writes WAV and raw PCM, from files or pipes, so it fits into an ffmpeg pipeline, and it runs offline on your own machine.
 
 ## Install
 
@@ -175,4 +175,4 @@ A source passed through to a WAV output keeps its own header and bit depth, the 
 
 ## License
 
-MIT
+[MIT](LICENSE)
