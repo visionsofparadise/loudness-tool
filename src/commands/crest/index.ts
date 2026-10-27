@@ -164,17 +164,22 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 export const addCrestCommand = (program: Command): void => {
 	const command = program.command("crest");
 
-	command.description("Lower the true peak of audio by dispersing phase");
+	command.description("Lower the true peak of audio by blending it with phase-spread copies");
 	command.argument("<input>", "input path, WAV unless -f names a raw format, or - or pipe: for a pipe");
 	command.requiredOption(
 		"-o, --output <path>",
 		"output path, WAV unless -f names a raw format, or - or pipe: for a pipe",
 	);
-	command.option("--spread <ms>", "furthest energy is moved in milliseconds", parseSpread, DEFAULT_SPREAD_MS);
-	command.option("--steps <n>", "number of spreads, each a quarter of the last", parseSteps, DEFAULT_STEPS);
+	command.option("--spread <ms>", "widest spread in milliseconds", parseSpread, DEFAULT_SPREAD_MS);
+	command.option(
+		"--steps <n>",
+		"number of spreads, each a quarter of the last, each used earlier and later",
+		parseSteps,
+		DEFAULT_STEPS,
+	);
 	command.option(
 		"--smoothing <ms>",
-		"milliseconds the spread takes to go from nothing to full",
+		"milliseconds the blend takes to fade in or out",
 		parseSmoothing,
 		DEFAULT_SMOOTHING_MS,
 	);

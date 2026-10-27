@@ -1,7 +1,7 @@
 import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
 import { withWavWriter } from "../../utils/withWavWriter";
 import { weightOf } from "./blend";
-import { chunkRangeOf, chunkStretchesOf, forEachStretchChunk, type StretchChunk } from "./render";
+import { chunkFrameCountOf, chunkRangeOf, chunkStretchesOf, forEachStretchChunk, type StretchChunk } from "./render";
 import { quantizerOf } from "./rounding";
 import { SourceWindow } from "./SourceWindow";
 import { StretchPeakMeter } from "./StretchPeakMeter";
@@ -84,7 +84,7 @@ export const renderStage = async (args: {
 		};
 
 		const blendChunk = async (chunk: StretchChunk): Promise<void> => {
-			const frameCount = Math.min(layout.frameCount - chunk.firstFrame, chunk.stretchCount * layout.stretchFrames);
+			const frameCount = chunkFrameCountOf(layout, chunk);
 
 			await window.cover(chunk.firstFrame, frameCount);
 

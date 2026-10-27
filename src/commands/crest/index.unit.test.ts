@@ -313,6 +313,37 @@ describe("crest", () => {
 		expect(defaultOutput.equals(await outputOf("one.wav", ["--steps", "1"]))).toBe(false);
 	});
 
+	it.each(["u8", "s24le"])(
+		"reports the decoded source's true peak for a 16-bit source written as raw %s",
+		async (format) => {
+			const inputPath = join(workingDirectory, "depth.wav");
+			const outputPath = join(workingDirectory, "depth.raw");
+			const channel = Float64Array.from({ length: 400 }, (_sample, index) =>
+				index % 2 === 0 ? 32763 / 0x7fff : 16382 / 0x7fff,
+			);
+
+			await writeWav(inputPath, [channel], "16");
+
+			const sourceDb = printedDbOf(await truePeakOf(inputPath));
+			const stdout = await captureStdout(async () => {
+				await parseProgram([
+					"crest",
+					inputPath,
+					"-f",
+					format,
+					"-o",
+					outputPath,
+					"--spread",
+					"0.25",
+					"--smoothing",
+					"2",
+				]);
+			});
+
+			expect(stdout).toContain(`source true peak    ${sourceDb.toFixed(2)} dBTP`);
+		},
+	);
+
 	it("writes each intermediate stage at 64f, deletes it once the next stage has rendered, and removes its scratch directory", async () => {
 		const inputPath = join(workingDirectory, "stages.wav");
 		const outputPath = join(workingDirectory, "stages-out.wav");

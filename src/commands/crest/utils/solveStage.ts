@@ -1,10 +1,17 @@
-import { TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
+import { TAPS_PER_PHASE, TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
 import { candidatesOf, costTableOf, WindowedSolve } from "./blend";
 import { stretchFrameCountOf, type CrestLayout } from "./layout";
-import { chunkRangeOf, chunkStretchesOf, forEachStretchChunk, OVERSAMPLE_FACTOR, type StretchChunk } from "./render";
+import {
+	chunkFrameCountOf,
+	chunkRangeOf,
+	chunkStretchesOf,
+	forEachStretchChunk,
+	OVERSAMPLE_FACTOR,
+	type StretchChunk,
+} from "./render";
 import { SourceWindow } from "./SourceWindow";
 
-const LEAD_FRAMES = 12;
+const LEAD_FRAMES = TAPS_PER_PHASE;
 
 interface DispersedFrames {
 	readonly channels: ReadonlyArray<Float64Array>;
@@ -87,7 +94,7 @@ class StretchScorer {
 }
 
 const leadOf = (chunk: StretchChunk, layout: CrestLayout, stepIndex: number): Array<Float64Array> | undefined => {
-	const frameCount = Math.min(layout.frameCount - chunk.firstFrame, chunk.stretchCount * layout.stretchFrames);
+	const frameCount = chunkFrameCountOf(layout, chunk);
 
 	if (frameCount < LEAD_FRAMES) {
 		return undefined;
@@ -203,10 +210,7 @@ export const solveStage = async (args: {
 					solve.advance(advanced, undefined);
 				}
 
-				await window.cover(
-					chunk.firstFrame - LEAD_FRAMES,
-					Math.min(layout.frameCount - chunk.firstFrame, chunk.stretchCount * layout.stretchFrames) + LEAD_FRAMES,
-				);
+				await window.cover(chunk.firstFrame - LEAD_FRAMES, chunkFrameCountOf(layout, chunk) + LEAD_FRAMES);
 
 				for (; advanced < chunk.firstStretch + chunk.stretchCount; advanced++) {
 					solve.advance(

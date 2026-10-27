@@ -2,7 +2,9 @@
 // Four-phase, 12-tap FIR coefficient columns from ITU-R BS.1770-5 Annex 2.
 
 const OVERSAMPLE_FACTOR = 4;
-const TAPS_PER_PHASE = 12;
+
+export const TAPS_PER_PHASE = 12;
+
 const HISTORY_LENGTH = TAPS_PER_PHASE;
 
 export const FLUSH_FRAMES = TAPS_PER_PHASE - 1;

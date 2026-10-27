@@ -40,6 +40,12 @@ export const chunkRangeOf = (layout: CrestLayout, chunkIndex: number): StretchRa
 	};
 };
 
+export const chunkFrameCountOf = (
+	layout: CrestLayout,
+	chunk: { readonly firstStretch: number; readonly stretchCount: number },
+): number =>
+	Math.min(layout.frameCount - chunk.firstStretch * layout.stretchFrames, chunk.stretchCount * layout.stretchFrames);
+
 export const forEachStretchChunk = async (args: {
 	path: string;
 	layout: CrestLayout;
@@ -60,7 +66,7 @@ export const forEachStretchChunk = async (args: {
 			for (let first = range.firstStretch; first <= range.lastStretch; first += chunkStretches) {
 				const stretchCount = Math.min(chunkStretches, range.lastStretch - first + 1);
 				const firstFrame = first * layout.stretchFrames;
-				const frameCount = Math.min(layout.frameCount - firstFrame, stretchCount * layout.stretchFrames);
+				const frameCount = chunkFrameCountOf(layout, { firstStretch: first, stretchCount });
 
 				await window.cover(firstFrame - layout.maxStepFrames, frameCount + 2 * layout.maxStepFrames);
 				disperser.disperse({

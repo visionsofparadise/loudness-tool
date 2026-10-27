@@ -1,6 +1,6 @@
 # loudness-tool
 
-loudness-tool is a command-line program for measuring and adjusting the loudness of audio. It reports true peak, integrated loudness and loudness range per ITU-R BS.1770 and EBU Tech 3342, and it can normalize audio to a true-peak or loudness target, lower its peaks at a small cost in loudness, or bring it to both targets at once. It reads and writes WAV and raw PCM, from files or pipes, so it fits into an ffmpeg pipeline, and it runs offline on your own machine.
+loudness-tool is a command-line program for measuring and adjusting the loudness of audio. It reports true peak, integrated loudness and loudness range per ITU-R BS.1770 and EBU Tech 3342, and it can normalize audio to a true-peak or loudness target, lower its peaks, which lowers loudness where it acts, or bring it to both targets at once. It reads and writes WAV and raw PCM, from files or pipes, so it fits into an ffmpeg pipeline, and it runs offline on your own machine.
 
 ## Install
 
@@ -68,7 +68,7 @@ loudness-tool crest input.wav -o output.wav --spread 8 --steps 2 --smoothing 100
 loudness-tool crest - -o - < input.wav > output.wav
 ```
 
-`--spread` is the widest spread, in milliseconds (default 8, in (0, 50]). `--steps` is how many spreads crest blends in, each a quarter of the last and each used both earlier and later (default 2, an integer from 1 to 8). A spread that rounds to the width of one already used is skipped. More steps can lower the peak further, and the run takes longer. `--smoothing` is how long the effect takes to fade in or out, in milliseconds (default 100, above zero). A longer fade is less audible, and a shorter one keeps the effect closer to each peak. `-o` is an alias for `--output`. In-place processing is supported by passing the input path as the output. An input of `-` reads stdin, and `-o -` writes stdout.
+`--spread` is the widest spread, in milliseconds (default 8, in (0, 50]). `--steps` is how many spreads crest blends in, each a quarter of the last and each used both earlier and later (default 2, an integer from 1 to 8). A spread that rounds to the width of one already used is skipped. More steps can lower the peak further, and the run takes longer. `--smoothing` is how long the effect takes to fade in or out, in milliseconds (default 100, above zero). The fade is never shorter than 120 samples per channel (2.5 ms at 48 kHz), so settings below that length act alike. A longer fade is less audible, and a shorter one keeps the effect closer to each peak. `-o` is an alias for `--output`. In-place processing is supported by passing the input path as the output. An input of `-` reads stdin, and `-o -` writes stdout.
 
 On success it prints the source true peak, the output true peak, their delta, and the output path, on stderr when the output is stdout.
 
