@@ -13,13 +13,9 @@ export const quantizerOf = (bitDepth: SourceBitDepth): ((sample: number) => numb
 		return (sample) => Math.fround(sample);
 	}
 
-	const { negative, positive } = scales;
+	const { negative } = scales;
 
-	return (sample) => {
-		const clamped = Math.max(-1, Math.min(1, sample));
-
-		return Math.round(clamped < 0 ? clamped * negative : clamped * positive) / negative;
-	};
+	return (sample) => Math.max(-negative, Math.min(negative - 1, Math.round(sample * negative))) / negative;
 };
 
 export const printedDbOf = (amplitude: number): number => Number(linearToDb(amplitude).toFixed(2));

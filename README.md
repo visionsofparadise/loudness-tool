@@ -1,6 +1,6 @@
 # loudness-tool
 
-loudness-tool is a command-line program for measuring and adjusting the loudness of audio. It reports true peak, integrated loudness and loudness range per ITU-R BS.1770 and EBU Tech 3342, and it can normalize audio to a true-peak or loudness target, lower its peaks while keeping its loudness, or bring it to both targets at once. It reads and writes WAV and raw PCM, from files or pipes, so it fits into an ffmpeg pipeline, and it runs offline on your own machine.
+loudness-tool is a command-line program for measuring and adjusting the loudness of audio. It reports true peak, integrated loudness and loudness range per ITU-R BS.1770 and EBU Tech 3342, and it can normalize audio to a true-peak or loudness target, lower its peaks at a small cost in loudness, or bring it to both targets at once. It reads and writes WAV and raw PCM, from files or pipes, so it fits into an ffmpeg pipeline, and it runs offline on your own machine.
 
 ## Install
 
@@ -60,17 +60,15 @@ On success it prints the source integrated loudness, the target, the applied gai
 
 ### crest
 
-Lower the audio's true peak while keeping its loudness and tonal balance. Each peak's energy is spread a few milliseconds earlier and later, so the peak flattens, and passages that gain nothing from it are left untouched.
+Lower the audio's true peak by blending it, where a peak needs it, with copies of it whose phase is spread a few milliseconds earlier and later, fading the blend in and out over the smoothing time. Audio that needs no change is written as it was, at the output's depth. Where crest acts the audio gets quieter, which lowers the file's integrated loudness; `lufs-norm` or `target` can bring it back afterwards.
 
 ```sh
 loudness-tool crest input.wav -o output.wav
-loudness-tool crest input.wav -o output.wav --spread 4 --smoothing 100
+loudness-tool crest input.wav -o output.wav --spread 8 --steps 2 --smoothing 100
 loudness-tool crest - -o - < input.wav > output.wav
 ```
 
-`--spread` is the widest spread crest tries, in milliseconds (default 4, in (0, 50]). A wider setting gives it more spreads to try for a lower peak, and the run takes longer. `--smoothing` is how long the effect takes to fade in or out, in milliseconds (default 100, above zero). A longer fade is less audible, and a shorter one keeps the effect closer to each peak. `-o` is an alias for `--output`. In-place processing is supported by passing the input path as the output. An input of `-` reads stdin, and `-o -` writes stdout.
-
-The output has the lowest true peak those settings can reach, with as much of the audio left as it was as that peak allows.
+`--spread` is the widest spread, in milliseconds (default 8, in (0, 50]). `--steps` is how many spreads crest blends in, each a quarter of the last and each used both earlier and later (default 2, an integer from 1 to 8). A spread that rounds to the width of one already used is skipped. More steps can lower the peak further, and the run takes longer. `--smoothing` is how long the effect takes to fade in or out, in milliseconds (default 100, above zero). A longer fade is less audible, and a shorter one keeps the effect closer to each peak. `-o` is an alias for `--output`. In-place processing is supported by passing the input path as the output. An input of `-` reads stdin, and `-o -` writes stdout.
 
 On success it prints the source true peak, the output true peak, their delta, and the output path, on stderr when the output is stdout.
 
@@ -152,7 +150,7 @@ A WAV or raw input below 5 Hz or above 768000 Hz fails with `Unsupported sample 
 
 ## Temporary files
 
-`--scratch-dir <path>` sets the directory that holds the copy of a piped or raw input and `target`'s working files (default: the system temporary directory). It goes before or after the command:
+`--scratch-dir <path>` sets the directory that holds the copy of a piped or raw input and the working files of `target` and `crest` (default: the system temporary directory). It goes before or after the command:
 
 ```sh
 loudness-tool --scratch-dir /tmp/lt target input.wav -o output.wav --lufs -16

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { decodeSample, encodeSample } from "../../../wav/utils/sampleCodec";
+import { decodeSample, encodeQuantizedSample } from "../../../wav/utils/sampleCodec";
 import { printedDbOf, quantizerOf } from "./rounding";
 import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
 const roundTrip = (sample: number, bitDepth: SourceBitDepth): number => {
 	const buffer = Buffer.alloc(8);
 
-	encodeSample(buffer, 0, sample, bitDepth);
+	encodeQuantizedSample(buffer, 0, sample, bitDepth);
 
 	return decodeSample(buffer, 0, bitDepth);
 };
@@ -54,7 +54,7 @@ describe("quantizerOf", () => {
 	};
 
 	it.each(["8", "16", "24", "32", "32f", "64f"] as const)(
-		"returns for %s what decodeSample reads back from encodeSample's bytes",
+		"returns for %s what decodeSample reads back from encodeQuantizedSample's bytes",
 		(bitDepth) => {
 			const quantize = quantizerOf(bitDepth);
 			const codes = decodedCodesOf(bitDepth);

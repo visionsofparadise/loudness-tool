@@ -4,7 +4,10 @@
 const OVERSAMPLE_FACTOR = 4;
 const TAPS_PER_PHASE = 12;
 const HISTORY_LENGTH = TAPS_PER_PHASE;
-const FLUSH_INPUT = new Float64Array(TAPS_PER_PHASE - 1);
+
+export const FLUSH_FRAMES = TAPS_PER_PHASE - 1;
+
+const FLUSH_INPUT = new Float64Array(FLUSH_FRAMES);
 
 const P0T0 = 0.001708984375;
 const P0T1 = 0.010986328125;

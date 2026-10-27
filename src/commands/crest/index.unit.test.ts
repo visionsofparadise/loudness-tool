@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../../cli";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
@@ -15,7 +15,11 @@ import {
 import { createNoise, createSine } from "../../utils/testSignals";
 import { WavReader, type AudioBlock } from "../../wav/WavReader";
 import { WavWriter } from "../../wav/WavWriter";
+import { weightOf } from "./utils/blend";
+import { crestLayoutOf } from "./utils/layout";
+import { forEachStretchChunk } from "./utils/render";
 import { printedDbOf, quantizerOf } from "./utils/rounding";
+import { oracleOf, upsampledOf } from "./utils/testBlendOracle";
 import { crest } from "./index";
 import type { WavBitDepth } from "../../wav/utils/wavFormat";
 
@@ -35,6 +39,20 @@ const peakySource = (frameCount: number, channelCount: number, seed: number): Ar
 			if (channel !== undefined && position < frameCount) {
 				channel[position] = Math.fround(
 					0.85 * Math.exp(-offset / 4) * Math.sin((2 * Math.PI * 1200 * offset) / SAMPLE_RATE + 1),
+				);
+			}
+		}
+	}
+
+	return channels;
+};
+
+const withBursts = (channels: Array<Float64Array>): Array<Float64Array> => {
+	for (const [channelIndex, channel] of channels.entries()) {
+		for (let first = 4000 + channelIndex * 700; first < channel.length; first += 9000) {
+			for (let offset = 0; offset < 24; offset++) {
+				channel[first + offset] = Math.fround(
+					0.9 * Math.exp(-offset / 6) * Math.sin((2 * Math.PI * 900 * offset) / SAMPLE_RATE + channelIndex),
 				);
 			}
 		}
@@ -164,7 +182,9 @@ describe("crest", () => {
 		await writeWav(inputPath, peakySource(900, 1, 9), "32f");
 
 		const sourcePeak = printedDbOf(await truePeakOf(inputPath));
-		const stdout = await captureStdout(() => crest(inputPath, { output: outputPath, spread: 0.25, smoothing: 2 }));
+		const stdout = await captureStdout(() =>
+			crest(inputPath, { output: outputPath, spread: 0.25, steps: 2, smoothing: 2 }),
+		);
 		const outputPeak = printedDbOf(await truePeakOf(outputPath));
 
 		expect(stdout).toBe(
@@ -179,28 +199,68 @@ describe("crest", () => {
 		expect(outputPeak).toBeLessThan(sourcePeak);
 	});
 
-	it("reports the source true peak of the raw samples, not of the quantized frames it meters", async () => {
-		const inputPath = join(workingDirectory, "full-scale.wav");
-		const outputPath = join(workingDirectory, "full-scale-out.wav");
-		const channel = Float64Array.from({ length: 400 }, (_sample, index) =>
-			index % 2 === 0 ? 32763 / 0x7fff : 16382 / 0x7fff,
-		);
+	it("writes two chained whole-file stages quantized once at the output's depth", async () => {
+		const inputPath = join(workingDirectory, "chained.wav");
+		const outputPath = join(workingDirectory, "chained-out.wav");
 
-		await writeWav(inputPath, [channel], "16");
+		await writeWav(inputPath, withBursts(peakySource(2 * SAMPLE_RATE, 2, 37)), "16");
 
-		const { channels } = await readAll(inputPath);
+		const { channels: source } = await readAll(inputPath);
+		const frameCount = source[0]?.length ?? 0;
+		const layout = crestLayoutOf({ spreadMs: 8, steps: 1, smoothingMs: 20, sampleRate: SAMPLE_RATE, frameCount });
+		const dispersed = layout.steps.map(() => source.map(() => new Float64Array(frameCount)));
+
+		await forEachStretchChunk({
+			path: inputPath,
+			layout,
+			ranges: [{ firstStretch: 0, lastStretch: layout.stretchCount - 1 }],
+			stepIndicesOf: () => layout.steps.map((_step, stepIndex) => stepIndex),
+			handle: (chunk) => {
+				const chunkFrames = Math.min(frameCount - chunk.firstFrame, chunk.stretchCount * layout.stretchFrames);
+
+				for (const [stepIndex, channels] of dispersed.entries()) {
+					for (const [channelIndex, channel] of channels.entries()) {
+						channel.set(
+							chunk.dispersed[stepIndex]?.[channelIndex]?.subarray(0, chunkFrames) ?? [],
+							chunk.firstFrame,
+						);
+					}
+				}
+			},
+		});
+
+		let current = source;
+
+		for (const stage of dispersed) {
+			const { path } = oracleOf({
+				current: current.map(upsampledOf),
+				dispersed: stage.map(upsampledOf),
+				frameCount,
+				stretchFrames: layout.stretchFrames,
+			});
+
+			current = current.map((channel, channelIndex) =>
+				channel.map((sample, frame) => {
+					const weight = weightOf(path, frame, layout.stretchFrames);
+
+					return weight > 0 ? sample + weight * ((stage[channelIndex]?.[frame] ?? 0) - sample) : sample;
+				}),
+			);
+		}
+
+		const stdout = await captureStdout(() => crest(inputPath, { output: outputPath, steps: 1, smoothing: 20 }));
+		const { channels: output } = await readAll(outputPath);
 		const quantize = quantizerOf("16");
-		const quantized = (channels[0] ?? new Float64Array(0)).map(quantize);
-		const quantizedAccumulator = new TruePeakAccumulator(1);
 
-		quantizedAccumulator.push([quantized], quantized.length);
-
-		const rawDb = printedDbOf(await truePeakOf(inputPath));
-		const quantizedDb = printedDbOf(quantizedAccumulator.finalize());
-		const stdout = await captureStdout(() => crest(inputPath, { output: outputPath, spread: 0.25, smoothing: 2 }));
-
-		expect(rawDb).not.toBe(quantizedDb);
-		expect(stdout).toContain(`source true peak    ${rawDb.toFixed(2)} dBTP`);
+		expect(output.map((channel) => Array.from(channel))).toEqual(
+			current.map((channel) => Array.from(channel, (sample) => quantize(sample) + 0)),
+		);
+		expect(
+			output.some((channel, channelIndex) =>
+				channel.some((sample, frame) => sample !== source[channelIndex]?.[frame]),
+			),
+		).toBe(true);
+		expect(stdout).toContain(`output true peak    ${printedDbOf(await truePeakOf(outputPath)).toFixed(2)} dBTP`);
 	});
 
 	it("preserves the frame count, sample rate, channel count, and writable bit depth", async () => {
@@ -208,7 +268,7 @@ describe("crest", () => {
 		const outputPath = join(workingDirectory, "stereo-out.wav");
 
 		await writeWav(inputPath, peakySource(600, 2, 17), "16");
-		await captureStdout(() => crest(inputPath, { output: outputPath, spread: 0.25, smoothing: 2 }));
+		await captureStdout(() => crest(inputPath, { output: outputPath, spread: 0.25, steps: 2, smoothing: 2 }));
 
 		const reader = await WavReader.open(outputPath);
 
@@ -223,17 +283,80 @@ describe("crest", () => {
 		await reader.close();
 	});
 
+	it("runs two steps by default and one when --steps 1 is given", async () => {
+		const inputPath = join(workingDirectory, "steps.wav");
+		const outputOf = async (name: string, options: Array<string>): Promise<Buffer> => {
+			const outputPath = join(workingDirectory, name);
+
+			await captureStdout(async () => {
+				await parseProgram([
+					"crest",
+					inputPath,
+					"-o",
+					outputPath,
+					"--spread",
+					"0.25",
+					"--smoothing",
+					"2",
+					...options,
+				]);
+			});
+
+			return readFile(outputPath);
+		};
+
+		await writeWav(inputPath, peakySource(900, 1, 43), "32f");
+
+		const defaultOutput = await outputOf("default.wav", []);
+
+		expect(defaultOutput.equals(await outputOf("two.wav", ["--steps", "2"]))).toBe(true);
+		expect(defaultOutput.equals(await outputOf("one.wav", ["--steps", "1"]))).toBe(false);
+	});
+
+	it("writes each intermediate stage at 64f, deletes it once the next stage has rendered, and removes its scratch directory", async () => {
+		const inputPath = join(workingDirectory, "stages.wav");
+		const outputPath = join(workingDirectory, "stages-out.wav");
+		const scratchDir = join(workingDirectory, "scratch");
+		const create = WavWriter.create.bind(WavWriter);
+		const intermediateDepths: Array<string> = [];
+		const liveStages: Array<Array<string>> = [];
+		let stageDirectory: string | undefined;
+
+		await writeWav(inputPath, peakySource(900, 1, 9), "32f");
+
+		vi.spyOn(WavWriter, "create").mockImplementation(async (sink, format) => {
+			if (sink.kind === "file" && /stage-\d+\.wav$/.test(sink.path)) {
+				stageDirectory = dirname(sink.path);
+				intermediateDepths.push(format.bitDepth);
+			}
+
+			if (stageDirectory !== undefined) {
+				liveStages.push((await readdir(stageDirectory)).filter((name) => /^stage-\d+\.wav$/.test(name)));
+			}
+
+			return create(sink, format);
+		});
+
+		await captureStdout(() =>
+			crest(inputPath, { output: outputPath, spread: 0.25, steps: 2, smoothing: 2, scratchDir }),
+		);
+
+		expect(intermediateDepths).toEqual(["64f", "64f", "64f"]);
+		expect(liveStages).toEqual([[], ["stage-0.wav"], ["stage-1.wav"], ["stage-2.wav"]]);
+		expect(await readdir(scratchDir)).toEqual([]);
+	});
+
 	it("produces the same bytes whatever the block size the source is read in", async () => {
 		const inputPath = join(workingDirectory, "blocks.wav");
 		const wholePath = join(workingDirectory, "whole.wav");
 		const splitPath = join(workingDirectory, "split.wav");
 
 		await writeWav(inputPath, peakySource(700, 1, 23), "32f");
-		await captureStdout(() => crest(inputPath, { output: wholePath, spread: 0.25, smoothing: 2 }));
+		await captureStdout(() => crest(inputPath, { output: wholePath, spread: 0.25, steps: 2, smoothing: 2 }));
 
 		mockBlockFrames(13);
 
-		await captureStdout(() => crest(inputPath, { output: splitPath, spread: 0.25, smoothing: 2 }));
+		await captureStdout(() => crest(inputPath, { output: splitPath, spread: 0.25, steps: 2, smoothing: 2 }));
 
 		expect(await readFile(splitPath)).toEqual(await readFile(wholePath));
 	});
@@ -254,8 +377,8 @@ describe("crest", () => {
 			channels.map((channel) => Float64Array.from(channel)),
 			"32f",
 		);
-		await captureStdout(() => crest(referencePath, { output: expectedPath, spread: 0.25, smoothing: 2 }));
-		await captureStdout(() => crest(inputPath, { output: inputPath, spread: 0.25, smoothing: 2 }));
+		await captureStdout(() => crest(referencePath, { output: expectedPath, spread: 0.25, steps: 2, smoothing: 2 }));
+		await captureStdout(() => crest(inputPath, { output: inputPath, spread: 0.25, steps: 2, smoothing: 2 }));
 
 		expect(await readFile(inputPath)).toEqual(await readFile(expectedPath));
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
@@ -291,7 +414,7 @@ describe("crest", () => {
 		await reader.close();
 	});
 
-	it("rejects a spread outside (0, 50] and a smoothing that is not above zero", async () => {
+	it("rejects a spread outside (0, 50], steps outside the integers 1 to 8, and a smoothing that is not above zero", async () => {
 		await expect(parseProgram(["crest", "in.wav", "-o", "out.wav", "--spread", "0"])).rejects.toThrow(
 			/spread must be in \(0, 50\]/,
 		);
@@ -301,6 +424,12 @@ describe("crest", () => {
 		await expect(parseProgram(["crest", "in.wav", "-o", "out.wav", "--spread", "wide"])).rejects.toThrow(
 			/spread must be in \(0, 50\]/,
 		);
+		for (const steps of ["0", "9", "1.5", "x"]) {
+			await expect(parseProgram(["crest", "in.wav", "-o", "out.wav", "--steps", steps])).rejects.toThrow(
+				`steps must be an integer in [1, 8], received ${steps}`,
+			);
+		}
+
 		await expect(parseProgram(["crest", "in.wav", "-o", "out.wav", "--smoothing", "0"])).rejects.toThrow(
 			/smoothing must be > 0/,
 		);
@@ -326,6 +455,7 @@ describe("crest", () => {
 		await writeWav(outputPath, createSine(64, 1, SAMPLE_RATE, 220, 0.2), "32f");
 
 		const original = await readFile(outputPath);
+		const scratchDir = join(workingDirectory, "scratch");
 		const writeThrough = WavWriter.prototype.writeQuantized;
 
 		vi.spyOn(WavWriter.prototype, "writeQuantized").mockImplementation(async function (
@@ -337,13 +467,14 @@ describe("crest", () => {
 			throw new Error("injected write failure");
 		});
 
-		await expect(crest(inputPath, { output: outputPath, spread: 0.25, smoothing: 2 })).rejects.toThrow(
-			"injected write failure",
-		);
+		await expect(
+			crest(inputPath, { output: outputPath, spread: 0.25, steps: 2, smoothing: 2, scratchDir }),
+		).rejects.toThrow("injected write failure");
 
 		expect(existsSync(outputPath)).toBe(true);
 		expect(await readFile(outputPath)).toEqual(original);
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
+		expect(await readdir(scratchDir)).toEqual([]);
 	});
 
 	it("leaves the destination as it was when the source cannot be read", async () => {

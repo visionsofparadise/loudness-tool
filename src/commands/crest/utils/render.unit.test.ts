@@ -2,21 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
 import { createNoise } from "../../../utils/testSignals";
 import { WavWriter } from "../../../wav/WavWriter";
 import { dispersionKernelOf } from "./dispersion";
-import { crestLayoutOf, type CrestLayout } from "./ladder";
-import {
-	allocateChannels,
-	forEachStretchChunk,
-	measureStretch,
-	renderStretch,
-	OVERSAMPLE_FACTOR,
-	TRUE_PEAK_TAIL_FRAMES,
-	type StretchChunk,
-} from "./render";
-import { quantizerOf } from "./rounding";
+import { crestLayoutOf, type CrestLayout } from "./layout";
+import { forEachStretchChunk, type StretchChunk } from "./render";
 
 const SAMPLE_RATE = 48000;
 
@@ -83,7 +73,7 @@ describe("forEachStretchChunk", () => {
 		path: string,
 		layout: CrestLayout,
 	): Promise<{ dispersed: Array<Array<Float64Array>>; chunks: Array<StretchChunk> }> => {
-		const dispersed = layout.steps.map(() => allocateChannels(1, layout.frameCount));
+		const dispersed = layout.steps.map(() => [new Float64Array(layout.frameCount)]);
 		const chunks: Array<StretchChunk> = [];
 
 		await everyChunk(path, layout, (chunk) => {
@@ -106,7 +96,7 @@ describe("forEachStretchChunk", () => {
 		const frameCount = 40000;
 		const channels = floatNoise(frameCount, 1, 13);
 		const path = await writeSource(channels);
-		const layout = crestLayoutOf({ spreadMs: 0.1, smoothingMs: 0.5, sampleRate: SAMPLE_RATE, frameCount });
+		const layout = crestLayoutOf({ spreadMs: 0.1, steps: 2, smoothingMs: 0.5, sampleRate: SAMPLE_RATE, frameCount });
 		const { dispersed, chunks } = await collect(path, layout);
 		const source = channels[0] ?? new Float64Array(0);
 
@@ -119,14 +109,12 @@ describe("forEachStretchChunk", () => {
 				expect(dispersed[stepIndex]?.[0]?.[frame] ?? 0).toBeCloseTo(dispersedAt(source, frame, step), 12);
 			}
 		}
-
-		expect(Array.from(dispersed[layout.zeroStepIndex]?.[0] ?? [])).toEqual(Array.from(source));
 	});
 
 	it("disperses a file's last chunk alone as it does after its predecessor", async () => {
 		const frameCount = 40000;
 		const path = await writeSource(floatNoise(frameCount, 2, 17));
-		const layout = crestLayoutOf({ spreadMs: 0.1, smoothingMs: 0.5, sampleRate: SAMPLE_RATE, frameCount });
+		const layout = crestLayoutOf({ spreadMs: 0.1, steps: 2, smoothingMs: 0.5, sampleRate: SAMPLE_RATE, frameCount });
 		const firstStretches: Array<number> = [];
 
 		await everyChunk(path, layout, (chunk) => {
@@ -161,112 +149,66 @@ describe("forEachStretchChunk", () => {
 		expect(alone).toEqual(afterPredecessor);
 	});
 
-	it("blends the two dispersed sources with weight j over n on the step it ends on", async () => {
-		const channels = floatNoise(120, 1, 29);
-		const path = await writeSource(channels);
-		const layout = crestLayoutOf({
-			spreadMs: 0.1,
-			smoothingMs: 0.5,
-			sampleRate: SAMPLE_RATE,
-			frameCount: 120,
-		});
-		const quantize = quantizerOf("32f");
-		const output = allocateChannels(1, layout.stretchFrames);
-		const source = channels[0] ?? new Float64Array(0);
-		let checked = 0;
+	it("disperses a middle chunk alone as it does within a call over three consecutive chunks", async () => {
+		const frameCount = 40000;
+		const path = await writeSource(floatNoise(frameCount, 2, 23));
+		const layout = crestLayoutOf({ spreadMs: 0.1, steps: 2, smoothingMs: 0.5, sampleRate: SAMPLE_RATE, frameCount });
+		const firstStretches: Array<number> = [];
 
 		await everyChunk(path, layout, (chunk) => {
-			for (let index = 0; index < chunk.stretchCount; index++) {
-				const stretchIndex = chunk.firstStretch + index;
-
-				renderStretch({ chunk, layout, stretchIndex, beginStepIndex: 0, endStepIndex: 1, quantize, output });
-
-				const firstFrame = stretchIndex * layout.stretchFrames;
-
-				for (let offset = 0; offset < layout.stretchFrames; offset++) {
-					const weight = (offset + 1) / layout.stretchFrames;
-					const expected =
-						dispersedAt(source, firstFrame + offset, layout.steps[0] ?? 0) * (1 - weight) +
-						dispersedAt(source, firstFrame + offset, layout.steps[1] ?? 0) * weight;
-
-					expect(output[0]?.[offset] ?? 0).toBeCloseTo(expected, 6);
-					checked++;
-				}
-			}
+			firstStretches.push(chunk.firstStretch);
 		});
 
-		expect(checked).toBe(120);
-	});
+		const middleStretch = firstStretches[1] ?? 0;
+		const middleOf = async (range: {
+			firstStretch: number;
+			lastStretch: number;
+		}): Promise<Array<Array<Array<number>>>> => {
+			let middle: Array<Array<Array<number>>> = [];
 
-	it("leaves a stretch identical to the source on the zero step", async () => {
-		const channels = floatNoise(48, 1, 31);
-		const path = await writeSource(channels);
-		const layout = crestLayoutOf({ spreadMs: 0.1, smoothingMs: 0.5, sampleRate: SAMPLE_RATE, frameCount: 48 });
-		const quantize = quantizerOf("32f");
-		const output = allocateChannels(1, layout.stretchFrames);
-
-		await everyChunk(path, layout, (chunk) => {
-			renderStretch({
-				chunk,
+			await forEachStretchChunk({
+				path,
 				layout,
-				stretchIndex: 0,
-				beginStepIndex: layout.zeroStepIndex,
-				endStepIndex: layout.zeroStepIndex,
-				quantize,
-				output,
+				ranges: [range],
+				stepIndicesOf: () => layout.steps.map((_step, stepIndex) => stepIndex),
+				handle: (chunk) => {
+					if (chunk.firstStretch === middleStretch) {
+						middle = chunk.dispersed.map((channels) => channels.map((channel) => Array.from(channel)));
+					}
+				},
 			});
-		});
 
-		expect(Array.from(output[0]?.subarray(0, layout.stretchFrames) ?? [])).toEqual(
-			Array.from(channels[0]?.subarray(0, layout.stretchFrames) ?? []),
-		);
-	});
-});
+			return middle;
+		};
 
-describe("measureStretch", () => {
-	it("covers every window the accumulator reads", () => {
-		const channels = floatNoise(40, 2, 5);
-		const frameCount = 40;
-		const measure = measureStretch({
-			output: channels,
-			sourceFrames: channels,
-			frameCount,
-			scratch: new Float64Array(frameCount * OVERSAMPLE_FACTOR),
-			tailScratch: new Float64Array(TRUE_PEAK_TAIL_FRAMES * OVERSAMPLE_FACTOR),
-		});
-		const accumulator = new TruePeakAccumulator(2);
+		expect(firstStretches.length).toBe(3);
 
-		accumulator.push(channels, frameCount);
+		const alone = await middleOf({ firstStretch: middleStretch, lastStretch: (firstStretches[2] ?? 0) - 1 });
+		const within = await middleOf({ firstStretch: 0, lastStretch: layout.stretchCount - 1 });
 
-		let peak = measure.peak;
-
-		for (const table of [measure.head, measure.carry]) {
-			for (const value of table) {
-				peak = Math.max(peak, Math.abs(value));
-			}
-		}
-
-		expect(peak).toBeCloseTo(accumulator.finalize(), 12);
-		expect(measure.identicalFrames).toBe(frameCount);
+		expect(alone.length).toBe(layout.steps.length);
+		expect(alone).toEqual(within);
 	});
 
-	it("counts a frame as identical only when every channel matches", () => {
-		const source = floatNoise(16, 2, 7);
-		const output = source.map((channel) => Float64Array.from(channel));
-		const altered = output[1];
+	it("disperses only the steps it is asked for", async () => {
+		const frameCount = 2000;
+		const path = await writeSource(floatNoise(frameCount, 1, 29));
+		const layout = crestLayoutOf({ spreadMs: 0.1, steps: 2, smoothingMs: 0.5, sampleRate: SAMPLE_RATE, frameCount });
+		const touched: Array<boolean> = [];
 
-		if (altered !== undefined) {
-			altered[3] = (altered[3] ?? 0) + 0.5;
-		}
-
-		const measure = measureStretch({
-			output,
-			sourceFrames: source,
-			frameCount: 16,
-			scratch: new Float64Array(16 * OVERSAMPLE_FACTOR),
-			tailScratch: new Float64Array(TRUE_PEAK_TAIL_FRAMES * OVERSAMPLE_FACTOR),
+		await forEachStretchChunk({
+			path,
+			layout,
+			ranges: [{ firstStretch: 0, lastStretch: layout.stretchCount - 1 }],
+			stepIndicesOf: () => [1],
+			handle: (chunk) => {
+				for (const [stepIndex, channels] of chunk.dispersed.entries()) {
+					touched[stepIndex] =
+						(touched[stepIndex] ?? false) || channels.some((channel) => channel.some((sample) => sample !== 0));
+				}
+			},
 		});
 
-		expect(measure.identicalFrames).toBe(15);
+		expect(touched).toEqual([false, true, false, false]);
 	});
 });

@@ -58,26 +58,6 @@ describe("Disperser", () => {
 		}
 	});
 
-	it("copies the source through on the zero step", () => {
-		const disperser = Disperser.of(steps, maxStepFrames);
-		const frameCount = 300;
-		const window = noisy(frameCount + 2 * maxStepFrames, 9);
-		const targets = steps.map(() => [new Float64Array(frameCount)]);
-
-		disperser.disperse({
-			window: [window],
-			windowFirstFrame: -maxStepFrames,
-			firstFrame: 0,
-			frameCount,
-			stepIndices: [2],
-			targets,
-		});
-
-		expect(Array.from(targets[2]?.[0] ?? [])).toEqual(
-			Array.from(window.subarray(maxStepFrames, maxStepFrames + frameCount)),
-		);
-	});
-
 	it("leaves the steps it was not asked for alone", () => {
 		const disperser = Disperser.of(steps, maxStepFrames);
 		const frameCount = 200;

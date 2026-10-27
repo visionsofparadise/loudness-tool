@@ -59,8 +59,10 @@ export class Disperser {
 		targets: ReadonlyArray<ReadonlyArray<Float64Array>>;
 	}): void {
 		const { window, windowFirstFrame, firstFrame, frameCount, stepIndices, targets } = args;
-		const moving = stepIndices.filter((stepIndex) => (this.steps[stepIndex] ?? 0) !== 0);
-		const held = stepIndices.filter((stepIndex) => (this.steps[stepIndex] ?? 0) === 0);
+
+		if (stepIndices.length === 0) {
+			return;
+		}
 
 		for (let blockFirst = firstFrame; blockFirst < firstFrame + frameCount; blockFirst += this.hopFrames) {
 			const blockFrames = Math.min(this.hopFrames, firstFrame + frameCount - blockFirst);
@@ -68,19 +70,10 @@ export class Disperser {
 
 			for (let channelIndex = 0; channelIndex < window.length; channelIndex++) {
 				const channel = window[channelIndex] ?? new Float64Array(0);
-				const source = channel.subarray(blockFirst - windowFirstFrame, blockFirst - windowFirstFrame + blockFrames);
-
-				for (const stepIndex of held) {
-					targets[stepIndex]?.[channelIndex]?.set(source, targetFirst);
-				}
-
-				if (moving.length === 0) {
-					continue;
-				}
 
 				this.loadBlock(channel, blockFirst - this.maxStepFrames - windowFirstFrame);
 
-				for (const stepIndex of moving) {
+				for (const stepIndex of stepIndices) {
 					const target = targets[stepIndex]?.[channelIndex];
 
 					if (target === undefined) {
