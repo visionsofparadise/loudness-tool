@@ -123,6 +123,44 @@ describe("forEachStretchChunk", () => {
 		expect(Array.from(dispersed[layout.zeroStepIndex]?.[0] ?? [])).toEqual(Array.from(source));
 	});
 
+	it("disperses a file's last chunk alone as it does after its predecessor", async () => {
+		const frameCount = 40000;
+		const path = await writeSource(floatNoise(frameCount, 2, 17));
+		const layout = crestLayoutOf({ spreadMs: 0.1, smoothingMs: 0.5, sampleRate: SAMPLE_RATE, frameCount });
+		const firstStretches: Array<number> = [];
+
+		await everyChunk(path, layout, (chunk) => {
+			firstStretches.push(chunk.firstStretch);
+		});
+
+		const lastChunkOf = async (firstStretch: number): Promise<Array<Array<Array<number>>>> => {
+			let last: Array<Array<Array<number>>> = [];
+
+			await forEachStretchChunk({
+				path,
+				layout,
+				ranges: [{ firstStretch, lastStretch: layout.stretchCount - 1 }],
+				stepIndicesOf: () => layout.steps.map((_step, stepIndex) => stepIndex),
+				handle: (chunk) => {
+					const chunkFrames = layout.frameCount - chunk.firstFrame;
+
+					last = chunk.dispersed.map((channels) =>
+						channels.map((channel) => Array.from(channel.subarray(0, chunkFrames))),
+					);
+				},
+			});
+
+			return last;
+		};
+
+		expect(firstStretches.length).toBeGreaterThan(2);
+
+		const alone = await lastChunkOf(firstStretches[firstStretches.length - 1] ?? 0);
+		const afterPredecessor = await lastChunkOf(firstStretches[firstStretches.length - 2] ?? 0);
+
+		expect(alone).toEqual(afterPredecessor);
+	});
+
 	it("blends the two dispersed sources with weight j over n on the step it ends on", async () => {
 		const channels = floatNoise(120, 1, 29);
 		const path = await writeSource(channels);

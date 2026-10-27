@@ -49,6 +49,8 @@ export class SourceWindow {
 			} else {
 				channel.fill(0, 0, frameCount);
 			}
+
+			channel.fill(0, frameCount);
 		}
 
 		this.windowFirst = firstFrame;
