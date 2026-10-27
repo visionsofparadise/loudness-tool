@@ -4,7 +4,7 @@ import { createNoise } from "../../../utils/testSignals";
 import { candidatesOf, costTableOf, pairIndexOf, PAIR_COUNT, weightBetween, weightOf, WindowedSolve } from "./blend";
 import { WEIGHT_LEVELS } from "./layout";
 import { OVERSAMPLE_FACTOR } from "./render";
-import { oracleOf, upsampledOf } from "./testBlendOracle";
+import { oracleOf, stretchPeaksOf, upsampledOf } from "./testBlendOracle";
 
 const STRETCH_FRAMES = 4;
 const STRETCH_COUNT = 61;
@@ -115,6 +115,27 @@ describe("candidatesOf", () => {
 		expect(costs[pairIndexOf(2, 3)]).toBeCloseTo(0.775, 15);
 		expect(costs[pairIndexOf(3, 2)]).toBeCloseTo(0.725, 15);
 	});
+
+	it.each([
+		{ frameCount: STRETCH_FRAMES, tau: 1 },
+		{ frameCount: 2, tau: 2 / STRETCH_FRAMES },
+	])("weighs a flush-tail sample as the last of $frameCount frames", ({ frameCount, tau }) => {
+		const sampleCount = (frameCount + FLUSH_FRAMES) * OVERSAMPLE_FACTOR;
+		const current = new Float64Array(sampleCount);
+
+		current[sampleCount - 3] = 0.8;
+
+		const candidates = candidatesOf({
+			current: [current],
+			dispersed: [new Float64Array(sampleCount)],
+			frameCount,
+			stretchFrames: STRETCH_FRAMES,
+			threshold: 0.5,
+			tailSamples: FLUSH_FRAMES * OVERSAMPLE_FACTOR,
+		});
+
+		expect(Array.from(candidates)).toEqual([0.8, -0.8, tau]);
+	});
 });
 
 describe("WindowedSolve", () => {
@@ -165,6 +186,48 @@ describe("WindowedSolve", () => {
 		const expected = new Array<number>(STRETCH_COUNT + 1).fill(0);
 
 		expected.splice(HOT_STRETCH - 2, 7, 1, 2, 3, 4, 3, 2, 1);
+
+		expect(solve.level()).toBe(0.6);
+		expect(Array.from(solve.path())).toEqual(expected);
+	});
+
+	it.each([
+		{
+			hotStretch: 0,
+			expectedPath: (path: Array<number>): void => {
+				path.splice(0, 6, 3, 4, 3, 2, 1, 0);
+			},
+		},
+		{
+			hotStretch: STRETCH_COUNT - 1,
+			expectedPath: (path: Array<number>): void => {
+				path.splice(STRETCH_COUNT - 3, 4, 1, 2, 3, 4);
+			},
+		},
+	])("leaves the weight free at the file's edge for a hot stretch $hotStretch", ({ hotStretch, expectedPath }) => {
+		const peaks = new Float64Array(STRETCH_COUNT);
+
+		peaks[hotStretch] = 1;
+
+		const solve = new WindowedSolve({ peaks });
+		const scoreHot = (threshold: number): Float64Array =>
+			costTableOf(lastFrameCandidates([{ current: 1, dispersed: 0 }], threshold));
+
+		solve.seed(scoreHot(solve.seedThreshold));
+
+		for (let stretchIndex = 0; stretchIndex < STRETCH_COUNT; stretchIndex++) {
+			if (stretchIndex === hotStretch) {
+				solve.advance(stretchIndex, scoreHot(solve.threshold()));
+			} else if (Math.abs(stretchIndex - hotStretch) <= WEIGHT_LEVELS) {
+				solve.advance(stretchIndex, costTableOf(new Float64Array(0)));
+			} else {
+				solve.advance(stretchIndex, undefined);
+			}
+		}
+
+		const expected = new Array<number>(STRETCH_COUNT + 1).fill(0);
+
+		expectedPath(expected);
 
 		expect(solve.level()).toBe(0.6);
 		expect(Array.from(solve.path())).toEqual(expected);
@@ -285,31 +348,25 @@ describe("WindowedSolve against the whole-file oracle", () => {
 	}): { readonly level: number; readonly path: Int32Array } => {
 		const { currentUpsampled, dispersedUpsampled, frameCount, stretchFrames } = args;
 		const stretchCount = Math.ceil(frameCount / stretchFrames);
-		const peaks = new Float64Array(stretchCount);
-
-		for (const channel of currentUpsampled) {
-			for (let index = 0; index < frameCount * OVERSAMPLE_FACTOR; index++) {
-				const stretchIndex = Math.floor(index / OVERSAMPLE_FACTOR / stretchFrames);
-
-				peaks[stretchIndex] = Math.max(peaks[stretchIndex] ?? 0, Math.abs(channel[index] ?? 0));
-			}
-		}
-
+		const peaks = stretchPeaksOf(currentUpsampled, frameCount, stretchFrames);
 		const stretchSamples = stretchFrames * OVERSAMPLE_FACTOR;
-		const scoreAt = (stretchIndex: number, threshold: number): Float64Array =>
-			costTableOf(
+		const scoreAt = (stretchIndex: number, threshold: number): Float64Array => {
+			const tailSamples = stretchIndex === stretchCount - 1 ? FLUSH_FRAMES * OVERSAMPLE_FACTOR : 0;
+			const stretchFrameCount = Math.min(stretchFrames, frameCount - stretchIndex * stretchFrames);
+			const first = stretchIndex * stretchSamples;
+			const end = first + stretchFrameCount * OVERSAMPLE_FACTOR + tailSamples;
+
+			return costTableOf(
 				candidatesOf({
-					current: currentUpsampled.map((channel) =>
-						channel.subarray(stretchIndex * stretchSamples, (stretchIndex + 1) * stretchSamples),
-					),
-					dispersed: dispersedUpsampled.map((channel) =>
-						channel.subarray(stretchIndex * stretchSamples, (stretchIndex + 1) * stretchSamples),
-					),
-					frameCount: Math.min(stretchFrames, frameCount - stretchIndex * stretchFrames),
+					current: currentUpsampled.map((channel) => channel.subarray(first, end)),
+					dispersed: dispersedUpsampled.map((channel) => channel.subarray(first, end)),
+					frameCount: stretchFrameCount,
 					stretchFrames,
 					threshold,
+					tailSamples,
 				}),
 			);
+		};
 		const solve = new WindowedSolve({ peaks });
 
 		solve.seed(scoreAt(solve.seedStretch, solve.seedThreshold));

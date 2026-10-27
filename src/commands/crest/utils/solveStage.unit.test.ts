@@ -8,7 +8,7 @@ import { PAIR_COUNT, type WindowedSolve } from "./blend";
 import { crestLayoutOf, type CrestLayout } from "./layout";
 import { chunkStretchesOf, forEachStretchChunk, OVERSAMPLE_FACTOR } from "./render";
 import { solveStage } from "./solveStage";
-import { oracleOf, upsampledOf } from "./testBlendOracle";
+import { oracleOf, stretchPeaksOf, upsampledOf } from "./testBlendOracle";
 
 const SAMPLE_RATE = 48000;
 const FRAME_COUNT = 50000;
@@ -106,15 +106,7 @@ describe("solveStage", () => {
 		const dispersedUpsampled = (await dispersedOf(sourcePath, stageLayout, source.length, stepIndex)).map(
 			upsampledOf,
 		);
-		const peaks = new Float64Array(stageLayout.stretchCount);
-
-		for (const channel of currentUpsampled) {
-			for (let index = 0; index < frameCount * OVERSAMPLE_FACTOR; index++) {
-				const stretchIndex = Math.floor(index / OVERSAMPLE_FACTOR / stretchFrames);
-
-				peaks[stretchIndex] = Math.max(peaks[stretchIndex] ?? 0, Math.abs(channel[index] ?? 0));
-			}
-		}
+		const peaks = stretchPeaksOf(currentUpsampled, frameCount, stretchFrames);
 
 		const solve = await solveStage({
 			sourcePath,
@@ -215,6 +207,20 @@ describe("solveStage", () => {
 
 		expect(FRAME_COUNT % stretchFrames).toBeGreaterThan(0);
 		expect(solve.seedStretch).toBe(layout.stretchCount - 1);
+	});
+
+	it("scores the second channel's flush tail when a click on its last frame binds", async () => {
+		const channels = quietNoise(2, 97);
+		const ringing = channels[1];
+
+		if (ringing !== undefined) {
+			ringing[FRAME_COUNT - 1] = 1;
+		}
+
+		const solve = await expectOracle(channels);
+
+		expect(solve.seedStretch).toBe(layout.stretchCount - 1);
+		expect(solve.level()).toBeGreaterThan(solve.seedThreshold);
 	});
 
 	it("seeds at a burst in the first stretch", async () => {

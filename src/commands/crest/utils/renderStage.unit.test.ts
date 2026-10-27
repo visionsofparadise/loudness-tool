@@ -7,10 +7,10 @@ import { decodedSamplesOf, writeTestWav } from "../../../utils/testCli";
 import { createNoise } from "../../../utils/testSignals";
 import { weightOf } from "./blend";
 import { crestLayoutOf } from "./layout";
-import { chunkStretchesOf, forEachStretchChunk, OVERSAMPLE_FACTOR } from "./render";
+import { chunkStretchesOf, forEachStretchChunk } from "./render";
 import { renderStage } from "./renderStage";
 import { quantizerOf } from "./rounding";
-import { upsampledOf } from "./testBlendOracle";
+import { stretchPeaksOf, upsampledOf } from "./testBlendOracle";
 import type { AudioOutput } from "../../utils/sinks";
 
 const SAMPLE_RATE = 48000;
@@ -58,21 +58,8 @@ const pathWithGaps = (): Int32Array => {
 	return path;
 };
 
-const peaksOf = (channels: ReadonlyArray<Float64Array>): Array<number> => {
-	const peaks = new Array<number>(layout.stretchCount).fill(0);
-
-	for (const channel of channels) {
-		const upsampled = upsampledOf(channel);
-
-		for (let index = 0; index < channel.length * OVERSAMPLE_FACTOR; index++) {
-			const stretchIndex = Math.floor(index / OVERSAMPLE_FACTOR / layout.stretchFrames);
-
-			peaks[stretchIndex] = Math.max(peaks[stretchIndex] ?? 0, Math.abs(upsampled[index] ?? 0));
-		}
-	}
-
-	return peaks;
-};
+const peaksOf = (channels: ReadonlyArray<Float64Array>): Array<number> =>
+	Array.from(stretchPeaksOf(channels.map(upsampledOf), FRAME_COUNT, layout.stretchFrames));
 
 const dispersedOf = async (path: string, channelCount: number): Promise<Array<Float64Array>> => {
 	const dispersed = Array.from({ length: channelCount }, () => new Float64Array(FRAME_COUNT));

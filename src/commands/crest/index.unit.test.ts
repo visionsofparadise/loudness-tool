@@ -13,6 +13,7 @@ import {
 	writeTestWav,
 } from "../../utils/testCli";
 import { createNoise, createSine } from "../../utils/testSignals";
+import { linearToDb } from "../../utils/db";
 import { WavReader, type AudioBlock } from "../../wav/WavReader";
 import { WavWriter } from "../../wav/WavWriter";
 import { weightOf } from "./utils/blend";
@@ -24,6 +25,7 @@ import { crest } from "./index";
 import type { WavBitDepth } from "../../wav/utils/wavFormat";
 
 const SAMPLE_RATE = 48000;
+const EDGE_TOLERANCE_DB = 1;
 
 const peakySource = (frameCount: number, channelCount: number, seed: number): Array<Float64Array> => {
 	const channels = createNoise(frameCount, channelCount, seed).map((channel) =>
@@ -343,6 +345,35 @@ describe("crest", () => {
 			expect(stdout).toContain(`source true peak    ${sourceDb.toFixed(2)} dBTP`);
 		},
 	);
+
+	it("lowers a click at either edge of the file about as far as the same click mid-file", async () => {
+		const frameCount = SAMPLE_RATE / 4;
+		const deltaOf = async (clickFrame: number): Promise<number> => {
+			const inputPath = join(workingDirectory, `click-${clickFrame}.wav`);
+			const outputPath = join(workingDirectory, `click-${clickFrame}-out.wav`);
+			const channel = (createNoise(frameCount, 1, 101)[0] ?? new Float64Array(0)).map((sample) => 0.01 * sample);
+
+			channel[clickFrame] = 0.9;
+
+			await writeWav(inputPath, [channel], "32f");
+			await captureStdout(() => crest(inputPath, { output: outputPath }));
+
+			return linearToDb(await truePeakOf(outputPath)) - linearToDb(await truePeakOf(inputPath));
+		};
+		const middle = await deltaOf(frameCount / 2);
+		const edges = [
+			await deltaOf(2),
+			await deltaOf(frameCount - 1),
+			await deltaOf(frameCount - 6),
+			await deltaOf(frameCount - 12),
+		];
+
+		expect(middle).toBeLessThan(-10);
+
+		for (const delta of edges) {
+			expect(delta).toBeLessThan(middle + EDGE_TOLERANCE_DB);
+		}
+	});
 
 	it("writes each intermediate stage at 64f, deletes it once the next stage has rendered, and removes its scratch directory", async () => {
 		const inputPath = join(workingDirectory, "stages.wav");

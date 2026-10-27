@@ -1,4 +1,4 @@
-import { TAPS_PER_PHASE, TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
+import { FLUSH_FRAMES, TAPS_PER_PHASE, TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
 import { candidatesOf, costTableOf, WindowedSolve } from "./blend";
 import { stretchFrameCountOf, type CrestLayout } from "./layout";
 import {
@@ -19,6 +19,15 @@ interface DispersedFrames {
 	readonly lead: ReadonlyArray<Float64Array> | undefined;
 }
 
+const upsampleWithTail = (input: Float64Array, frameCount: number, output: Float64Array, hasTail: boolean): void => {
+	const upsampler = new TruePeakUpsampler();
+	const written = upsampler.upsample(input, frameCount, output);
+
+	if (hasTail) {
+		upsampler.flush(output.subarray(written));
+	}
+};
+
 interface UpsampledChannel {
 	readonly current: Float64Array;
 	readonly dispersed: Float64Array;
@@ -32,13 +41,14 @@ class StretchScorer {
 
 	constructor(layout: CrestLayout, channelCount: number) {
 		const inputFrames = LEAD_FRAMES + layout.stretchFrames;
+		const outputSamples = (inputFrames + FLUSH_FRAMES) * OVERSAMPLE_FACTOR;
 
 		this.layout = layout;
 		this.currentInput = new Float64Array(inputFrames);
 		this.dispersedInput = new Float64Array(inputFrames);
 		this.upsampled = Array.from({ length: channelCount }, () => ({
-			current: new Float64Array(inputFrames * OVERSAMPLE_FACTOR),
-			dispersed: new Float64Array(inputFrames * OVERSAMPLE_FACTOR),
+			current: new Float64Array(outputSamples),
+			dispersed: new Float64Array(outputSamples),
 		}));
 	}
 
@@ -55,7 +65,8 @@ class StretchScorer {
 		const leadFirst = Math.max(0, firstFrame - LEAD_FRAMES);
 		const inputFrames = firstFrame + frameCount - leadFirst;
 		const keepFirst = (firstFrame - leadFirst) * OVERSAMPLE_FACTOR;
-		const keepEnd = keepFirst + frameCount * OVERSAMPLE_FACTOR;
+		const tailSamples = stretchIndex === layout.stretchCount - 1 ? FLUSH_FRAMES * OVERSAMPLE_FACTOR : 0;
+		const keepEnd = keepFirst + frameCount * OVERSAMPLE_FACTOR + tailSamples;
 
 		for (const [channelIndex, channel] of upsampled.entries()) {
 			const currentChannel = window.channels[channelIndex] ?? new Float64Array(0);
@@ -77,8 +88,8 @@ class StretchScorer {
 				}
 			}
 
-			new TruePeakUpsampler().upsample(currentInput, inputFrames, channel.current);
-			new TruePeakUpsampler().upsample(dispersedInput, inputFrames, channel.dispersed);
+			upsampleWithTail(currentInput, inputFrames, channel.current, tailSamples > 0);
+			upsampleWithTail(dispersedInput, inputFrames, channel.dispersed, tailSamples > 0);
 		}
 
 		return costTableOf(
@@ -88,6 +99,7 @@ class StretchScorer {
 				frameCount,
 				stretchFrames: layout.stretchFrames,
 				threshold,
+				tailSamples,
 			}),
 		);
 	}

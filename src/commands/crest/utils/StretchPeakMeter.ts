@@ -1,4 +1,4 @@
-import { TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
+import { FLUSH_FRAMES, TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
 import { OVERSAMPLE_FACTOR } from "./render";
 
 const INITIAL_STRETCHES = 16;
@@ -63,7 +63,20 @@ export class StretchPeakMeter {
 	}
 
 	finish(): Float64Array {
-		return this.peaks.slice(0, Math.ceil(this.framesPushed / this.stretchFrames));
+		const stretchCount = Math.ceil(this.framesPushed / this.stretchFrames);
+		const tail = new Float64Array(FLUSH_FRAMES * OVERSAMPLE_FACTOR);
+
+		if (stretchCount > 0) {
+			for (const upsampler of this.upsamplers) {
+				upsampler.flush(tail);
+
+				for (const value of tail) {
+					this.peaks[stretchCount - 1] = Math.max(this.peaks[stretchCount - 1] ?? 0, Math.abs(value));
+				}
+			}
+		}
+
+		return this.peaks.slice(0, stretchCount);
 	}
 
 	private grow(stretchCount: number): void {

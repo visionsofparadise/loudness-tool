@@ -20,9 +20,10 @@ export const candidatesOf = (args: {
 	frameCount: number;
 	stretchFrames: number;
 	threshold: number;
+	tailSamples?: number;
 }): Float64Array => {
-	const { current, dispersed, frameCount, stretchFrames, threshold } = args;
-	const sampleCount = frameCount * OVERSAMPLE_FACTOR;
+	const { current, dispersed, frameCount, stretchFrames, threshold, tailSamples = 0 } = args;
+	const sampleCount = frameCount * OVERSAMPLE_FACTOR + tailSamples;
 	const candidates = new Float64Array(current.length * sampleCount * CANDIDATE_FIELDS);
 	let length = 0;
 
@@ -44,7 +45,7 @@ export const candidatesOf = (args: {
 
 			candidates[length] = alpha;
 			candidates[length + 1] = dispersedValue - alpha;
-			candidates[length + 2] = (Math.floor(index / OVERSAMPLE_FACTOR) + 1) / stretchFrames;
+			candidates[length + 2] = (Math.min(Math.floor(index / OVERSAMPLE_FACTOR), frameCount - 1) + 1) / stretchFrames;
 			length += CANDIDATE_FIELDS;
 		}
 	}
@@ -86,7 +87,7 @@ export class WindowedSolve {
 	private slotCount = 0;
 	private advanced = 0;
 	private highest: number;
-	private best = new Float64Array(WEIGHT_STATES).fill(Infinity);
+	private best = new Float64Array(WEIGHT_STATES);
 	private next = new Float64Array(WEIGHT_STATES);
 
 	constructor(args: { peaks: Float64Array }) {
@@ -104,7 +105,6 @@ export class WindowedSolve {
 		this.seedStretch = seedStretch;
 		this.seedThreshold = FLOOR * (peaks[seedStretch] ?? 0);
 		this.highest = this.seedThreshold;
-		this.best[0] = 0;
 	}
 
 	seed(costs: Float64Array): void {
@@ -202,7 +202,7 @@ export class WindowedSolve {
 	}
 
 	level(): number {
-		return Math.max(this.seedThreshold, this.highest, this.best[0] ?? Infinity);
+		return Math.max(this.seedThreshold, this.highest, lowestOf(this.best));
 	}
 
 	path(): Int32Array {
@@ -220,7 +220,7 @@ export class WindowedSolve {
 		};
 		const reachable = new Uint8Array((stretchCount + 1) * WEIGHT_STATES);
 
-		reachable[stretchCount * WEIGHT_STATES] = 1;
+		reachable.fill(1, stretchCount * WEIGHT_STATES);
 
 		for (let stretchIndex = stretchCount - 1; stretchIndex >= 0; stretchIndex--) {
 			for (let from = 0; from < WEIGHT_STATES; from++) {
@@ -234,11 +234,15 @@ export class WindowedSolve {
 			}
 		}
 
-		if (reachable[0] !== 1) {
+		const first = reachable.subarray(0, WEIGHT_STATES).indexOf(1);
+
+		if (first < 0) {
 			throw new Error(`WindowedSolve: no path holds the level ${level}`);
 		}
 
 		const path = new Int32Array(stretchCount + 1);
+
+		path[0] = first;
 
 		for (let stretchIndex = 0; stretchIndex < stretchCount; stretchIndex++) {
 			const from = path[stretchIndex] ?? 0;

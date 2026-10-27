@@ -60,7 +60,7 @@ On success it prints the source integrated loudness, the target, the applied gai
 
 ### crest
 
-Lower the audio's true peak by blending it, where a peak needs it, with copies of it whose phase is spread a few milliseconds earlier and later, fading the blend in and out over the smoothing time. Audio that needs no change is written as it was, at the output's depth. Where crest acts the audio gets quieter, which lowers the file's integrated loudness; `lufs-norm` or `target` can bring it back afterwards.
+Lower the audio's true peak by blending it, where a peak needs it, with copies of it whose phase is spread a few milliseconds earlier and later, fading the blend in and out over the smoothing time. At the file's start and end the blend may begin or end already in place, since no audio lies beyond them. Audio that needs no change is written as it was, at the output's depth. Where crest acts the audio gets quieter, which lowers the file's integrated loudness; `lufs-norm` or `target` can bring it back afterwards.
 
 ```sh
 loudness-tool crest input.wav -o output.wav
