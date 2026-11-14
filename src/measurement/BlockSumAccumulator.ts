@@ -1,3 +1,5 @@
+import { MeasurementOverflow } from "./MeasurementOverflow";
+
 const ringSizeOf = (blockSize: number, blockStep: number): number => Math.max(1, Math.ceil(blockSize / blockStep));
 
 export class BlockSumAccumulator {
@@ -54,6 +56,10 @@ export class BlockSumAccumulator {
 		for (let frameIndex = 0; frameIndex < count; frameIndex++) {
 			const sampleContribution = sums[frameIndex] ?? 0;
 
+			if (!Number.isFinite(sampleContribution)) {
+				throw new MeasurementOverflow(samplesProcessed);
+			}
+
 			while (samplesProcessed >= nextOpenAt) {
 				activeBlockSums[nextBlockToOpen % ringSize] = 0;
 				nextBlockToOpen++;
@@ -74,7 +80,13 @@ export class BlockSumAccumulator {
 			samplesProcessed++;
 
 			while (samplesProcessed >= nextCloseAt) {
-				this.closedBlockSums.push(activeBlockSums[nextBlockToClose % ringSize] ?? 0);
+				const blockSum = activeBlockSums[nextBlockToClose % ringSize] ?? 0;
+
+				if (!Number.isFinite(blockSum)) {
+					throw new MeasurementOverflow(samplesProcessed - 1);
+				}
+
+				this.closedBlockSums.push(blockSum);
 				nextBlockToClose++;
 				nextCloseAt += blockStep;
 			}

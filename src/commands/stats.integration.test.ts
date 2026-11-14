@@ -18,21 +18,18 @@ describe("stats on a finite sample whose square overflows", () => {
 		await rm(workingDirectory, { recursive: true, force: true });
 	});
 
-	it("reads integrated loudness and loudness range as unmeasurable and the true peak as its level", async () => {
+	it("fails naming the input and the frame whose loudness overflows", async () => {
 		const path = join(workingDirectory, "huge.wav");
 		const channels = createSine(6 * SAMPLE_RATE, 1, SAMPLE_RATE, 997, 0.1);
 
 		channels[0]?.set([1e200], 3 * SAMPLE_RATE);
 		await writeTestWav(path, channels, { bitDepth: "64f" });
 
-		const json = await runCli(["stats", "--json", path]);
-		const text = await runCli(["stats", path]);
+		const run = await runCli(["stats", "--json", path]);
 
-		expect(JSON.parse(json.stdout.toString("utf8"))).toMatchObject([
-			{ truePeakDb: 4000, integratedLufs: null, loudnessRange: null },
-		]);
-		expect(text.stdout.toString("utf8")).toContain(
-			"true peak         4000.00 dBTP\nintegrated        n/a\nloudness range    n/a\n",
-		);
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toBe(`error: "${path}" overflows the measurement at frame ${3 * SAMPLE_RATE}
+`);
+		expect(JSON.parse(run.stdout.toString("utf8"))).toEqual([]);
 	});
 });

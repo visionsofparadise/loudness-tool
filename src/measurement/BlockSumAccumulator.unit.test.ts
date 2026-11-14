@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BlockSumAccumulator } from "./BlockSumAccumulator";
+import { MeasurementOverflow } from "./MeasurementOverflow";
 
 describe("BlockSumAccumulator", () => {
 	it("closes 7 overlapping blocks of sum 400 from 1000 constant-1 samples", () => {
@@ -103,5 +104,24 @@ describe("BlockSumAccumulator", () => {
 
 	it("throws when blockStep is not positive", () => {
 		expect(() => new BlockSumAccumulator(400, 0)).toThrow(/blockStep/);
+	});
+
+	it.each([Number.NaN, Number.POSITIVE_INFINITY])("fails at the frame whose sum is %s", (sum) => {
+		const accumulator = new BlockSumAccumulator(400, 100);
+		const input = new Float64Array(1000).fill(1);
+
+		input[730] = sum;
+
+		expect(() => {
+			accumulator.push(input, 1000);
+		}).toThrow(expect.objectContaining({ frame: 730 }) as MeasurementOverflow);
+	});
+
+	it("fails at the closing frame of a block whose finite sums overflow", () => {
+		const accumulator = new BlockSumAccumulator(4, 4);
+
+		expect(() => {
+			accumulator.push(new Float64Array([1, 1e308, 1e308, 1]), 4);
+		}).toThrow(expect.objectContaining({ frame: 3 }) as MeasurementOverflow);
 	});
 });

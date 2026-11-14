@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MeasurementOverflow } from "./MeasurementOverflow";
 import { TruePeakAccumulator } from "./TruePeakAccumulator";
 
 const generateSine = (
@@ -103,5 +104,20 @@ describe("TruePeakAccumulator", () => {
 		}
 
 		expect(measure([input])).toBeGreaterThanOrEqual(samplePeak);
+	});
+
+	it("fails at the frame of a finite sample whose interpolation overflows", () => {
+		const quiet = new Float64Array(2000).fill(0.1);
+		const loud = new Float64Array(2000).fill(0.1);
+
+		loud[1000] = 1.7e308;
+
+		const accumulator = new TruePeakAccumulator(2);
+
+		accumulator.push([quiet, quiet], 2000);
+
+		expect(() => {
+			accumulator.push([quiet, loud], 2000);
+		}).toThrow(expect.objectContaining({ name: "MeasurementOverflow", frame: 3000 }) as MeasurementOverflow);
 	});
 });

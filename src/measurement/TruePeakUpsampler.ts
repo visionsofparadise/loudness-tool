@@ -19,6 +19,9 @@ export const DELAY_FRAMES = HALF_BAND_DELAY + INTERPOLATOR_DELAY / 2;
 
 export const FLUSH_FRAMES = DELAY_FRAMES * 2 - 1;
 
+export const alignedFrameOf = (framesBefore: number, upsampledIndex: number, lastFrame: number): number =>
+	Math.min(lastFrame, Math.max(0, framesBefore + Math.floor(upsampledIndex / UPSAMPLE_FACTOR) - DELAY_FRAMES));
+
 const besselI0 = (x: number): number => {
 	const quarterSquare = (x * x) / 4;
 	let term = 1;

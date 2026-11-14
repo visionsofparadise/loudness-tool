@@ -1,4 +1,5 @@
-import { FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "./TruePeakUpsampler";
+import { MeasurementOverflow } from "./MeasurementOverflow";
+import { alignedFrameOf, FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "./TruePeakUpsampler";
 
 const FLUSH_OUTPUT_SAMPLES = FLUSH_FRAMES * UPSAMPLE_FACTOR;
 
@@ -8,6 +9,7 @@ export class TruePeakAccumulator {
 	private upsampleScratch: Float64Array = new Float64Array(0);
 	private interpolatedMax = 0;
 	private rawMax = 0;
+	private framesPushed = 0;
 	private finalizedResult: number | undefined;
 
 	constructor(channelCount: number) {
@@ -71,15 +73,10 @@ export class TruePeakAccumulator {
 
 			const upsampledCount = upsampler.upsample(channel, frameCount, this.upsampleScratch);
 
-			for (let index = 0; index < upsampledCount; index++) {
-				const sample = this.upsampleScratch[index] ?? 0;
-				const magnitude = sample < 0 ? -sample : sample;
-
-				if (magnitude > this.interpolatedMax) {
-					this.interpolatedMax = magnitude;
-				}
-			}
+			this.trackInterpolated(upsampledCount, frameCount - 1);
 		}
+
+		this.framesPushed += frameCount;
 	}
 
 	finalize(): number {
@@ -92,20 +89,28 @@ export class TruePeakAccumulator {
 				this.upsampleScratch = new Float64Array(FLUSH_OUTPUT_SAMPLES);
 			}
 
-			const tailCount = upsampler.flush(this.upsampleScratch);
-
-			for (let index = 0; index < tailCount; index++) {
-				const sample = this.upsampleScratch[index] ?? 0;
-				const magnitude = sample < 0 ? -sample : sample;
-
-				if (magnitude > this.interpolatedMax) {
-					this.interpolatedMax = magnitude;
-				}
-			}
+			this.trackInterpolated(upsampler.flush(this.upsampleScratch), -1);
 		}
 
 		this.finalizedResult = Math.max(this.rawMax, this.interpolatedMax);
 
 		return this.finalizedResult;
+	}
+
+	private trackInterpolated(count: number, lastFrameOffset: number): void {
+		for (let index = 0; index < count; index++) {
+			const sample = this.upsampleScratch[index] ?? 0;
+			const magnitude = sample < 0 ? -sample : sample;
+
+			if (!(magnitude <= this.interpolatedMax)) {
+				if (!(magnitude < Number.POSITIVE_INFINITY)) {
+					throw new MeasurementOverflow(
+						alignedFrameOf(this.framesPushed, index, this.framesPushed + lastFrameOffset),
+					);
+				}
+
+				this.interpolatedMax = magnitude;
+			}
+		}
 	}
 }

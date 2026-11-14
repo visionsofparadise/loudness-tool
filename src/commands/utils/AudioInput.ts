@@ -1,4 +1,5 @@
 import { open } from "node:fs/promises";
+import { MeasurementOverflow } from "../../measurement/MeasurementOverflow";
 import { Scratch } from "../../utils/Scratch";
 import { WavSpool } from "../../wav/WavSpool";
 import { WavStreamReader } from "../../wav/WavStreamReader";
@@ -189,6 +190,14 @@ export const withAudioInput = async <T>(
 
 	try {
 		return await consume(input);
+	} catch (error: unknown) {
+		if (error instanceof MeasurementOverflow) {
+			throw new Error(`"${input.label}" overflows the measurement at frame ${error.frame}`, {
+				cause: error,
+			});
+		}
+
+		throw error;
 	} finally {
 		await input.dispose();
 	}
