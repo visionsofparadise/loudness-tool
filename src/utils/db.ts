@@ -7,3 +7,11 @@ export const dbToLinear = (db: number): number => {
 };
 
 export const linearToDb = (linear: number): number => 20 * Math.log10(Math.max(linear, 1e-10));
+
+export const peakDbOrNull = (linear: number): number | null =>
+	linear === 0 || !Number.isFinite(linear) ? null : 20 * Math.log10(linear);
+
+export const lufsOrNull = (value: number): number | null => (Number.isFinite(value) ? value : null);
+
+export const figureText = (value: number | null, digits: number, unit: string): string =>
+	value === null ? "n/a" : `${value.toFixed(digits)} ${unit}`;

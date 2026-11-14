@@ -41,11 +41,11 @@ const consideredLoudnessOf = (shortTerm: Float64Array): Array<number> => {
 	return considered;
 };
 
-export const computeLoudnessRange = (shortTerm: Float64Array): number => {
+export const computeLoudnessRange = (shortTerm: Float64Array): number | null => {
 	const considered = consideredLoudnessOf(shortTerm);
 
 	if (considered.length < 2) {
-		return 0;
+		return null;
 	}
 
 	considered.sort((left, right) => left - right);

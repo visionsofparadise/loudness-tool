@@ -48,7 +48,7 @@ describe("ShortTermLoudnessAccumulator", () => {
 		);
 		const shortTerm = measure(channels, SAMPLE_RATE);
 
-		expect(Math.abs(computeLoudnessRange(shortTerm) - expected)).toBeLessThanOrEqual(1);
+		expect(Math.abs((computeLoudnessRange(shortTerm) ?? Number.NaN) - expected)).toBeLessThanOrEqual(1);
 	});
 
 	it("returns an empty series when source plus 1.5 s tail is shorter than one 3 s window", () => {
@@ -74,7 +74,7 @@ describe("ShortTermLoudnessAccumulator", () => {
 		expect(shortTerm[0] ?? 0).toBeGreaterThan(shortTerm[shortTerm.length - 1] ?? 0);
 	});
 
-	it("silence of 4 s yields the power-floor LUFS and LRA 0", () => {
+	it("silence of 4 s yields the power-floor LUFS and no loudness range", () => {
 		const silence = [new Float64Array(SAMPLE_RATE * 4)];
 		const shortTerm = measure(silence, SAMPLE_RATE);
 
@@ -84,7 +84,7 @@ describe("ShortTermLoudnessAccumulator", () => {
 			expect(value).toBeCloseTo(POWER_FLOOR_LUFS, 3);
 		}
 
-		expect(computeLoudnessRange(shortTerm)).toBe(0);
+		expect(computeLoudnessRange(shortTerm)).toBeNull();
 	});
 
 	it("many small pushes are bit-equal to one whole push", () => {

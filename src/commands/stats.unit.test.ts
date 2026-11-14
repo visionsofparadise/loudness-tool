@@ -220,7 +220,7 @@ describe("stats", () => {
 		expect(parsed[0]?.loudnessRange).toEqual(expect.any(Number));
 	});
 
-	it("reports the floored true peak for a 1e-12-peak 32f source", async () => {
+	it("reports the true peak of a 1e-12-peak 32f source without a floor", async () => {
 		const inputPath = join(workingDirectory, "tiny.wav");
 		const tiny = new Float64Array(256).fill(1e-12);
 
@@ -230,12 +230,12 @@ describe("stats", () => {
 		const json = await capture(() => stats([inputPath], { json: true }));
 		const parsed = JSON.parse(json.stdout) as Array<{ truePeakDb: number | null }>;
 
-		expect(parsed[0]?.truePeakDb).toEqual(expect.any(Number));
-		expect(parsed[0]?.truePeakDb ?? 0).toBeCloseTo(-200, 6);
-		expect(human.stdout).toMatch(/true peak\s+-200\.00 dBTP/);
+		expect(parsed[0]?.truePeakDb ?? 0).toBeGreaterThan(-240);
+		expect(parsed[0]?.truePeakDb ?? 0).toBeLessThan(-238);
+		expect(human.stdout).toMatch(/true peak\s+-23[89]\.\d\d dBTP/);
 	});
 
-	it("reports the floored true peak for a nonempty silent file", async () => {
+	it("reports no true peak for a nonempty silent file", async () => {
 		const inputPath = join(workingDirectory, "silent.wav");
 
 		await writeWav(inputPath, [new Float64Array(64)]);
@@ -244,13 +244,12 @@ describe("stats", () => {
 		const json = await capture(() => stats([inputPath], { json: true }));
 		const parsed = JSON.parse(json.stdout) as Array<{ truePeakDb: number | null; durationSeconds: number }>;
 
-		expect(human.stdout).toMatch(/true peak\s+-200\.00 dBTP/);
-		expect(parsed[0]?.truePeakDb).toEqual(expect.any(Number));
-		expect(parsed[0]?.truePeakDb ?? 0).toBeCloseTo(-200, 6);
+		expect(human.stdout).toMatch(/true peak\s+n\/a\n/);
+		expect(parsed[0]?.truePeakDb).toBeNull();
 		expect(parsed[0]?.durationSeconds).toBeGreaterThan(0);
 	});
 
-	it("reports loudnessRange 0 for silence long enough to close short-term windows", async () => {
+	it("reports no loudness range for silence long enough to close short-term windows", async () => {
 		const inputPath = join(workingDirectory, "silence.wav");
 		const writer = await WavWriter.create(
 			{ kind: "file", path: inputPath },
@@ -270,8 +269,8 @@ describe("stats", () => {
 		const json = await capture(() => stats([inputPath], { json: true }));
 		const parsed = JSON.parse(json.stdout) as Array<{ loudnessRange: number | null }>;
 
-		expect(human.stdout).toMatch(/loudness range\s+0\.00 LU/);
-		expect(parsed[0]?.loudnessRange).toBe(0);
+		expect(human.stdout).toMatch(/loudness range\s+n\/a\n/);
+		expect(parsed[0]?.loudnessRange).toBeNull();
 	});
 
 	it("errors naming an unreadable file, measures the rest, and exits non-zero", async () => {

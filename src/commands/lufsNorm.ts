@@ -2,7 +2,7 @@ import { InvalidArgumentError, type Command } from "commander";
 import { channelWeightsOf } from "../measurement/channelWeights";
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
-import { dbToLinear } from "../utils/db";
+import { dbToLinear, figureText, peakDbOrNull } from "../utils/db";
 import { isMultipleOf } from "../utils/multipleOf";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { replayableInputOptionsOf, withAudioInput } from "./utils/AudioInput";
@@ -77,12 +77,12 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 
 		const gainDb = target - measurement.integratedLufs;
 		const gain = dbToLinear(gainDb);
-		const sourceTpDb = 20 * Math.log10(measurement.truePeak);
-		const outputTruePeakDb = sourceTpDb + gainDb;
+		const sourceTpDb = peakDbOrNull(measurement.truePeak);
+		const outputTruePeakDb = sourceTpDb === null ? null : sourceTpDb + gainDb;
 
 		await applyUniformGain(input.replayPath(), input.output(), gain);
 
-		if (outputTruePeakDb > 0) {
+		if (outputTruePeakDb !== null && outputTruePeakDb > 0) {
 			process.stderr.write(
 				`warning: predicted output true peak ${outputTruePeakDb.toFixed(2)} dBTP exceeds 0 dBTP\n`,
 			);
@@ -94,7 +94,7 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 				alignedLine("source integrated", `${measurement.integratedLufs.toFixed(2)} LUFS`),
 				alignedLine("target", `${target.toFixed(2)} LUFS`),
 				alignedLine("applied gain", `${gainDb.toFixed(2)} dB`),
-				alignedLine("output true peak", `${outputTruePeakDb.toFixed(2)} dBTP`),
+				alignedLine("output true peak", figureText(outputTruePeakDb, 2, "dBTP")),
 				alignedLine("output", options.output),
 			].join("\n")}\n`,
 		);

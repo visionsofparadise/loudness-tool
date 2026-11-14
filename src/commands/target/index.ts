@@ -1,4 +1,5 @@
 import { InvalidArgumentError, type Command } from "commander";
+import { figureText } from "../../utils/db";
 import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
 import { replayableInputOptionsOf, withAudioInput, type AudioInput } from "../utils/AudioInput";
@@ -100,16 +101,16 @@ const isTolerance = (value: number): boolean => Number.isFinite(value) && value 
 
 const parseTolerance = (value: string): number => parseFinite("tolerance", value, isTolerance, TOLERANCE_RANGE);
 
-const errorFieldsOf = (label: string, error: number | null): Array<string> =>
-	error === null ? [] : [`${label} ${error.toFixed(4)}`];
+const errorFieldsOf = (label: string, isTargeted: boolean, error: number | null): Array<string> =>
+	isTargeted ? [`${label} ${error === null ? "n/a" : error.toFixed(4)}`] : [];
 
-const formatAttempt = (attempt: IterationAttempt, attemptIndex: number): string =>
+const formatAttempt = (attempt: IterationAttempt, attemptIndex: number, targets: Targets): string =>
 	[
 		`attempt ${attemptIndex + 1}`,
 		`B ${attempt.boost.toFixed(4)}`,
 		`peakGainDb ${attempt.peakGainDb.toFixed(4)}`,
-		...errorFieldsOf("lufsErr", attempt.lufsErr),
-		...errorFieldsOf("peakErr", attempt.peakErr),
+		...errorFieldsOf("lufsErr", targets.targetLufs !== undefined, attempt.lufsErr),
+		...errorFieldsOf("peakErr", targets.targetTp !== undefined, attempt.peakErr),
 	].join("    ");
 
 const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets => {
@@ -123,9 +124,6 @@ const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets =>
 
 	throw new Error("at least one of --lufs and --tp is required");
 };
-
-const figureOf = (value: number | null, unit: string): string =>
-	value === null ? "n/a" : `${value.toFixed(2)} ${unit}`;
 
 const applyEnvelopeAndWrite = async (replayPath: string, output: AudioOutput, envelope: SampleFile): Promise<void> => {
 	await withWavWriter(replayPath, output, async (reader, writer) => {
@@ -164,7 +162,7 @@ const fitInput = async (
 
 		winningEnvelope = measurement.detectionEnvelope;
 
-		if (!Number.isFinite(measurement.integratedLufs)) {
+		if (!Number.isFinite(measurement.integratedLufs) || measurement.truePeakDb === null) {
 			await copyUnchanged(input.replayPath(), input.output());
 			process.stderr.write("source has no measurable loudness; passed through unchanged\n");
 		} else {
@@ -214,7 +212,7 @@ const fitInput = async (
 				histogram: measurement.detectionHistogram,
 				detectionEnvelope: measurement.detectionEnvelope,
 				onAttempt: (attempt, attemptIndex) => {
-					process.stderr.write(`${formatAttempt(attempt, attemptIndex)}\n`);
+					process.stderr.write(`${formatAttempt(attempt, attemptIndex, targets)}\n`);
 				},
 			});
 
@@ -225,9 +223,9 @@ const fitInput = async (
 			await writeSummary(
 				options.output,
 				`${[
-					alignedLine("output integrated", figureOf(result.winnerOutputLufs, "LUFS")),
-					alignedLine("output true peak", figureOf(result.winnerOutputTruePeakDb, "dBTP")),
-					alignedLine("loudness range", figureOf(result.winnerOutputLra, "LU")),
+					alignedLine("output integrated", figureText(result.winnerOutputLufs, 2, "LUFS")),
+					alignedLine("output true peak", figureText(result.winnerOutputTruePeakDb, 2, "dBTP")),
+					alignedLine("loudness range", figureText(result.winnerOutputLra, 2, "LU")),
 					alignedLine("B", `${result.bestB.toFixed(4)} dB`),
 					alignedLine("peakGainDb", `${result.bestPeakGainDb.toFixed(4)} dB`),
 					alignedLine("converged", String(result.converged)),

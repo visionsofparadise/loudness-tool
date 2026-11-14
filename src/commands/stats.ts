@@ -3,7 +3,7 @@ import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumula
 import { computeLoudnessRange } from "../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
-import { linearToDb } from "../utils/db";
+import { figureText, lufsOrNull, peakDbOrNull } from "../utils/db";
 import { writeTextToStream } from "../utils/writeToStream";
 import { withAudioInput } from "./utils/AudioInput";
 import { streamScopesOf } from "./utils/AudioProgram";
@@ -33,22 +33,17 @@ const LABEL_WIDTH = 14;
 
 const alignedLine = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}    ${value}`;
 
-const formatHuman = (result: StatsJson): string => {
-	const truePeak = result.truePeakDb === null ? "n/a" : `${result.truePeakDb.toFixed(2)} dBTP`;
-	const integrated = result.integratedLufs === null ? "n/a" : `${result.integratedLufs.toFixed(2)} LUFS`;
-	const loudnessRange = result.loudnessRange === null ? "n/a" : `${result.loudnessRange.toFixed(2)} LU`;
-
-	return `${[
+const formatHuman = (result: StatsJson): string =>
+	`${[
 		result.path,
 		alignedLine("sample rate", `${result.sampleRate} Hz`),
 		alignedLine("channels", String(result.channelCount)),
 		alignedLine("bit depth", result.bitDepth),
 		alignedLine("duration", `${result.durationSeconds.toFixed(3)} s`),
-		alignedLine("true peak", truePeak),
-		alignedLine("integrated", integrated),
-		alignedLine("loudness range", loudnessRange),
+		alignedLine("true peak", figureText(result.truePeakDb, 2, "dBTP")),
+		alignedLine("integrated", figureText(result.integratedLufs, 2, "LUFS")),
+		alignedLine("loudness range", figureText(result.loudnessRange, 2, "LU")),
 	].join("\n")}\n`;
-};
 
 const errorMessageOf = (error: unknown, inputPath: string): string => {
 	const message = error instanceof Error ? error.message : String(error);
@@ -86,9 +81,9 @@ const measureStats = async (inputPath: string, stream: StreamOptions): Promise<S
 					channelCount,
 					bitDepth,
 					durationSeconds: sampleRate === 0 ? 0 : frameCount / sampleRate,
-					truePeakDb: frameCount === 0 ? null : linearToDb(truePeak),
-					integratedLufs: Number.isFinite(integrated) ? integrated : null,
-					loudnessRange: shortTerm.length === 0 ? null : computeLoudnessRange(shortTerm),
+					truePeakDb: peakDbOrNull(truePeak),
+					integratedLufs: lufsOrNull(integrated),
+					loudnessRange: computeLoudnessRange(shortTerm),
 				};
 			}),
 	);

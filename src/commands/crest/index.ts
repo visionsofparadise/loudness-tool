@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { InvalidArgumentError, type Command } from "commander";
 import { TruePeakAccumulator } from "../../measurement/TruePeakAccumulator";
+import { figureText, peakDbOrNull } from "../../utils/db";
 import { Scratch } from "../../utils/Scratch";
 import { replayableInputOptionsOf, withAudioInput } from "../utils/AudioInput";
 import { audioOptionsOf } from "../utils/AudioProgram";
@@ -8,7 +9,6 @@ import { writeSummary } from "../utils/sinks";
 import { pushWavBlocks } from "../utils/withWavReader";
 import { crestLayoutOf, stretchFramesOf } from "./utils/layout";
 import { renderStage } from "./utils/renderStage";
-import { printedDbOf } from "./utils/rounding";
 import { solveStage } from "./utils/solveStage";
 import { StretchPeakMeter } from "./utils/StretchPeakMeter";
 import type { BlockSource } from "../../wav/WavReader";
@@ -33,6 +33,12 @@ const MAX_SPREAD_MS = 50;
 const MAX_STEPS = 8;
 
 const alignedLine = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}    ${value}`;
+
+const printedDbOf = (amplitude: number): number | null => {
+	const db = peakDbOrNull(amplitude);
+
+	return db === null ? null : Number(db.toFixed(2));
+};
 
 const parseSpread = (value: string): number => {
 	const parsed = Number(value);
@@ -148,13 +154,14 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 
 		const sourceDb = printedDbOf(measurement.truePeak);
 		const outputDb = printedDbOf(outputTruePeak);
+		const deltaDb = sourceDb === null || outputDb === null ? null : outputDb - sourceDb;
 
 		await writeSummary(
 			options.output,
 			`${[
-				alignedLine("source true peak", `${sourceDb.toFixed(2)} dBTP`),
-				alignedLine("output true peak", `${outputDb.toFixed(2)} dBTP`),
-				alignedLine("delta", `${(outputDb - sourceDb).toFixed(2)} dB`),
+				alignedLine("source true peak", figureText(sourceDb, 2, "dBTP")),
+				alignedLine("output true peak", figureText(outputDb, 2, "dBTP")),
+				alignedLine("delta", figureText(deltaDb, 2, "dB")),
 				alignedLine("output", options.output),
 			].join("\n")}\n`,
 		);

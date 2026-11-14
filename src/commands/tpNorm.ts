@@ -1,5 +1,5 @@
 import { InvalidArgumentError, type Command } from "commander";
-import { dbToLinear } from "../utils/db";
+import { dbToLinear, figureText, peakDbOrNull } from "../utils/db";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { replayableInputOptionsOf, withAudioInput } from "./utils/AudioInput";
 import { audioOptionsOf } from "./utils/AudioProgram";
@@ -56,13 +56,12 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 
 		await applyUniformGain(input.replayPath(), input.output(), gain);
 
-		const sourceTpDb = 20 * Math.log10(measurement.truePeak);
 		const gainDb = 20 * Math.log10(gain);
 
 		await writeSummary(
 			options.output,
 			`${[
-				alignedLine("source true peak", `${sourceTpDb.toFixed(2)} dBTP`),
+				alignedLine("source true peak", figureText(peakDbOrNull(measurement.truePeak), 2, "dBTP")),
 				alignedLine("target", `${target.toFixed(2)} dBTP`),
 				alignedLine("applied gain", `${gainDb.toFixed(2)} dB`),
 				alignedLine("output", options.output),

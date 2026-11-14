@@ -4,7 +4,7 @@ import { createLevelSegments } from "../utils/testSignals";
 import { computeLoudnessRange, getLraConsideredStats } from "./loudnessRange";
 import { ShortTermLoudnessAccumulator } from "./ShortTermLoudnessAccumulator";
 
-const measureLra = (channels: ReadonlyArray<Float64Array>, sampleRate: number): number => {
+const measureLra = (channels: ReadonlyArray<Float64Array>, sampleRate: number): number | null => {
 	const accumulator = new ShortTermLoudnessAccumulator(sampleRate, channelWeightsOf(channels.length, 0));
 
 	accumulator.push(channels, channels[0]?.length ?? 0);
@@ -13,15 +13,14 @@ const measureLra = (channels: ReadonlyArray<Float64Array>, sampleRate: number): 
 };
 
 describe("computeLoudnessRange", () => {
-	it("returns 0 for empty and one-value series", () => {
-		expect(computeLoudnessRange(new Float64Array(0))).toBe(0);
-		expect(computeLoudnessRange(Float64Array.from([-30]))).toBe(0);
+	it("is null for empty and one-value series", () => {
+		expect(computeLoudnessRange(new Float64Array(0))).toBeNull();
+		expect(computeLoudnessRange(Float64Array.from([-30]))).toBeNull();
 	});
 
-	it("returns 0 when fewer than two values survive the gates", () => {
-		expect(computeLoudnessRange(Float64Array.from([-80, -71]))).toBe(0);
-		expect(computeLoudnessRange(Float64Array.from([-70.01, -60]))).toBe(0);
-		expect(computeLoudnessRange(Float64Array.from([-30]))).toBe(0);
+	it("is null when fewer than two values survive the gates", () => {
+		expect(computeLoudnessRange(Float64Array.from([-80, -71]))).toBeNull();
+		expect(computeLoudnessRange(Float64Array.from([-70.01, -60]))).toBeNull();
 	});
 
 	it("includes a short-term value equal to the -70 LUFS absolute gate", () => {
@@ -39,7 +38,7 @@ describe("computeLoudnessRange", () => {
 		const boundary = -50;
 		const high = boundary + 10 * Math.log10(199);
 
-		expect(computeLoudnessRange(Float64Array.from([boundary - 1e-9, high]))).toBe(0);
+		expect(computeLoudnessRange(Float64Array.from([boundary - 1e-9, high]))).toBeNull();
 	});
 
 	it("uses rounded zero-based 10th and 95th percentile indices", () => {
@@ -61,7 +60,7 @@ describe("Tech 3342 §4 minimum requirements", () => {
 			2,
 		);
 
-		expect(Math.abs(measureLra(channels, sampleRate) - expected)).toBeLessThanOrEqual(1);
+		expect(Math.abs((measureLra(channels, sampleRate) ?? Number.NaN) - expected)).toBeLessThanOrEqual(1);
 	});
 });
 

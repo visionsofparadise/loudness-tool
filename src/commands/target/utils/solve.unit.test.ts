@@ -32,8 +32,8 @@ const measureFile = async (args: {
 	scratch: Scratch;
 	limitPercentile: number;
 	halfWidth: number;
-}): Promise<SourceMeasurement> =>
-	withWavReader(args.inputPath, async (source) =>
+}): Promise<SourceMeasurement & { readonly truePeakDb: number }> => {
+	const measurement = await withWavReader(args.inputPath, async (source) =>
 		measureSource({
 			source,
 			scratch: args.scratch,
@@ -41,6 +41,16 @@ const measureFile = async (args: {
 			halfWidthOf: () => args.halfWidth,
 		}),
 	);
+	const { truePeakDb } = measurement;
+
+	if (truePeakDb === null) {
+		await measurement.detectionEnvelope.close();
+
+		throw new Error(`"${args.inputPath}" has no measurable true peak`);
+	}
+
+	return { ...measurement, truePeakDb };
+};
 
 const baseAnchors = (overrides: Partial<Anchors> = {}): Anchors => ({
 	floorDb: null,
@@ -779,7 +789,7 @@ describe("iterateForTargets", () => {
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
-	it("reports an attempt's true peak floored", async () => {
+	it("reports an attempt's true peak without a floor", async () => {
 		scratch = await Scratch.create();
 
 		const inputPath = join(workingDirectory, "tiny-peak.wav");
@@ -823,8 +833,8 @@ describe("iterateForTargets", () => {
 			detectionEnvelope: measurement.detectionEnvelope,
 		});
 
-		expect(result.attempts[0]?.outputTruePeakDb ?? 0).toBeCloseTo(-200, 6);
-		expect(result.winnerOutputTruePeakDb ?? 0).toBeCloseTo(-200, 6);
+		expect(Math.abs((result.attempts[0]?.outputTruePeakDb ?? 0) - -252)).toBeLessThan(0.05);
+		expect(Math.abs((result.winnerOutputTruePeakDb ?? 0) - -252)).toBeLessThan(0.05);
 
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);

@@ -5,7 +5,7 @@ import { computeLoudnessRange, getLraConsideredStats } from "../../../measuremen
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { SlidingWindowMaxStream } from "../../../measurement/SlidingWindowStreams";
 import { DELAY_FRAMES, FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "../../../measurement/TruePeakUpsampler";
-import { dbToLinear, linearToDb } from "../../../utils/db";
+import { dbToLinear, linearToDb, peakDbOrNull } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
 import { BLOCK_FRAMES, type BlockSource } from "../../../wav/WavReader";
 import type { Scratch } from "../../../utils/Scratch";
@@ -24,8 +24,8 @@ export interface DetectionHistogram {
 
 export interface SourceMeasurement {
 	readonly integratedLufs: number;
-	readonly lra: number;
-	readonly truePeakDb: number;
+	readonly lra: number | null;
+	readonly truePeakDb: number | null;
 	readonly pivotAutoDb: number;
 	readonly floorAutoDb: number;
 	readonly limitAutoDb: number;
@@ -349,8 +349,8 @@ export const measureSource = async (args: {
 
 		return {
 			integratedLufs: integrated.finalize(),
-			lra: shortTermSeries.length === 0 ? 0 : computeLoudnessRange(shortTermSeries),
-			truePeakDb: linearToDb(Math.max(rawMax, interpolatedMax)),
+			lra: computeLoudnessRange(shortTermSeries),
+			truePeakDb: peakDbOrNull(Math.max(rawMax, interpolatedMax)),
 			pivotAutoDb: stats.median,
 			floorAutoDb: stats.minimum,
 			limitAutoDb: computeLimitAutoDb(levelResult.buckets, levelResult.bucketMax, stats.median, limitPercentile),

@@ -2,7 +2,7 @@ import { IntegratedLufsAccumulator } from "../../../measurement/IntegratedLufsAc
 import { computeLoudnessRange } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
-import { linearToDb } from "../../../utils/db";
+import { linearToDb, lufsOrNull, peakDbOrNull } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
 import { forEachEnvelopedBlock } from "./apply";
 import { gainDbAt } from "./curve";
@@ -26,9 +26,9 @@ export interface IterationAttempt {
 	boost: number;
 	limitDb: number;
 	lufsErr: number | null;
-	outputLufs: number;
-	outputTruePeakDb: number;
-	outputLra: number;
+	outputLufs: number | null;
+	outputTruePeakDb: number | null;
+	outputLra: number | null;
 	peakGainDb: number;
 	peakErr: number | null;
 }
@@ -228,21 +228,24 @@ export const bisectPeakGainForTargetLufs = (args: {
 
 const grainedDb = (errorDb: number): number => Math.round(errorDb / CHECK_GRAIN_DB) * CHECK_GRAIN_DB;
 
-export const holdsTruePeak = (outputTruePeakDb: number, targetTp: number | undefined): boolean =>
-	targetTp === undefined || grainedDb(outputTruePeakDb - targetTp) <= 0;
+const levelOf = (figure: number | null): number => figure ?? Number.NEGATIVE_INFINITY;
+
+export const holdsTruePeak = (outputTruePeakDb: number | null, targetTp: number | undefined): boolean =>
+	targetTp === undefined || grainedDb(levelOf(outputTruePeakDb) - targetTp) <= 0;
 
 export const isLegalAttempt = (
-	outputLufs: number,
-	outputTruePeakDb: number,
+	outputLufs: number | null,
+	outputTruePeakDb: number | null,
 	targetLufs: number | undefined,
 	targetTp: number | undefined,
 ): boolean =>
-	(targetLufs === undefined || grainedDb(outputLufs - targetLufs) <= 0) && holdsTruePeak(outputTruePeakDb, targetTp);
+	(targetLufs === undefined || grainedDb(levelOf(outputLufs) - targetLufs) <= 0) &&
+	holdsTruePeak(outputTruePeakDb, targetTp);
 
 type AttemptOutput = Pick<IterationAttempt, "outputLufs" | "outputTruePeakDb">;
 
-const distanceOf = (value: number, target: number | undefined): number =>
-	target === undefined ? 0 : Math.abs(value - target);
+const distanceOf = (value: number | null, target: number | undefined): number =>
+	target === undefined ? 0 : Math.abs(levelOf(value) - target);
 
 const landsCloser = (
 	candidate: AttemptOutput,
@@ -305,7 +308,7 @@ const nextSearchBoost = (
 	let lowestOverBoost: number | undefined;
 
 	for (const attempt of attempts) {
-		if (attempt.outputLufs <= targetLufs) {
+		if (levelOf(attempt.outputLufs) <= targetLufs) {
 			if (highestUnderBoost === undefined || attempt.boost > highestUnderBoost) {
 				highestUnderBoost = attempt.boost;
 			}
@@ -359,13 +362,18 @@ const clampLimit = (limitDb: number, pivotDb: number, sourcePeakDb: number): num
 	return limitDb;
 };
 
+type MeasuredOutput = Pick<IterationAttempt, "outputLufs" | "outputLra" | "outputTruePeakDb"> & {
+	readonly residualLufs: number;
+	readonly residualTruePeakDb: number;
+};
+
 const measureAttemptOutput = async (args: {
 	inputPath: string;
 	sampleRate: number;
 	channelCount: number;
 	weights: Float64Array;
 	envelope: SampleFile;
-}): Promise<{ outputLufs: number; outputLra: number; outputTruePeakDb: number }> => {
+}): Promise<MeasuredOutput> => {
 	const { inputPath, sampleRate, channelCount, weights, envelope } = args;
 	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, weights);
 	const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, weights);
@@ -377,12 +385,15 @@ const measureAttemptOutput = async (args: {
 		truePeakAccumulator.push(channels, frameCount);
 	});
 
-	const shortTerm = shortTermAccumulator.finalize();
+	const lufs = lufsAccumulator.finalize();
+	const truePeak = truePeakAccumulator.finalize();
 
 	return {
-		outputLufs: lufsAccumulator.finalize(),
-		outputLra: shortTerm.length === 0 ? 0 : computeLoudnessRange(shortTerm),
-		outputTruePeakDb: linearToDb(truePeakAccumulator.finalize()),
+		outputLufs: lufsOrNull(lufs),
+		outputLra: computeLoudnessRange(shortTermAccumulator.finalize()),
+		outputTruePeakDb: peakDbOrNull(truePeak),
+		residualLufs: lufs,
+		residualTruePeakDb: linearToDb(truePeak),
 	};
 };
 
@@ -500,7 +511,7 @@ export const iterateForTargets = async (
 			return false;
 		}
 
-		const landingError = attempt.lufsErr ?? attempt.peakErr;
+		const landingError = targetLufs === undefined ? attempt.peakErr : attempt.lufsErr;
 
 		return (
 			landingError !== null &&
@@ -529,7 +540,7 @@ export const iterateForTargets = async (
 			};
 			const predictedLufs = predictOutputLufs(sourceLufs, anchors, histogram);
 			const dest = await SampleFile.create(scratch, `envelope-${attemptIndex}`);
-			let measured: { outputLufs: number; outputLra: number; outputTruePeakDb: number };
+			let measured: MeasuredOutput;
 
 			try {
 				await renderEnvelope({ detectionEnvelope, dest, anchors, holdHalfWidth });
@@ -549,12 +560,15 @@ export const iterateForTargets = async (
 			const attempt: IterationAttempt = {
 				boost: currentBoost,
 				limitDb: currentLimit,
-				lufsErr: targetLufs === undefined ? null : measured.outputLufs - targetLufs,
+				lufsErr: targetLufs === undefined || measured.outputLufs === null ? null : measured.outputLufs - targetLufs,
 				outputLufs: measured.outputLufs,
 				outputTruePeakDb: measured.outputTruePeakDb,
 				outputLra: measured.outputLra,
 				peakGainDb: currentPeakGainDb,
-				peakErr: targetTp === undefined ? null : measured.outputTruePeakDb - targetTp,
+				peakErr:
+					targetTp === undefined || measured.outputTruePeakDb === null
+						? null
+						: measured.outputTruePeakDb - targetTp,
 			};
 
 			attempts.push(attempt);
@@ -579,15 +593,15 @@ export const iterateForTargets = async (
 				await dest.close();
 			}
 
-			residual = measured.outputLufs - predictedLufs;
-			peakResidual = truePeakResidual(measured.outputTruePeakDb, currentLimit, currentPeakGainDb);
+			residual = measured.residualLufs - predictedLufs;
+			peakResidual = truePeakResidual(measured.residualTruePeakDb, currentLimit, currentPeakGainDb);
 
 			const boostBoundExhausted =
 				targetLufs !== undefined &&
-				((currentBoost === BOOST_UPPER_BOUND && measured.outputLufs < targetLufs) ||
+				((currentBoost === BOOST_UPPER_BOUND && measured.residualLufs < targetLufs) ||
 					(currentBoost === BOOST_LOWER_BOUND &&
 						currentPeakGainDb <= BOOST_LOWER_BOUND &&
-						measured.outputLufs > targetLufs));
+						measured.residualLufs > targetLufs));
 
 			if (
 				hasConverged(winningAttempt) ||

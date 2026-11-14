@@ -20,7 +20,6 @@ import { WavWriter } from "../../wav/WavWriter";
 import { weightOf } from "./utils/blend";
 import { crestLayoutOf } from "./utils/layout";
 import { forEachStretchChunk } from "./utils/render";
-import { printedDbOf } from "./utils/rounding";
 import { oracleOf, upsampledOf } from "./utils/testBlendOracle";
 import { crest } from "./index";
 import type { WavBitDepth } from "../../wav/utils/wavFormat";
@@ -100,6 +99,8 @@ const readAll = async (path: string): Promise<{ channels: Array<Float64Array>; b
 
 	return { channels, bitDepth };
 };
+
+const printedDbOf = (amplitude: number): number => Number(linearToDb(amplitude).toFixed(2));
 
 const truePeakOf = async (path: string): Promise<number> => {
 	const { channels } = await readAll(path);
@@ -456,9 +457,9 @@ describe("crest", () => {
 		const stdout = await captureStdout(() => crest(inputPath, { output: outputPath }));
 		const { channels } = await readAll(outputPath);
 
-		expect(stdout).toContain("source true peak    -200.00 dBTP");
-		expect(stdout).toContain("output true peak    -200.00 dBTP");
-		expect(stdout).toContain("delta               0.00 dB");
+		expect(stdout).toContain("source true peak    n/a\n");
+		expect(stdout).toContain("output true peak    n/a\n");
+		expect(stdout).toContain("delta               n/a\n");
 		expect(Array.from(channels[0] ?? [])).toEqual(Array.from(new Float64Array(400)));
 	});
 
@@ -472,7 +473,8 @@ describe("crest", () => {
 		const reader = await WavReader.open(outputPath);
 
 		expect(reader.format.frameCount).toBe(0);
-		expect(stdout).toContain("output true peak    -200.00 dBTP");
+		expect(stdout).toContain("source true peak    n/a\n");
+		expect(stdout).toContain("output true peak    n/a\n");
 
 		await reader.close();
 	});
