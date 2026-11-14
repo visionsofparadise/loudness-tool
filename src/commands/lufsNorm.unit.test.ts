@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../cli";
 import { dbToLinear, linearToDb } from "../utils/db";
@@ -365,6 +366,7 @@ describe("lufs-norm", () => {
 	it("rejects a target outside [-50, 0] at the exported function", async () => {
 		await expect(lufsNorm("in.wav", { output: "out.wav", lufs: 6 })).rejects.toThrow(/lufs must be in \[-50, 0\]/);
 		await expect(lufsNorm("in.wav", { output: "out.wav", lufs: -51 })).rejects.toThrow(/lufs must be in \[-50, 0\]/);
+		await expect(lufsNorm("in.wav", { output: "out.wav", lufs: -51 })).rejects.not.toBeInstanceOf(CommanderError);
 	});
 
 	it("accepts the [-50, 0] endpoints", async () => {

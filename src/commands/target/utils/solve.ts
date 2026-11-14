@@ -299,7 +299,7 @@ export const attemptBeatsWinner = (
 	return distanceOf(candidate.outputLufs, targetLufs) < distanceOf(winner.outputLufs, targetLufs);
 };
 
-const nextSearchBoost = (
+export const nextSearchBoost = (
 	attempts: ReadonlyArray<IterationAttempt>,
 	residualBoost: number,
 	targetLufs: number,
@@ -322,6 +322,25 @@ const nextSearchBoost = (
 	}
 
 	return residualBoost;
+};
+
+export const hasConverged = (
+	attempt: IterationAttempt | undefined,
+	targetLufs: number | undefined,
+	targetTp: number | undefined,
+	tolerance: number,
+): boolean => {
+	if (attempt === undefined) {
+		return false;
+	}
+
+	const landingError = targetLufs === undefined ? attempt.peakErr : attempt.lufsErr;
+
+	return (
+		landingError !== null &&
+		isLegalAttempt(attempt.outputLufs, attempt.outputTruePeakDb, targetLufs, targetTp) &&
+		Math.abs(grainedDb(landingError)) < tolerance
+	);
 };
 
 const clampBoost = (boost: number): number => {
@@ -506,19 +525,6 @@ export const iterateForTargets = async (
 			tolerance,
 		});
 	};
-	const hasConverged = (attempt: IterationAttempt | undefined): boolean => {
-		if (attempt === undefined) {
-			return false;
-		}
-
-		const landingError = targetLufs === undefined ? attempt.peakErr : attempt.lufsErr;
-
-		return (
-			landingError !== null &&
-			isLegalAttempt(attempt.outputLufs, attempt.outputTruePeakDb, targetLufs, targetTp) &&
-			Math.abs(grainedDb(landingError)) < tolerance
-		);
-	};
 	let currentBoost = boostOf();
 	let currentPeakGainDb = peakGainDbOf(currentBoost);
 	let winningAttempt: IterationAttempt | undefined;
@@ -604,7 +610,7 @@ export const iterateForTargets = async (
 						measured.residualLufs > targetLufs));
 
 			if (
-				hasConverged(winningAttempt) ||
+				hasConverged(winningAttempt, targetLufs, targetTp, tolerance) ||
 				(boostBoundExhausted && holdsTruePeak(measured.outputTruePeakDb, targetTp)) ||
 				attemptIndex === maxAttempts - 1
 			) {
@@ -615,7 +621,7 @@ export const iterateForTargets = async (
 			currentPeakGainDb = peakGainDbOf(currentBoost);
 		}
 
-		const converged = hasConverged(winningAttempt);
+		const converged = hasConverged(winningAttempt, targetLufs, targetTp, tolerance);
 
 		const result: IterateResult = {
 			bestSmoothedEnvelope: winningEnvelope ?? (await SampleFile.create(scratch, "empty-envelope")),

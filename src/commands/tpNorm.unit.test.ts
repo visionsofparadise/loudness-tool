@@ -3,6 +3,7 @@ import * as fsPromises from "node:fs/promises";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../cli";
 import { linearToDb } from "../utils/db";
@@ -321,6 +322,7 @@ describe("tp-norm", () => {
 		await expect(tpNorm("in.wav", { output: "out.wav", tp: -400 })).rejects.toThrow(/tp must be in \[-24, 0\)/);
 		await expect(tpNorm("in.wav", { output: "out.wav", tp: 0 })).rejects.toThrow(/tp must be in \[-24, 0\)/);
 		await expect(tpNorm("in.wav", { output: "out.wav", tp: 1 })).rejects.toThrow(/tp must be in \[-24, 0\)/);
+		await expect(tpNorm("in.wav", { output: "out.wav", tp: 1 })).rejects.not.toBeInstanceOf(CommanderError);
 	});
 
 	it("accepts a target of -24 dBTP", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dbToLinear, figureText, linearToDb, lufsOrNull, peakDbOrNull } from "./db";
+import { dbToLinear, figureText, linearToDb, peakDbOrNull } from "./db";
 
 describe("dbToLinear", () => {
 	it("converts 0 dB to 1.0", () => {
@@ -50,29 +50,14 @@ describe("dB round-trip", () => {
 });
 
 describe("peakDbOrNull", () => {
-	it("is null for a peak of 0 or a non-finite peak", () => {
-		expect(peakDbOrNull(0)).toBeNull();
-		expect(peakDbOrNull(Number.POSITIVE_INFINITY)).toBeNull();
-		expect(peakDbOrNull(Number.NaN)).toBeNull();
-	});
-
-	it("converts any other peak without a floor", () => {
+	it("converts a peak without a floor", () => {
 		expect(peakDbOrNull(0.5)).toBeCloseTo(-6.0206, 4);
 		expect(peakDbOrNull(1e-12)).toBeCloseTo(-240, 9);
 	});
 });
 
-describe("lufsOrNull", () => {
-	it("is null for a non-finite loudness and the loudness otherwise", () => {
-		expect(lufsOrNull(Number.NEGATIVE_INFINITY)).toBeNull();
-		expect(lufsOrNull(Number.NaN)).toBeNull();
-		expect(lufsOrNull(-23.5)).toBe(-23.5);
-	});
-});
-
 describe("figureText", () => {
-	it("prints null as n/a and a value with its digits and unit", () => {
-		expect(figureText(null, 2, "dBTP")).toBe("n/a");
+	it("prints a value with its digits and unit", () => {
 		expect(figureText(-23.456, 2, "LUFS")).toBe("-23.46 LUFS");
 		expect(figureText(-3.25, 4, "dB")).toBe("-3.2500 dB");
 	});

@@ -1,7 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { PassThrough } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePlanar } from "../../utils/testWav";
 import { BLOCK_FRAMES } from "../../wav/WavReader";
 import { WavWriter } from "../../wav/WavWriter";
@@ -80,6 +81,24 @@ describe("AudioInput's first pass over a float input", () => {
 		await expect(
 			readThrough(path, { ...DEFAULT_STREAM_OPTIONS, format: "f32le", sampleRate: SAMPLE_RATE, channelCount: 2 }),
 		).rejects.toThrow(`"${path}" holds a sample that is not a finite number at frame ${frameIndex}, channel 0`);
+	});
+
+	it("fails a 64f WAV on stdin past its first block", async () => {
+		const path = join(workingDirectory, "bad.wav");
+		const frameIndex = BLOCK_FRAMES + 3;
+		const stdin = new PassThrough();
+
+		await writeWav(path, channelsWith(1, frameIndex, Number.NaN), "64f");
+		stdin.end(await readFile(path));
+		vi.spyOn(process, "stdin", "get").mockReturnValue(stdin as unknown as typeof process.stdin);
+
+		try {
+			await expect(readThrough("-")).rejects.toThrow(
+				`"-" holds a sample that is not a finite number at frame ${frameIndex}, channel 1`,
+			);
+		} finally {
+			vi.restoreAllMocks();
+		}
 	});
 
 	it("reads a finite float input to its end", async () => {

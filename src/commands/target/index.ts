@@ -58,7 +58,7 @@ const assertBounded = (
 	message: string,
 ): void => {
 	if (value !== undefined && !isValid(value)) {
-		throw new InvalidArgumentError(`${name} ${message}, received ${value}`);
+		throw new Error(`${name} ${message}, received ${value}`);
 	}
 };
 

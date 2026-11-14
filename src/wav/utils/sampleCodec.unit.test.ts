@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { bytesPerSampleOf, decodeSample, encodeSample, quantizerOf } from "./sampleCodec";
-import { type SourceBitDepth, type WavBitDepth } from "./wavFormat";
+import { type WavBitDepth } from "./wavFormat";
 
 const roundTrip = (sample: number, bitDepth: WavBitDepth): number => {
 	const buffer = Buffer.alloc(bytesPerSampleOf(bitDepth));
@@ -209,66 +209,71 @@ describe("encodeSample of a decoded code", () => {
 	});
 });
 
-describe("quantizerOf", () => {
-	const roundTripOf = (sample: number, bitDepth: SourceBitDepth): number => {
-		const buffer = Buffer.alloc(8);
-
-		encodeSample(buffer, 0, sample, bitDepth);
-
-		return decodeSample(buffer, 0, bitDepth);
-	};
-	const decodedCodesOf = (bitDepth: SourceBitDepth): Array<number> => {
-		const buffer = Buffer.alloc(8);
-		const decodedOf = (write: (target: Buffer) => void): number => {
-			write(buffer);
-
-			return decodeSample(buffer, 0, bitDepth);
-		};
-		const sweepCodes = (
-			first: number,
-			last: number,
-			stride: number,
-			write: (target: Buffer, code: number) => void,
-		): Array<number> => {
-			const decoded: Array<number> = [];
-
-			for (let code = first; code <= last; code += stride) {
-				decoded.push(decodedOf((target) => write(target, code)));
-			}
-
-			return [
-				...decoded,
-				decodedOf((target) => write(target, last)),
-				decodedOf((target) => write(target, Math.floor(last / 2) + 2)),
-			];
-		};
-
+describe("integer rounding in encodeSample and quantizerOf", () => {
+	const SCALES = { "8": 0x80, "16": 0x8000, "24": 0x800000, "32": 0x80000000 } as const;
+	const readCodeOf = (buffer: Buffer, bitDepth: keyof typeof SCALES): number => {
 		switch (bitDepth) {
 			case "8":
-				return sweepCodes(0, 0xff, 1, (target, code) => (target[0] = code));
+				return (buffer[0] ?? 0) - 0x80;
 			case "16":
-				return sweepCodes(-0x8000, 0x7fff, 1, (target, code) => target.writeInt16LE(code, 0));
+				return buffer.readInt16LE(0);
 			case "24":
-				return sweepCodes(-0x800000, 0x7fffff, 997, (target, code) => target.writeIntLE(code, 0, 3));
+				return buffer.readIntLE(0, 3);
 			case "32":
-				return sweepCodes(-0x80000000, 0x7fffffff, 65537 * 997, (target, code) => target.writeInt32LE(code, 0));
-			case "32f":
-			case "64f":
-				return [1, -1, 0.5, Math.fround(0.1), 0.1];
+				return buffer.readInt32LE(0);
 		}
 	};
+	const CASES: ReadonlyArray<readonly [number, number]> = [
+		[0.5, 0],
+		[-0.5, 0],
+		[1.5, 2],
+		[-1.5, -2],
+		[2.5, 2],
+		[-2.5, -2],
+		[3.5, 4],
+		[-3.5, -4],
+		[0.49, 0],
+		[0.51, 1],
+		[-0.51, -1],
+		[1.25, 1],
+		[-1.75, -2],
+		[0, 0],
+	];
 
-	it.each(["8", "16", "24", "32", "32f", "64f"] as const)(
-		"returns for %s what decodeSample reads back from encodeSample's bytes",
-		(bitDepth) => {
-			const quantize = quantizerOf(bitDepth);
-			const codes = decodedCodesOf(bitDepth);
-			const halfways = codes.slice(1).map((sample, index) => (sample + (codes[index] ?? 0)) / 2);
-			const sweep = Array.from({ length: 3001 }, (_, index) => -1.5 + index / 1000);
+	it.each(["8", "16", "24", "32"] as const)("rounds %s-bit ties to the even code and clamps", (bitDepth) => {
+		const scale = SCALES[bitDepth];
+		const quantize = quantizerOf(bitDepth);
+		const buffer = Buffer.alloc(4);
+		const cases: ReadonlyArray<readonly [number, number]> = [
+			...CASES,
+			[scale / 2 + 0.5, scale / 2],
+			[-scale / 2 - 1.5, -scale / 2 - 2],
+			[scale - 0.5, scale - 1],
+			[-scale - 0.5, -scale],
+			[2 * scale, scale - 1],
+			[-2 * scale, -scale],
+		];
 
-			for (const sample of [...sweep, ...codes, ...halfways, 0.1234567, -0.7654321, 1e-9, -1e-9, 3e-5]) {
-				expect(quantize(sample) + 0).toBe(roundTripOf(sample, bitDepth) + 0);
-			}
-		},
-	);
+		for (const [lsb, code] of cases) {
+			const sample = lsb / scale;
+
+			encodeSample(buffer, 0, sample, bitDepth);
+
+			expect([lsb, readCodeOf(buffer, bitDepth)]).toEqual([lsb, code]);
+			expect([lsb, quantize(sample) + 0]).toEqual([lsb, code / scale]);
+		}
+	});
+
+	it("passes 64f through and rounds 32f to the nearest single", () => {
+		const identity = quantizerOf("64f");
+		const single = quantizerOf("32f");
+
+		for (const sample of [0.1, -0.30000000000000004, 1e-300, 1.5, -2.5e10]) {
+			expect(identity(sample)).toBe(sample);
+		}
+
+		expect(single(0.1)).toBe(0.100000001490116119384765625);
+		expect(single(-1 / 3)).toBe(-0.3333333432674407958984375);
+		expect(single(0.5)).toBe(0.5);
+	});
 });

@@ -18,10 +18,13 @@ import {
 	bisectPeakGainForTargetLufs,
 	BOOST_LOWER_BOUND,
 	BOOST_UPPER_BOUND,
+	hasConverged,
 	holdsTruePeak,
 	isLegalAttempt,
 	iterateForTargets,
+	nextSearchBoost,
 	predictOutputLufs,
+	type IterationAttempt,
 } from "./solve";
 import { windowSamplesFromMs } from "./window";
 
@@ -350,6 +353,52 @@ describe("winner election", () => {
 		expect(isLegalAttempt(-20.004, -6.004, -20, -6)).toBe(true);
 		expect(isLegalAttempt(-19.994, -6.004, -20, -6)).toBe(false);
 		expect(isLegalAttempt(-20.004, -5.994, -20, -6)).toBe(false);
+	});
+
+	it("reads an unmeasurable output figure as below any target", () => {
+		const unmeasurable = { outputLufs: null, outputTruePeakDb: null };
+		const measured = { outputLufs: -16.4, outputTruePeakDb: -1.3 };
+
+		expect(isLegalAttempt(null, null, -16, -1)).toBe(true);
+		expect(isLegalAttempt(null, -0.5, -16, -1)).toBe(false);
+		expect(attemptBeatsWinner(unmeasurable, measured, -16, -1)).toBe(false);
+		expect(attemptBeatsWinner(measured, unmeasurable, -16, -1)).toBe(true);
+		expect(attemptBeatsWinner(unmeasurable, measured, undefined, -1)).toBe(false);
+		expect(attemptBeatsWinner(measured, unmeasurable, undefined, -1)).toBe(true);
+	});
+});
+
+const attemptOf = (fields: Partial<IterationAttempt>): IterationAttempt => ({
+	boost: 0,
+	limitDb: -3,
+	lufsErr: null,
+	outputLufs: null,
+	outputTruePeakDb: null,
+	outputLra: null,
+	peakGainDb: 0,
+	peakErr: null,
+	...fields,
+});
+
+describe("nextSearchBoost", () => {
+	it("splits the bracket with an unmeasurable attempt on the side under the target", () => {
+		const attempts = [attemptOf({ boost: -30 }), attemptOf({ boost: 2, outputLufs: -12 })];
+
+		expect(nextSearchBoost(attempts, 5, -16)).toBe(-14);
+	});
+});
+
+describe("hasConverged", () => {
+	it("never converges on the true peak when --lufs is given and the loudness is unmeasurable", () => {
+		const attempt = attemptOf({ outputTruePeakDb: -1.1, peakErr: -0.1 });
+
+		expect(hasConverged(attempt, -16, -1, 0.5)).toBe(false);
+	});
+
+	it("converges on the true-peak error under --tp alone", () => {
+		const attempt = attemptOf({ outputLufs: -30, outputTruePeakDb: -1.2, peakErr: -0.2 });
+
+		expect(hasConverged(attempt, undefined, -1, 0.5)).toBe(true);
 	});
 });
 

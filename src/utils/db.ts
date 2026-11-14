@@ -14,4 +14,4 @@ export const peakDbOrNull = (linear: number): number | null =>
 export const lufsOrNull = (value: number): number | null => (Number.isFinite(value) ? value : null);
 
 export const figureText = (value: number | null, digits: number, unit: string): string =>
-	value === null ? "n/a" : `${value.toFixed(digits)} ${unit}`;
+	value === null || !Number.isFinite(value) ? "n/a" : `${value.toFixed(digits)} ${unit}`;

@@ -53,7 +53,9 @@ export const computeLoudnessRange = (shortTerm: Float64Array): number | null => 
 	const lowIndex = Math.round((considered.length - 1) * LOW_PERCENTILE);
 	const highIndex = Math.round((considered.length - 1) * HIGH_PERCENTILE);
 
-	return (considered[highIndex] ?? 0) - (considered[lowIndex] ?? 0);
+	const range = (considered[highIndex] ?? 0) - (considered[lowIndex] ?? 0);
+
+	return Number.isFinite(range) ? range : null;
 };
 
 export const getLraConsideredStats = (shortTerm: Float64Array): { minimum: number; median: number } => {

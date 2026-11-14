@@ -69,8 +69,14 @@ const INTEGER_FULL_SCALES = {
 
 type IntegerBitDepth = keyof typeof INTEGER_FULL_SCALES;
 
+const roundHalfToEven = (value: number): number => {
+	const rounded = Math.round(value);
+
+	return rounded - value === 0.5 && rounded % 2 !== 0 ? rounded - 1 : rounded;
+};
+
 const codeOf = (sample: number, fullScale: number): number =>
-	Math.max(-fullScale, Math.min(fullScale - 1, Math.round(sample * fullScale)));
+	Math.max(-fullScale, Math.min(fullScale - 1, roundHalfToEven(sample * fullScale)));
 
 const writeIntegerCode = (buffer: Buffer, offset: number, code: number, bitDepth: IntegerBitDepth): number => {
 	switch (bitDepth) {

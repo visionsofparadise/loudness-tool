@@ -31,16 +31,15 @@ const TARGET_LUFS_STEP = 0.1;
 const isTargetLufsInRange = (target: number): boolean =>
 	Number.isFinite(target) && target >= -50 && target <= 0 && isMultipleOf(target, TARGET_LUFS_STEP);
 
-const assertTargetLufs = (target: number, received: string | number): void => {
-	if (!isTargetLufsInRange(target)) {
-		throw new InvalidArgumentError(`lufs must be in [-50, 0] in steps of ${TARGET_LUFS_STEP}, received ${received}`);
-	}
-};
+const targetLufsMessage = (received: string | number): string =>
+	`lufs must be in [-50, 0] in steps of ${TARGET_LUFS_STEP}, received ${received}`;
 
 const parseTargetLufs = (value: string): number => {
 	const parsed = Number(value);
 
-	assertTargetLufs(parsed, value);
+	if (!isTargetLufsInRange(parsed)) {
+		throw new InvalidArgumentError(targetLufsMessage(value));
+	}
 
 	return parsed;
 };
@@ -63,7 +62,9 @@ const measureIntegratedAndTruePeak = async (
 export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Promise<void> => {
 	const target = options.lufs ?? DEFAULT_TARGET_LUFS;
 
-	assertTargetLufs(target, target);
+	if (!isTargetLufsInRange(target)) {
+		throw new Error(targetLufsMessage(target));
+	}
 
 	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) => {
 		const measurement = await input.withFirstPass(measureIntegratedAndTruePeak);

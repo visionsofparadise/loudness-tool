@@ -23,16 +23,14 @@ const alignedLine = (label: string, value: string): string => `${label.padEnd(LA
 
 const isTargetDbInRange = (target: number): boolean => Number.isFinite(target) && target >= -24 && target < 0;
 
-const assertTargetDb = (target: number, received: string | number): void => {
-	if (!isTargetDbInRange(target)) {
-		throw new InvalidArgumentError(`tp must be in [-24, 0), received ${received}`);
-	}
-};
+const targetDbMessage = (received: string | number): string => `tp must be in [-24, 0), received ${received}`;
 
 const parseTargetDb = (value: string): number => {
 	const parsed = Number(value);
 
-	assertTargetDb(parsed, value);
+	if (!isTargetDbInRange(parsed)) {
+		throw new InvalidArgumentError(targetDbMessage(value));
+	}
 
 	return parsed;
 };
@@ -40,7 +38,9 @@ const parseTargetDb = (value: string): number => {
 export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise<void> => {
 	const target = options.tp ?? DEFAULT_TARGET_DB;
 
-	assertTargetDb(target, target);
+	if (!isTargetDbInRange(target)) {
+		throw new Error(targetDbMessage(target));
+	}
 
 	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) => {
 		const measurement = await input.withFirstPass(measureTruePeak);

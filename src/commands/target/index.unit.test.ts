@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { channelWeightsOf } from "../../measurement/channelWeights";
 import { createProgram } from "../../cli";
@@ -200,6 +201,7 @@ describe("target", () => {
 		await expect(target("in.wav", { output: "out.wav", tp: -400 })).rejects.toThrow(
 			"tp must be in [-24, 0), received -400",
 		);
+		await expect(target("in.wav", { output: "out.wav", tp: -400 })).rejects.not.toBeInstanceOf(CommanderError);
 		await expect(parseProgram(["target", "in.wav", "-o", "out.wav", "--pivot", "-90"])).rejects.toThrow(
 			/pivot must be in \[-80, 0\), received -90/,
 		);
