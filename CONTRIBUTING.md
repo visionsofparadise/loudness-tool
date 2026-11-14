@@ -16,6 +16,7 @@ These checks and tests must pass before a pull request is opened:
 ```sh
 npm run check
 npm run unit
+npm run integration
 ```
 
 ## Commits

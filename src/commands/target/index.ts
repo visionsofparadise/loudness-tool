@@ -121,7 +121,7 @@ const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets =>
 		return { targetLufs: undefined, targetTp: tp };
 	}
 
-	throw new InvalidArgumentError("at least one of --lufs and --tp is required");
+	throw new Error("at least one of --lufs and --tp is required");
 };
 
 const figureOf = (value: number | null, unit: string): string =>
@@ -276,7 +276,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	assertBounded("tolerance", options.tolerance, isTolerance, TOLERANCE_RANGE);
 
 	if (options.floor !== undefined && options.pivot !== undefined && options.floor >= options.pivot) {
-		throw new InvalidArgumentError("floor must be < pivot when both are supplied");
+		throw new Error("floor must be < pivot when both are supplied");
 	}
 
 	const targets = targetsOf(options.lufs, options.tp);
