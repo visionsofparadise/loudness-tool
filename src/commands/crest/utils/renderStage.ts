@@ -1,8 +1,8 @@
 import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
+import { quantizerOf } from "../../../wav/utils/sampleCodec";
 import { withWavWriter } from "../../utils/withWavWriter";
 import { weightOf } from "./blend";
 import { chunkFrameCountOf, chunkRangeOf, chunkStretchesOf, forEachStretchChunk, type StretchChunk } from "./render";
-import { quantizerOf } from "./rounding";
 import { SourceWindow } from "./SourceWindow";
 import { StretchPeakMeter } from "./StretchPeakMeter";
 import type { CrestLayout } from "./layout";
@@ -60,7 +60,7 @@ export const renderStage = async (args: {
 			meter.push(written, frameCount);
 			accumulator?.push(written, frameCount);
 
-			await (isLast ? writer.writeQuantized(written) : writer.write(written));
+			await writer.write(written);
 
 			writtenFrames += frameCount;
 		};

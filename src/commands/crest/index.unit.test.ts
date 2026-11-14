@@ -15,11 +15,12 @@ import {
 import { createNoise, createSine } from "../../utils/testSignals";
 import { linearToDb } from "../../utils/db";
 import { WavReader, type AudioBlock } from "../../wav/WavReader";
+import { quantizerOf } from "../../wav/utils/sampleCodec";
 import { WavWriter } from "../../wav/WavWriter";
 import { weightOf } from "./utils/blend";
 import { crestLayoutOf } from "./utils/layout";
 import { forEachStretchChunk } from "./utils/render";
-import { printedDbOf, quantizerOf } from "./utils/rounding";
+import { printedDbOf } from "./utils/rounding";
 import { oracleOf, upsampledOf } from "./utils/testBlendOracle";
 import { crest } from "./index";
 import type { WavBitDepth } from "../../wav/utils/wavFormat";
@@ -321,7 +322,7 @@ describe("crest", () => {
 			const inputPath = join(workingDirectory, "depth.wav");
 			const outputPath = join(workingDirectory, "depth.raw");
 			const channel = Float64Array.from({ length: 400 }, (_sample, index) =>
-				index % 2 === 0 ? 32763 / 0x7fff : 16382 / 0x7fff,
+				index % 2 === 0 ? 32763 / 0x8000 : 16382 / 0x8000,
 			);
 
 			await writeWav(inputPath, [channel], "16");
@@ -518,9 +519,9 @@ describe("crest", () => {
 
 		const original = await readFile(outputPath);
 		const scratchDir = join(workingDirectory, "scratch");
-		const writeThrough = WavWriter.prototype.writeQuantized;
+		const writeThrough = WavWriter.prototype.write;
 
-		vi.spyOn(WavWriter.prototype, "writeQuantized").mockImplementation(async function (
+		vi.spyOn(WavWriter.prototype, "write").mockImplementation(async function (
 			this: WavWriter,
 			channels: ReadonlyArray<Float64Array>,
 		): Promise<void> {
@@ -530,7 +531,7 @@ describe("crest", () => {
 		});
 
 		await expect(
-			crest(inputPath, { output: outputPath, spread: 0.25, steps: 2, smoothing: 2, scratchDir }),
+			crest(inputPath, { output: outputPath, spread: 0.25, steps: 1, smoothing: 2, scratchDir }),
 		).rejects.toThrow("injected write failure");
 
 		expect(existsSync(outputPath)).toBe(true);

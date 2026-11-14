@@ -60,20 +60,17 @@ export const decodeFrames = (
 	});
 };
 
-const INTEGER_SCALES = {
-	"8": { negative: 0x80, positive: 0x7f },
-	"16": { negative: 0x8000, positive: 0x7fff },
-	"24": { negative: 0x800000, positive: 0x7fffff },
-	"32": { negative: 0x80000000, positive: 0x7fffffff },
+const INTEGER_FULL_SCALES = {
+	"8": 0x80,
+	"16": 0x8000,
+	"24": 0x800000,
+	"32": 0x80000000,
 } as const;
 
-type IntegerBitDepth = keyof typeof INTEGER_SCALES;
+type IntegerBitDepth = keyof typeof INTEGER_FULL_SCALES;
 
-const isFloatBitDepth = (bitDepth: SourceBitDepth): bitDepth is "32f" | "64f" =>
-	bitDepth === "32f" || bitDepth === "64f";
-
-export const integerScalesOf = (bitDepth: SourceBitDepth): { negative: number; positive: number } | undefined =>
-	isFloatBitDepth(bitDepth) ? undefined : INTEGER_SCALES[bitDepth];
+const codeOf = (sample: number, fullScale: number): number =>
+	Math.max(-fullScale, Math.min(fullScale - 1, Math.round(sample * fullScale)));
 
 const writeIntegerCode = (buffer: Buffer, offset: number, code: number, bitDepth: IntegerBitDepth): number => {
 	switch (bitDepth) {
@@ -111,28 +108,19 @@ export const encodeSample = (buffer: Buffer, offset: number, sample: number, bit
 		return offset + 8;
 	}
 
-	const { negative, positive } = INTEGER_SCALES[bitDepth];
-	const clamped = Math.max(-1, Math.min(1, sample));
-
-	return writeIntegerCode(buffer, offset, Math.round(clamped < 0 ? clamped * negative : clamped * positive), bitDepth);
+	return writeIntegerCode(buffer, offset, codeOf(sample, INTEGER_FULL_SCALES[bitDepth]), bitDepth);
 };
 
-export const encodeQuantizedSample = (
-	buffer: Buffer,
-	offset: number,
-	sample: number,
-	bitDepth: SourceBitDepth,
-): number => {
-	if (isFloatBitDepth(bitDepth)) {
-		return encodeSample(buffer, offset, sample, bitDepth);
+export const quantizerOf = (bitDepth: SourceBitDepth): ((sample: number) => number) => {
+	if (bitDepth === "64f") {
+		return (sample) => sample;
 	}
 
-	const { negative } = INTEGER_SCALES[bitDepth];
+	if (bitDepth === "32f") {
+		return (sample) => Math.fround(sample);
+	}
 
-	return writeIntegerCode(
-		buffer,
-		offset,
-		Math.max(-negative, Math.min(negative - 1, Math.round(sample * negative))),
-		bitDepth,
-	);
+	const fullScale = INTEGER_FULL_SCALES[bitDepth];
+
+	return (sample) => codeOf(sample, fullScale) / fullScale;
 };

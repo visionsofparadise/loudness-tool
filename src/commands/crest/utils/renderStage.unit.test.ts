@@ -9,7 +9,7 @@ import { weightOf } from "./blend";
 import { crestLayoutOf } from "./layout";
 import { chunkStretchesOf, forEachStretchChunk } from "./render";
 import { renderStage } from "./renderStage";
-import { quantizerOf } from "./rounding";
+import { quantizerOf } from "../../../wav/utils/sampleCodec";
 import { stretchPeaksOf, upsampledOf } from "./testBlendOracle";
 import type { AudioOutput } from "../../utils/sinks";
 

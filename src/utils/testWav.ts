@@ -17,19 +17,7 @@ export const encodePlanar = (
 		let offset = frameIndex * stride;
 
 		for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
-			const sample = channels[channelIndex]?.[frameIndex] ?? 0;
-
-			if (bitDepth === "8") {
-				const clamped = Math.max(-1, Math.min(1, sample));
-
-				buffer[offset] = Math.max(0, Math.min(255, Math.round(clamped * 128 + 128)));
-				offset += 1;
-			} else if (bitDepth === "64f") {
-				buffer.writeDoubleLE(sample, offset);
-				offset += 8;
-			} else {
-				offset = encodeSample(buffer, offset, sample, bitDepth);
-			}
+			offset = encodeSample(buffer, offset, channels[channelIndex]?.[frameIndex] ?? 0, bitDepth);
 		}
 	}
 
