@@ -11,10 +11,16 @@ const SAMPLE_RATE = 48000;
 const ANCHORS: Anchors = {
 	floorDb: null,
 	pivotDb: -30,
+	kneeDb: -20,
 	limitDb: -3,
+	ceilingDb: -1,
 	B: 6,
 	peakGainDb: 2,
 };
+
+const BODY_LOUDNESS_DB = -20;
+
+const rawGainDbAt = (peakDb: number): number => gainDbAt(BODY_LOUDNESS_DB, peakDb, ANCHORS);
 
 const collect = async (file: SampleFile): Promise<Float64Array> => {
 	const chunks: Array<Float64Array> = [];
@@ -63,17 +69,20 @@ describe("renderEnvelope", () => {
 			throw new Error("scratch must be created before rendering");
 		}
 
-		const detection = await SampleFile.create(scratch, "detection");
+		const loudnessEnvelope = await SampleFile.create(scratch, "loudness");
+		const peakEnvelope = await SampleFile.create(scratch, "peak");
 
-		await detection.append(levels, levels.length);
+		await loudnessEnvelope.append(new Float64Array(levels.length).fill(BODY_LOUDNESS_DB), levels.length);
+		await peakEnvelope.append(levels, levels.length);
 
 		const dest = await SampleFile.create(scratch, "envelope");
 
-		await renderEnvelope({ detectionEnvelope: detection, dest, anchors: ANCHORS, holdHalfWidth });
+		await renderEnvelope({ loudnessEnvelope, peakEnvelope, dest, anchors: ANCHORS, holdHalfWidth });
 
 		const envelope = await collect(dest);
 
-		await detection.close();
+		await loudnessEnvelope.close();
+		await peakEnvelope.close();
 		await dest.close();
 
 		return envelope;
@@ -93,8 +102,8 @@ describe("renderEnvelope", () => {
 		levels[eventIndex] = eventLevelDb;
 
 		const envelope = await renderLevels(levels, holdHalfWidth);
-		const bedGain = Math.pow(10, gainDbAt(bedLevelDb, ANCHORS) / 20);
-		const eventGain = Math.pow(10, gainDbAt(eventLevelDb, ANCHORS) / 20);
+		const bedGain = Math.pow(10, rawGainDbAt(bedLevelDb) / 20);
+		const eventGain = Math.pow(10, rawGainDbAt(eventLevelDb) / 20);
 
 		expect(envelope.length).toBe(length);
 		expect(envelope[eventIndex]).toBeCloseTo(eventGain, 5);
@@ -139,7 +148,7 @@ describe("renderEnvelope", () => {
 		levels[eventIndex] = 3;
 
 		const envelope = await renderLevels(levels, holdHalfWidthOf(windowSamplesFromMs(1, SAMPLE_RATE)));
-		const assigned = Math.pow(10, gainDbAt(3, ANCHORS) / 20);
+		const assigned = Math.pow(10, rawGainDbAt(3) / 20);
 
 		expect(Math.abs((envelope[eventIndex] ?? 0) - assigned)).toBeLessThan(1e-6);
 	});
@@ -153,7 +162,7 @@ describe("renderEnvelope", () => {
 		expect(envelope.length).toBe(levels.length);
 
 		for (let index = 0; index < levels.length; index++) {
-			const rawGain = dbToLinear(gainDbAt(levels[index] ?? 0, ANCHORS));
+			const rawGain = dbToLinear(rawGainDbAt(levels[index] ?? 0));
 
 			expect(envelope[index] ?? Infinity).toBeLessThanOrEqual(rawGain * (1 + 1e-6));
 		}
@@ -168,7 +177,7 @@ describe("renderEnvelope", () => {
 		expect(envelope.length).toBe(levels.length);
 
 		for (let index = 0; index < levels.length; index++) {
-			const rawGain = dbToLinear(gainDbAt(levels[index] ?? 0, ANCHORS));
+			const rawGain = dbToLinear(rawGainDbAt(levels[index] ?? 0));
 
 			expect(Math.abs((envelope[index] ?? 0) - rawGain) / rawGain).toBeLessThan(1e-6);
 		}

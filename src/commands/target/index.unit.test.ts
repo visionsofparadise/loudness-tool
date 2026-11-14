@@ -122,7 +122,7 @@ const spyRejectingDetectionClose = () => {
 	return vi.spyOn(SampleFile, "create").mockImplementation(async (createScratch, label) => {
 		const file = await originalCreate(createScratch, label);
 
-		if (label === "detection") {
+		if (label === "peak") {
 			vi.spyOn(file, "close").mockImplementation(async () => {
 				await SampleFile.prototype.close.call(file);
 
@@ -401,11 +401,11 @@ describe("target", () => {
 		expect(Math.abs(measured.truePeakDb - targetTp)).toBeLessThan(tolerance);
 		expect(Math.abs(reportedFigureOf(stdout, "output true peak") - measured.truePeakDb)).toBeLessThan(0.01);
 		expect(Math.abs(reportedFigureOf(stdout, "output integrated") - measured.integratedLufs)).toBeLessThan(0.01);
-		expect(stderr).toMatch(/peakErr/);
-		expect(stderr).not.toMatch(/lufsErr/);
+		expect(stderr).toMatch(/peak error/);
+		expect(stderr).not.toMatch(/loudness error/);
 	}, 30_000);
 
-	it("lands loudness on --lufs alone and reports the unconstrained true peak", async () => {
+	it("lands loudness on --lufs alone and holds the true peak at 0 dBTP", async () => {
 		const inputPath = join(workingDirectory, "lufs-only.wav");
 		const outputPath = join(workingDirectory, "lufs-only-out.wav");
 		const targetLufs = -20;
@@ -421,11 +421,11 @@ describe("target", () => {
 		expect(exitCode).toBeUndefined();
 		expect(measured.integratedLufs).toBeLessThanOrEqual(targetLufs + 0.01);
 		expect(Math.abs(measured.integratedLufs - targetLufs)).toBeLessThan(tolerance);
-		expect(measured.truePeakDb).toBeGreaterThan(-1);
+		expect(measured.truePeakDb).toBeLessThanOrEqual(0.01);
 		expect(Math.abs(reportedFigureOf(stdout, "output integrated") - measured.integratedLufs)).toBeLessThan(0.01);
 		expect(Math.abs(reportedFigureOf(stdout, "output true peak") - measured.truePeakDb)).toBeLessThan(0.01);
-		expect(stderr).toMatch(/lufsErr/);
-		expect(stderr).not.toMatch(/peakErr/);
+		expect(stderr).toMatch(/loudness error/);
+		expect(stderr).not.toMatch(/peak error/);
 	}, 30_000);
 
 	it("warns when pivot auto-derivation falls back", async () => {

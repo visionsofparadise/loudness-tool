@@ -1,33 +1,31 @@
 export interface Anchors {
 	floorDb: number | null;
 	pivotDb: number;
+	kneeDb: number | null;
 	limitDb: number;
+	ceilingDb: number;
 	B: number;
 	peakGainDb: number;
 }
 
-export const gainDbAt = (absXDb: number, anchors: Anchors): number => {
-	const { floorDb, pivotDb, limitDb, B: boost, peakGainDb } = anchors;
-
-	if (floorDb !== null && absXDb <= floorDb) {
+const rampOf = (value: number, start: number, end: number): number => {
+	if (value <= start) {
 		return 0;
 	}
 
-	if (absXDb < pivotDb) {
-		if (floorDb === null) {
-			return boost;
-		}
-
-		const position = (absXDb - floorDb) / (pivotDb - floorDb);
-
-		return position * boost;
+	if (value >= end) {
+		return 1;
 	}
 
-	if (absXDb < limitDb) {
-		const position = (absXDb - pivotDb) / (limitDb - pivotDb);
+	return (value - start) / (end - start);
+};
 
-		return boost + position * (peakGainDb - boost);
-	}
+export const gainDbAt = (loudnessDb: number, peakDb: number, anchors: Anchors): number => {
+	const { floorDb, pivotDb, kneeDb, limitDb, ceilingDb, B: boost, peakGainDb } = anchors;
+	const peakWeight = kneeDb === null ? 0 : rampOf(peakDb, kneeDb, limitDb);
+	const raw = (1 - peakWeight) * boost + peakWeight * peakGainDb;
+	const raiseWeight = floorDb === null ? 1 : rampOf(loudnessDb, floorDb, pivotDb);
+	const gainDb = raw <= 0 ? raw : raiseWeight * raw;
 
-	return limitDb + peakGainDb - absXDb;
+	return Math.min(gainDb, ceilingDb - peakDb);
 };

@@ -5,6 +5,7 @@ const applyEnvelopeToChannels = (
 	channels: ReadonlyArray<Float64Array>,
 	envelope: Float64Array,
 	frameCount: number,
+	quantize: (sample: number) => number,
 ): void => {
 	if (envelope.length < frameCount) {
 		throw new Error(
@@ -14,7 +15,7 @@ const applyEnvelopeToChannels = (
 
 	for (const channel of channels) {
 		for (let index = 0; index < frameCount; index++) {
-			channel[index] = (channel[index] ?? 0) * (envelope[index] ?? 0);
+			channel[index] = quantize((channel[index] ?? 0) * (envelope[index] ?? 0));
 		}
 	}
 };
@@ -61,6 +62,7 @@ const pullSamples = async (cursor: SampleCursor, count: number): Promise<Float64
 export const forEachEnvelopedBlock = async (
 	inputPath: string,
 	envelope: SampleFile,
+	quantize: (sample: number) => number,
 	consume: (channels: ReadonlyArray<Float64Array>, frameCount: number) => Promise<void> | void,
 ): Promise<void> => {
 	const reader = await WavReader.open(inputPath);
@@ -76,7 +78,7 @@ export const forEachEnvelopedBlock = async (
 
 			const gain = await pullSamples(envelopeCursor, frameCount);
 
-			applyEnvelopeToChannels(block.channels, gain, frameCount);
+			applyEnvelopeToChannels(block.channels, gain, frameCount, quantize);
 			await consume(block.channels, frameCount);
 		}
 	} finally {

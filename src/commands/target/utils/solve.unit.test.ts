@@ -2,22 +2,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { dbToLinear, linearToDb } from "../../../utils/db";
+import { dbToLinear } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
-import { createLevelSegments, createSine } from "../../../utils/testSignals";
+import { createSine } from "../../../utils/testSignals";
 import { Scratch } from "../../../utils/Scratch";
 import { WavWriter } from "../../../wav/WavWriter";
-import { type Anchors, gainDbAt } from "./curve";
-import * as envelope from "./envelope";
 import { withWavReader } from "../../utils/withWavReader";
-import { measureSource, type DetectionHistogram, type SourceMeasurement } from "./measureSource";
+import type { Anchors } from "./curve";
+import * as envelope from "./envelope";
+import { CELL_COUNT, cellOf, measureSource, type DetectionHistogram, type SourceMeasurement } from "./measureSource";
 import {
-	assignPeakGainDb,
 	attemptBeatsWinner,
-	bisectBForTargetLufs,
-	bisectPeakGainForTargetLufs,
-	BOOST_LOWER_BOUND,
-	BOOST_UPPER_BOUND,
+	bracketBoost,
 	hasConverged,
 	holdsTruePeak,
 	isLegalAttempt,
@@ -25,308 +21,126 @@ import {
 	nextSearchBoost,
 	predictOutputLufs,
 	type IterationAttempt,
+	type Targets,
 } from "./solve";
 import { windowSamplesFromMs } from "./window";
 
 const SAMPLE_RATE = 48000;
 
-const measureFile = async (args: {
-	inputPath: string;
-	scratch: Scratch;
-	limitPercentile: number;
-	halfWidth: number;
-}): Promise<SourceMeasurement & { readonly truePeakDb: number }> => {
-	const measurement = await withWavReader(args.inputPath, async (source) =>
-		measureSource({
-			source,
-			scratch: args.scratch,
-			limitPercentile: args.limitPercentile,
-			halfWidthOf: () => args.halfWidth,
-		}),
-	);
-	const { truePeakDb } = measurement;
+const histogramWith = (
+	frames: ReadonlyArray<{ loudnessDb: number; peakDb: number; energy: number }>,
+): DetectionHistogram => {
+	const energy = new Float64Array(CELL_COUNT * CELL_COUNT);
+	const counts = new Float64Array(CELL_COUNT * CELL_COUNT);
 
-	if (truePeakDb === null) {
-		await measurement.detectionEnvelope.close();
+	for (const frame of frames) {
+		const cell = cellOf(frame.loudnessDb) * CELL_COUNT + cellOf(frame.peakDb);
 
-		throw new Error(`"${args.inputPath}" has no measurable true peak`);
+		energy[cell] = (energy[cell] ?? 0) + frame.energy;
+		counts[cell] = (counts[cell] ?? 0) + 1;
 	}
 
-	return { ...measurement, truePeakDb };
+	return { energy, counts, peakLevelCounts: new Float64Array(13_000) };
 };
 
-const baseAnchors = (overrides: Partial<Anchors> = {}): Anchors => ({
+const anchorsOf = (overrides: Partial<Anchors> = {}): Anchors => ({
 	floorDb: null,
-	pivotDb: -30,
-	limitDb: -3,
+	pivotDb: -25,
+	kneeDb: null,
+	limitDb: -6,
+	ceilingDb: 0,
 	B: 0,
 	peakGainDb: 0,
 	...overrides,
 });
 
-const histogramOfCounts = (levelCounts: Float64Array, bucketMax: number, totalSamples: number): DetectionHistogram => {
-	const bucketWidth = bucketMax / levelCounts.length;
-	const heldEnergy = new Float64Array(levelCounts.length);
-
-	for (let bucketIndex = 0; bucketIndex < levelCounts.length; bucketIndex++) {
-		const centre = (bucketIndex + 0.5) * bucketWidth;
-
-		heldEnergy[bucketIndex] = (levelCounts[bucketIndex] ?? 0) * centre * centre;
-	}
-
-	return { levelCounts, levelBucketMax: bucketMax, heldEnergy, heldBucketMax: bucketMax, totalSamples };
-};
-
-const singleLevelHistogram = (
-	targetLevelDb: number,
-	totalSamples: number,
-	bucketCount = 1024,
-	bucketMaxDb = 0,
-): DetectionHistogram => {
-	const bucketMax = dbToLinear(bucketMaxDb);
-	const levelCounts = new Float64Array(bucketCount);
-	const targetLinear = dbToLinear(targetLevelDb);
-	const bucketWidth = bucketMax / bucketCount;
-	const bucketIndex = Math.min(bucketCount - 1, Math.max(0, Math.floor(targetLinear / bucketWidth)));
-
-	levelCounts[bucketIndex] = totalSamples;
-
-	return histogramOfCounts(levelCounts, bucketMax, totalSamples);
-};
-
-const uniformDbRangeHistogram = (
-	lowLevelDb: number,
-	highLevelDb: number,
-	totalSamples: number,
-	bucketCount = 1024,
-	bucketMaxDb = 0,
-): DetectionHistogram => {
-	const bucketMax = dbToLinear(bucketMaxDb);
-	const levelCounts = new Float64Array(bucketCount);
-	const bucketWidth = bucketMax / bucketCount;
-	const lowLinear = dbToLinear(lowLevelDb);
-	const highLinear = dbToLinear(highLevelDb);
-	const lowBucket = Math.min(bucketCount - 1, Math.max(0, Math.floor(lowLinear / bucketWidth)));
-	const highBucket = Math.min(bucketCount - 1, Math.max(0, Math.floor(highLinear / bucketWidth)));
-	const span = Math.max(1, highBucket - lowBucket + 1);
-	const perBucket = Math.floor(totalSamples / span);
-	let placed = 0;
-
-	for (let bucketIndex = lowBucket; bucketIndex <= highBucket; bucketIndex++) {
-		levelCounts[bucketIndex] = perBucket;
-		placed += perBucket;
-	}
-
-	levelCounts[lowBucket] = (levelCounts[lowBucket] ?? 0) + (totalSamples - placed);
-
-	return histogramOfCounts(levelCounts, bucketMax, totalSamples);
-};
-
-const referenceLufsShift = (anchors: Anchors, histogram: DetectionHistogram): number => {
-	const { heldEnergy, heldBucketMax } = histogram;
-	const bucketCount = heldEnergy.length;
-	const bucketWidth = heldBucketMax / bucketCount;
-	let weightedGainEnergy = 0;
-	let weightedSourceEnergy = 0;
-
-	for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex++) {
-		const energy = heldEnergy[bucketIndex] ?? 0;
-
-		if (energy === 0) {
-			continue;
-		}
-
-		const centreLinear = (bucketIndex + 0.5) * bucketWidth;
-
-		if (centreLinear <= 0) {
-			continue;
-		}
-
-		const centreDb = linearToDb(centreLinear);
-		const gainDb = gainDbAt(centreDb, anchors);
-		const gainLinear = Math.pow(10, gainDb / 20);
-
-		weightedSourceEnergy += energy;
-		weightedGainEnergy += energy * gainLinear * gainLinear;
-	}
-
-	return 10 * Math.log10(weightedGainEnergy / weightedSourceEnergy);
-};
-
-const writeWav = async (path: string, channels: Array<Float64Array>): Promise<void> => {
-	const writer = await WavWriter.create(
-		{ kind: "file", path },
-		{
-			sampleRate: SAMPLE_RATE,
-			channelCount: channels.length,
-			channelMask: 0,
-			bitDepth: "32f",
-			frameCount: channels[0]?.length ?? 0,
-		},
-	);
-
-	await writer.write(channels);
-	await writer.close();
-};
-
-const makeCrossAxis = (seconds: number): Float64Array => {
-	const frameCount = SAMPLE_RATE * seconds;
-	const channel = new Float64Array(frameCount);
-	const bed = dbToLinear(-30);
-	const impulse = dbToLinear(-3);
-	const period = Math.round(SAMPLE_RATE / 8);
-	const impulseStart = SAMPLE_RATE;
-	const impulseEnd = SAMPLE_RATE * 2;
-
-	for (let index = 0; index < frameCount; index++) {
-		const sine = bed * Math.sin((2 * Math.PI * 220 * index) / SAMPLE_RATE);
-
-		channel[index] = index >= impulseStart && index < impulseEnd && index % period === 0 ? impulse : sine;
-	}
-
-	return channel;
-};
-
 describe("predictOutputLufs", () => {
 	it("returns -Infinity for an empty histogram", () => {
-		expect(
-			predictOutputLufs(-20, baseAnchors(), {
-				levelCounts: new Float64Array(0),
-				levelBucketMax: 0,
-				heldEnergy: new Float64Array(0),
-				heldBucketMax: 0,
-				totalSamples: 0,
-			}),
-		).toBe(-Infinity);
+		expect(predictOutputLufs(-20, anchorsOf(), histogramWith([]))).toBe(-Infinity);
 	});
 
-	it("matches sourceLufs + 10·log10(mean(g²)) on a known histogram", () => {
-		const histogram = uniformDbRangeHistogram(-30, -6, 100_000);
-		const anchors = baseAnchors({ pivotDb: -28, limitDb: -6, B: 3, peakGainDb: 5 });
-		const sourceLufs = -23;
+	it("shifts a body cell by the body gain", () => {
+		const histogram = histogramWith([{ loudnessDb: -20.1, peakDb: -20.1, energy: 1 }]);
 
-		expect(predictOutputLufs(sourceLufs, anchors, histogram)).toBeCloseTo(
-			sourceLufs + referenceLufsShift(anchors, histogram),
-			6,
-		);
+		expect(predictOutputLufs(-23, anchorsOf({ B: 6, peakGainDb: 6 }), histogram)).toBeCloseTo(-17, 12);
 	});
 
-	it("shifts a single-level flat curve by B", () => {
-		const histogram = singleLevelHistogram(-20, 50_000);
-		const anchors = baseAnchors({ pivotDb: -30, limitDb: -3, B: 6, peakGainDb: 6 });
+	it("weighs each cell's energy by the power of its gain", () => {
+		const histogram = histogramWith([
+			{ loudnessDb: -20.1, peakDb: -20.1, energy: 3 },
+			{ loudnessDb: -60.1, peakDb: -50.1, energy: 1 },
+		]);
+		const anchors = anchorsOf({ floorDb: -45, B: 10, peakGainDb: 10 });
 
-		expect(predictOutputLufs(-23, anchors, histogram)).toBeCloseTo(-17, 4);
-	});
-});
-
-describe("bisectBForTargetLufs", () => {
-	it("returns a B whose calibrated predictor lands near the target", () => {
-		const histogram = uniformDbRangeHistogram(-30, -6, 100_000);
-		const sourceLufs = -23;
-		const targetLufs = -19;
-		const anchorsBase = { floorDb: null, pivotDb: -28, limitDb: -6 };
-		const tpCap = -1 - -6;
-		const landingB = bisectBForTargetLufs({
-			sourceLufs,
-			targetLufs,
-			anchors: anchorsBase,
-			histogram,
-			tpCap,
-			neverExpand: false,
-			residual: 0,
-			tolerance: 0.1,
-		});
-		const landed: Anchors = {
-			...anchorsBase,
-			B: landingB,
-			peakGainDb: assignPeakGainDb(landingB, tpCap, false),
-		};
-
-		expect(landingB).toBeGreaterThanOrEqual(BOOST_LOWER_BOUND);
-		expect(landingB).toBeLessThanOrEqual(BOOST_UPPER_BOUND);
-		expect(Math.abs(predictOutputLufs(sourceLufs, landed, histogram) - targetLufs)).toBeLessThan(0.1);
+		expect(predictOutputLufs(-23, anchors, histogram)).toBeCloseTo(-23 + 10 * Math.log10((3 * 10 + 1) / 4), 12);
 	});
 
-	it("lands on the predictor's root, not the first midpoint inside tolerance", () => {
-		const histogram = uniformDbRangeHistogram(-30, -6, 100_000);
-		const sourceLufs = -23;
-		const targetLufs = sourceLufs - 0.4;
-		const anchorsBase = { floorDb: null, pivotDb: -30, limitDb: -3 };
-		const tpCap = 40;
-		const landingB = bisectBForTargetLufs({
-			sourceLufs,
-			targetLufs,
-			anchors: anchorsBase,
-			histogram,
-			tpCap,
-			neverExpand: true,
-			residual: 0,
-			tolerance: 0.5,
-		});
-		const landed: Anchors = {
-			...anchorsBase,
-			B: landingB,
-			peakGainDb: assignPeakGainDb(landingB, tpCap, true),
-		};
+	it("never falls as the body gain rises", () => {
+		const frames: Array<{ loudnessDb: number; peakDb: number; energy: number }> = [];
 
-		expect(landingB).not.toBe(0);
-		expect(landingB).toBeCloseTo(-0.4, 1);
-		expect(predictOutputLufs(sourceLufs, landed, histogram)).toBeCloseTo(targetLufs, 2);
-	});
+		for (let loudnessDb = -70; loudnessDb <= -5; loudnessDb += 2.3) {
+			for (let peakDb = -40; peakDb <= 1; peakDb += 1.7) {
+				frames.push({ loudnessDb, peakDb, energy: dbToLinear(loudnessDb) * (1 + ((peakDb + 40) % 3)) });
+			}
+		}
 
-	it("returns 0 for non-finite sourceLufs", () => {
-		expect(
-			bisectBForTargetLufs({
-				sourceLufs: -Infinity,
-				targetLufs: -20,
-				anchors: { floorDb: null, pivotDb: -28, limitDb: -6 },
-				histogram: uniformDbRangeHistogram(-30, -6, 100_000),
-				tpCap: 5,
-				neverExpand: false,
-				residual: 0,
-				tolerance: 0.1,
-			}),
-		).toBe(0);
+		const histogram = histogramWith(frames);
+		const ceilingDb = -1;
+		const limitDb = -6;
+		let previous = -Infinity;
+
+		for (let boost = -50; boost <= 50; boost += 0.25) {
+			const predicted = predictOutputLufs(
+				-23,
+				anchorsOf({
+					floorDb: -45,
+					kneeDb: -15,
+					limitDb,
+					ceilingDb,
+					B: boost,
+					peakGainDb: Math.min(ceilingDb - limitDb, boost + 3),
+				}),
+				histogram,
+			);
+
+			expect(predicted).toBeGreaterThanOrEqual(previous);
+			previous = predicted;
+		}
 	});
 });
 
-describe("bisectPeakGainForTargetLufs", () => {
-	const peakAnchors = { floorDb: null, pivotDb: -30, limitDb: -6, B: 0 };
-	const loudHistogram = singleLevelHistogram(-3, 50_000);
-	const sourceLufs = -10;
-	const ceilingPeakGainDb = 5;
+describe("bracketBoost", () => {
+	const sourceLufs = -50;
+	const predictOn =
+		(histogram: DetectionHistogram, floorDb: number | null) =>
+		(boost: number): number =>
+			predictOutputLufs(sourceLufs, anchorsOf({ floorDb, B: boost, peakGainDb: boost }), histogram);
 
-	it("returns the ceiling when it already meets the target", () => {
-		expect(
-			bisectPeakGainForTargetLufs({
-				sourceLufs,
-				targetLufs: -5,
-				anchors: peakAnchors,
-				histogram: loudHistogram,
-				ceilingPeakGainDb,
-				residual: 0,
-				tolerance: 0.5,
-			}),
-		).toBe(ceilingPeakGainDb);
+	it("brackets a target 40 dB above the starting body gain", () => {
+		const predict = predictOn(histogramWith([{ loudnessDb: -50.1, peakDb: -47.1, energy: 1 }]), null);
+		const bracket = bracketBoost({ predict, targetLufs: sourceLufs + 40, startB: 0, tolerance: 0.5 });
+
+		expect(bracket).toEqual({ kind: "bracket", lower: 18, upper: 42 });
+		expect(predict(18)).toBeLessThan(sourceLufs + 40);
+		expect(predict(42)).toBeGreaterThanOrEqual(sourceLufs + 40);
 	});
 
-	it("lowers the peak gain to meet the target", () => {
-		const targetLufs = -12;
-		const peakGainDb = bisectPeakGainForTargetLufs({
-			sourceLufs,
-			targetLufs,
-			anchors: peakAnchors,
-			histogram: loudHistogram,
-			ceilingPeakGainDb,
-			residual: 0,
-			tolerance: 0.5,
-		});
+	it("brackets a target below the starting body gain", () => {
+		const predict = predictOn(histogramWith([{ loudnessDb: -50.1, peakDb: -47.1, energy: 1 }]), null);
 
-		expect(peakGainDb).toBeLessThan(ceilingPeakGainDb);
-		expect(peakGainDb).toBeGreaterThanOrEqual(BOOST_LOWER_BOUND);
-		expect(
-			Math.abs(predictOutputLufs(sourceLufs, { ...peakAnchors, peakGainDb }, loudHistogram) - targetLufs),
-		).toBeLessThan(0.01);
+		expect(bracketBoost({ predict, targetLufs: sourceLufs - 10, startB: 0, tolerance: 0.5 })).toEqual({
+			kind: "bracket",
+			lower: -18,
+			upper: -6,
+		});
+	});
+
+	it("finds the target unreachable when the energy sits under the floor", () => {
+		const predict = predictOn(histogramWith([{ loudnessDb: -60.1, peakDb: -50.1, energy: 1 }]), -45);
+		const bracket = bracketBoost({ predict, targetLufs: sourceLufs + 10, startB: 10, tolerance: 0.5 });
+
+		expect(bracket.kind).toBe("unreachable");
+		expect(bracket.kind === "unreachable" ? bracket.loudestLufs : Number.NaN).toBeCloseTo(sourceLufs, 12);
 	});
 });
 
@@ -370,13 +184,13 @@ describe("winner election", () => {
 
 const attemptOf = (fields: Partial<IterationAttempt>): IterationAttempt => ({
 	boost: 0,
-	limitDb: -3,
+	peakGainDb: null,
+	ceilingDb: -1,
 	lufsErr: null,
+	peakErr: null,
 	outputLufs: null,
 	outputTruePeakDb: null,
 	outputLra: null,
-	peakGainDb: 0,
-	peakErr: null,
 	...fields,
 });
 
@@ -402,6 +216,46 @@ describe("hasConverged", () => {
 	});
 });
 
+const writeWav = async (path: string, channels: Array<Float64Array>): Promise<void> => {
+	const writer = await WavWriter.create(
+		{ kind: "file", path },
+		{
+			sampleRate: SAMPLE_RATE,
+			channelCount: channels.length,
+			channelMask: 0,
+			bitDepth: "32f",
+			frameCount: channels[0]?.length ?? 0,
+		},
+	);
+
+	await writer.write(channels);
+	await writer.close();
+};
+
+const makeCrossAxis = (seconds: number): Float64Array => {
+	const frameCount = SAMPLE_RATE * seconds;
+	const channel = new Float64Array(frameCount);
+	const bed = dbToLinear(-30);
+	const impulse = dbToLinear(-3);
+	const period = Math.round(SAMPLE_RATE / 8);
+	const impulseStart = SAMPLE_RATE;
+	const impulseEnd = SAMPLE_RATE * 2;
+
+	for (let index = 0; index < frameCount; index++) {
+		const sine = bed * Math.sin((2 * Math.PI * 220 * index) / SAMPLE_RATE);
+
+		channel[index] = index >= impulseStart && index < impulseEnd && index % period === 0 ? impulse : sine;
+	}
+
+	return channel;
+};
+
+interface MeasuredRun {
+	readonly inputPath: string;
+	readonly activeScratch: Scratch;
+	readonly measurement: SourceMeasurement & { readonly truePeakDb: number };
+}
+
 describe("iterateForTargets", () => {
 	let workingDirectory: string;
 	let scratch: Scratch | undefined;
@@ -421,466 +275,155 @@ describe("iterateForTargets", () => {
 		await rm(workingDirectory, { recursive: true, force: true });
 	});
 
-	it("lands a feasible cross-axis pair inside the never-exceed box", async () => {
-		scratch = await Scratch.create();
+	const measureWav = async (name: string, channels: Array<Float64Array>): Promise<MeasuredRun> => {
+		const activeScratch = await Scratch.create();
 
-		const inputPath = join(workingDirectory, "crossaxis.wav");
+		scratch = activeScratch;
 
-		await writeWav(inputPath, [makeCrossAxis(3)]);
+		const inputPath = join(workingDirectory, name);
 
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const targetLufs = -20;
-		const targetTp = -6;
+		await writeWav(inputPath, channels);
 
-		expect(measurement.integratedLufs).toBeLessThan(targetLufs);
-		expect(measurement.truePeakDb).toBeGreaterThan(targetTp);
+		const measurement = await withWavReader(inputPath, async (source) =>
+			measureSource({
+				source,
+				scratch: activeScratch,
+				limitPercentile: 0.995,
+				halfWidthOf: (sampleRate) => windowSamplesFromMs(1, sampleRate),
+			}),
+		);
+		const { truePeakDb } = measurement;
 
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
+		if (truePeakDb === null) {
+			throw new Error(`"${name}" has no measurable true peak`);
+		}
+
+		return { inputPath, activeScratch, measurement: { ...measurement, truePeakDb } };
+	};
+
+	const iterateOn = async (
+		run: MeasuredRun,
+		targets: Targets,
+		options: { kneeDb?: number; neverExpand?: boolean; maxAttempts?: number; tolerance?: number } = {},
+	) => {
+		const { measurement } = run;
+		const pivotDb = Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40;
+
+		return iterateForTargets({
+			inputPath: run.inputPath,
+			scratch: run.activeScratch,
 			sampleRate: measurement.sampleRate,
 			channelCount: measurement.channelCount,
 			weights: measurement.weights,
 			frameCount: measurement.frameCount,
+			outputBitDepth: "32f",
 			anchorBase: {
-				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
+				floorDb: Number.isFinite(measurement.floorAutoDb) ? Math.min(measurement.floorAutoDb, pivotDb - 6) : null,
+				pivotDb,
+				kneeDb: options.kneeDb ?? null,
+				limitDb: Math.min(measurement.limitAutoDb, measurement.truePeakDb),
 			},
 			smoothingMs: 1,
-			targetLufs,
-			targetTp,
-			limitAutoDb: measurement.limitAutoDb,
+			...targets,
 			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 8,
-			tolerance: 0.5,
-			neverExpand: false,
+			maxAttempts: options.maxAttempts ?? 8,
+			tolerance: options.tolerance ?? 0.5,
+			neverExpand: options.neverExpand ?? false,
 			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
+			loudnessEnvelope: measurement.loudnessEnvelope,
+			peakEnvelope: measurement.peakEnvelope,
 		});
+	};
 
-		expect(result.winnerOutputLufs).not.toBeNull();
-		expect(result.winnerOutputTruePeakDb).not.toBeNull();
-		expect(
-			isLegalAttempt(
-				result.winnerOutputLufs ?? Infinity,
-				result.winnerOutputTruePeakDb ?? Infinity,
-				targetLufs,
-				targetTp,
-			),
-		).toBe(true);
+	it("lands a feasible cross-axis pair inside the never-exceed box", async () => {
+		const run = await measureWav("crossaxis.wav", [makeCrossAxis(3)]);
+		const targetLufs = -20;
+		const targetTp = -6;
+
+		expect(run.measurement.integratedLufs).toBeLessThan(targetLufs);
+		expect(run.measurement.truePeakDb).toBeGreaterThan(targetTp);
+
+		const result = await iterateOn(run, { targetLufs, targetTp });
+
+		expect(isLegalAttempt(result.winnerOutputLufs, result.winnerOutputTruePeakDb, targetLufs, targetTp)).toBe(true);
 		expect(Math.abs((result.winnerOutputLufs ?? Infinity) - targetLufs)).toBeLessThan(0.5);
 
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
-	it("gives loudness priority when the body gain cannot bring the output down", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "loudness-priority.wav");
-
-		await writeWav(inputPath, [makeCrossAxis(3)]);
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const targetLufs = -20;
-		const targetTp = -6;
-		const tolerance = 0.5;
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			weights: measurement.weights,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs,
-			targetTp,
-			limitDbOverride: -30,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 8,
-			tolerance,
-			neverExpand: false,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		});
-
-		expect(result.converged).toBe(true);
-		expect(result.winnerOutputLufs ?? Infinity).toBeLessThanOrEqual(targetLufs + 0.01);
-		expect(Math.abs((result.winnerOutputLufs ?? Infinity) - targetLufs)).toBeLessThan(tolerance);
-		expect(result.winnerOutputTruePeakDb ?? Infinity).toBeLessThanOrEqual(targetTp + 0.01);
-		expect(result.bestPeakGainDb).toBeLessThan(targetTp - -30);
-
-		await result.bestSmoothedEnvelope.close();
-	}, 30_000);
-
-	it("keeps the peak gain on the body gain in every attempt when only loudness is targeted", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "lufs-only.wav");
-
-		await writeWav(inputPath, [makeCrossAxis(3)]);
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			weights: measurement.weights,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs: -20,
-			targetTp: undefined,
-			limitDbOverride: -10,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 8,
-			tolerance: 0.5,
-			neverExpand: false,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		});
+	it("reports no peak gain and no peak error in every attempt when only loudness is targeted", async () => {
+		const run = await measureWav("lufs-only.wav", [makeCrossAxis(3)]);
+		const result = await iterateOn(run, { targetLufs: -20, targetTp: undefined });
 
 		expect(result.attempts.length).toBeGreaterThan(0);
 
 		for (const attempt of result.attempts) {
-			expect(attempt.peakGainDb).toBe(attempt.boost);
+			expect(attempt.peakGainDb).toBeNull();
 			expect(attempt.peakErr).toBeNull();
 			expect(attempt.lufsErr).not.toBeNull();
+			expect(attempt.ceilingDb).toBeLessThanOrEqual(0);
 		}
 
 		expect(result.converged).toBe(true);
+		expect(holdsTruePeak(result.winnerOutputTruePeakDb, 0)).toBe(true);
 
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
-	it("converges on loudness alone under neverExpand with the peak gain on the body gain", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "lufs-only-never-expand.wav");
-
-		await writeWav(inputPath, [makeCrossAxis(3)]);
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			weights: measurement.weights,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs: -20,
-			targetTp: undefined,
-			limitDbOverride: -10,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 8,
-			tolerance: 0.5,
-			neverExpand: true,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		});
-
-		expect(result.attempts.length).toBeGreaterThan(0);
-
-		for (const attempt of result.attempts) {
-			expect(attempt.peakGainDb).toBe(attempt.boost);
-		}
-
-		expect(result.converged).toBe(true);
-
-		await result.bestSmoothedEnvelope.close();
-	}, 30_000);
-
-	it("keeps the body gain on the peak gain in every attempt when only the true peak is targeted", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "tp-only.wav");
-
-		await writeWav(inputPath, [makeCrossAxis(3)]);
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
+	it("sets the body gain to the ceiling over the limit when only the true peak is targeted", async () => {
+		const run = await measureWav("tp-only.wav", [makeCrossAxis(3)]);
 		const targetTp = -6;
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			weights: measurement.weights,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: Number.isFinite(measurement.floorAutoDb) ? measurement.floorAutoDb : null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs: undefined,
-			targetTp,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 8,
-			tolerance: 0.5,
-			neverExpand: false,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		});
+		const limitDb = Math.min(run.measurement.limitAutoDb, run.measurement.truePeakDb);
+		const result = await iterateOn(run, { targetLufs: undefined, targetTp });
 
 		expect(result.attempts.length).toBeGreaterThan(0);
-		expect(result.attempts[0]?.boost).toBe(targetTp - result.bestLimitDb);
+		expect(result.attempts[0]?.boost).toBe(targetTp - limitDb);
 
 		for (const attempt of result.attempts) {
-			expect(attempt.boost).toBe(attempt.peakGainDb);
+			expect(attempt.boost).toBe(attempt.ceilingDb - limitDb);
 			expect(attempt.lufsErr).toBeNull();
 			expect(attempt.peakErr).not.toBeNull();
 		}
 
 		expect(result.converged).toBe(true);
-		expect(holdsTruePeak(result.winnerOutputTruePeakDb ?? Infinity, targetTp)).toBe(true);
+		expect(holdsTruePeak(result.winnerOutputTruePeakDb, targetTp)).toBe(true);
 
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
-	it("stops after one attempt when the ceiling peak gain already sits below the lower bound", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "low-ceiling.wav");
-
-		await writeWav(
-			inputPath,
-			createLevelSegments(
-				[
-					{ seconds: 2, frequency: 1000, db: -10 },
-					{ seconds: 2, frequency: 1000, db: -25 },
-				],
-				SAMPLE_RATE,
-				1,
-			),
+	it("keeps the peak gain on the body gain on a downward neverExpand pair", async () => {
+		const run = await measureWav("downward.wav", createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-6)));
+		const targetLufs = run.measurement.integratedLufs - 3;
+		const targetTp = run.measurement.truePeakDb - 1;
+		const result = await iterateOn(
+			run,
+			{ targetLufs, targetTp },
+			{ kneeDb: run.measurement.truePeakDb - 12, neverExpand: true },
 		);
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const targetTp = -48;
-		const limitDb = -10.5;
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			weights: measurement.weights,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs: -70,
-			targetTp,
-			limitDbOverride: limitDb,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 10,
-			tolerance: 0.5,
-			neverExpand: false,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		});
-
-		expect(result.bestLimitDb).toBe(limitDb);
-		expect(result.bestB).toBe(BOOST_LOWER_BOUND);
-		expect(result.bestPeakGainDb).toBeLessThan(BOOST_LOWER_BOUND);
-		expect(result.attempts).toHaveLength(1);
-
-		await result.bestSmoothedEnvelope.close();
-	}, 30_000);
-
-	it("lands the uniform-gain endpoint on a downward neverExpand pair", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "downward.wav");
-
-		await writeWav(inputPath, createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-6)));
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const targetLufs = measurement.integratedLufs - 3;
-		const targetTp = measurement.truePeakDb - 1;
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			weights: measurement.weights,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs,
-			targetTp,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 8,
-			tolerance: 0.5,
-			neverExpand: true,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		});
-		const winner = result.attempts.find(
-			(attempt) => attempt.boost === result.bestB && attempt.peakGainDb === result.bestPeakGainDb,
-		);
+		const winner = result.attempts.find((attempt) => attempt.boost === result.bestB);
 
 		expect(winner).toBeDefined();
 		expect(winner?.peakGainDb).toBe(winner?.boost);
-		expect(result.winnerOutputLufs).not.toBeNull();
 		expect(Math.abs((result.winnerOutputLufs ?? Infinity) - targetLufs)).toBeLessThan(0.5);
-		expect(holdsTruePeak(result.winnerOutputTruePeakDb ?? Infinity, targetTp)).toBe(true);
-
-		await result.bestSmoothedEnvelope.close();
-	}, 30_000);
-
-	it("reports converged false for an infeasible pair while holding the ceiling", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "infeasible.wav");
-
-		await writeWav(inputPath, createSine(SAMPLE_RATE * 3, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const targetLufs = -80;
-		const targetTp = measurement.truePeakDb;
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			weights: measurement.weights,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs,
-			targetTp,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 6,
-			tolerance: 0.5,
-			neverExpand: true,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		});
-
-		expect(result.converged).toBe(false);
-		expect(result.winnerOutputTruePeakDb).not.toBeNull();
-		expect(holdsTruePeak(result.winnerOutputTruePeakDb ?? Infinity, targetTp)).toBe(true);
-		expect(result.winnerOutputLufs ?? -Infinity).toBeGreaterThan(targetLufs);
+		expect(holdsTruePeak(result.winnerOutputTruePeakDb, targetTp)).toBe(true);
 
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
 	it("reports an attempt's true peak without a floor", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "tiny-peak.wav");
-
-		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
+		const run = await measureWav("tiny-peak.wav", createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
 
 		vi.spyOn(envelope, "renderEnvelope").mockImplementation(async ({ dest }) => {
-			const samples = new Float64Array(measurement.frameCount).fill(1e-12);
+			const samples = new Float64Array(run.measurement.frameCount).fill(1e-12);
 
 			await dest.append(samples, samples.length);
 		});
 
-		const result = await iterateForTargets({
-			inputPath,
-			scratch,
-			sampleRate: measurement.sampleRate,
-			channelCount: measurement.channelCount,
-			weights: measurement.weights,
-			frameCount: measurement.frameCount,
-			anchorBase: {
-				floorDb: null,
-				pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-			},
-			smoothingMs: 1,
-			targetLufs: measurement.integratedLufs,
-			targetTp: measurement.truePeakDb,
-			limitAutoDb: measurement.limitAutoDb,
-			sourceLufs: measurement.integratedLufs,
-			sourcePeakDb: measurement.truePeakDb,
-			maxAttempts: 1,
-			tolerance: 0.5,
-			neverExpand: false,
-			histogram: measurement.detectionHistogram,
-			detectionEnvelope: measurement.detectionEnvelope,
-		});
+		const result = await iterateOn(
+			run,
+			{ targetLufs: run.measurement.integratedLufs, targetTp: run.measurement.truePeakDb },
+			{ maxAttempts: 1 },
+		);
 
 		expect(Math.abs((result.attempts[0]?.outputTruePeakDb ?? 0) - -252)).toBeLessThan(0.05);
 		expect(Math.abs((result.winnerOutputTruePeakDb ?? 0) - -252)).toBeLessThan(0.05);
@@ -888,32 +431,28 @@ describe("iterateForTargets", () => {
 		await result.bestSmoothedEnvelope.close();
 	}, 30_000);
 
-	it("closes the elected envelope when a later attempt throws", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "throw-after-winner.wav");
-
-		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
+	const spyOnEnvelopeClose = (labels: ReadonlyArray<string>, rejecting: ReadonlyArray<string> = []) => {
 		const originalCreate = SampleFile.create.bind(SampleFile);
-		let electedClose: ReturnType<typeof vi.spyOn> | undefined;
-		let renderCount = 0;
+		const closes = new Map<string, unknown>();
 
 		vi.spyOn(SampleFile, "create").mockImplementation(async (createScratch, label) => {
 			const file = await originalCreate(createScratch, label);
 
-			if (label === "envelope-0") {
-				electedClose = vi.spyOn(file, "close");
+			if (rejecting.includes(label)) {
+				closes.set(label, vi.spyOn(file, "close").mockRejectedValue(new Error(`${label} close failed`)));
+			} else if (labels.includes(label)) {
+				closes.set(label, vi.spyOn(file, "close"));
 			}
 
 			return file;
 		});
+
+		return closes;
+	};
+
+	const renderFailingAfterFirst = (frameCount: number): void => {
+		let renderCount = 0;
+
 		vi.spyOn(envelope, "renderEnvelope").mockImplementation(async ({ dest }) => {
 			renderCount += 1;
 
@@ -921,180 +460,74 @@ describe("iterateForTargets", () => {
 				throw new Error("injected later-attempt failure");
 			}
 
-			const samples = new Float64Array(measurement.frameCount).fill(1);
+			const samples = new Float64Array(frameCount).fill(1);
 
 			await dest.append(samples, samples.length);
 		});
+	};
+
+	it("closes the elected envelope when a later attempt throws", async () => {
+		const run = await measureWav(
+			"throw-after-winner.wav",
+			createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)),
+		);
+		const closes = spyOnEnvelopeClose(["envelope-0"]);
+
+		renderFailingAfterFirst(run.measurement.frameCount);
 
 		await expect(
-			iterateForTargets({
-				inputPath,
-				scratch,
-				sampleRate: measurement.sampleRate,
-				channelCount: measurement.channelCount,
-				weights: measurement.weights,
-				frameCount: measurement.frameCount,
-				anchorBase: {
-					floorDb: null,
-					pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-				},
-				smoothingMs: 1,
-				targetLufs: measurement.integratedLufs - 0.5,
-				targetTp: measurement.truePeakDb - 20,
-				limitAutoDb: measurement.limitAutoDb,
-				sourceLufs: measurement.integratedLufs,
-				sourcePeakDb: measurement.truePeakDb,
-				maxAttempts: 2,
-				tolerance: 0.01,
-				neverExpand: false,
-				histogram: measurement.detectionHistogram,
-				detectionEnvelope: measurement.detectionEnvelope,
-			}),
+			iterateOn(
+				run,
+				{ targetLufs: run.measurement.integratedLufs - 0.5, targetTp: run.measurement.truePeakDb - 20 },
+				{ maxAttempts: 2, tolerance: 0.01 },
+			),
 		).rejects.toThrow(/injected later-attempt failure/);
 
-		expect(electedClose).toBeDefined();
-		expect(electedClose).toHaveBeenCalled();
+		expect(closes.get("envelope-0")).toHaveBeenCalled();
 	}, 30_000);
 
-	it("closes the elected envelope when detectionEnvelope.close rejects", async () => {
-		scratch = await Scratch.create();
+	it("closes the elected envelope when the peak envelope's close rejects", async () => {
+		const run = await measureWav("peak-close.wav", createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
+		const closes = spyOnEnvelopeClose(["envelope-0"]);
 
-		const inputPath = join(workingDirectory, "detection-close.wav");
-
-		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const originalCreate = SampleFile.create.bind(SampleFile);
-		let electedClose: ReturnType<typeof vi.spyOn> | undefined;
-		let renderCount = 0;
-
-		vi.spyOn(measurement.detectionEnvelope, "close").mockRejectedValue(new Error("detection close failed"));
-		vi.spyOn(SampleFile, "create").mockImplementation(async (createScratch, label) => {
-			const file = await originalCreate(createScratch, label);
-
-			if (label === "envelope-0") {
-				electedClose = vi.spyOn(file, "close");
-			}
-
-			return file;
-		});
-		vi.spyOn(envelope, "renderEnvelope").mockImplementation(async ({ dest }) => {
-			renderCount += 1;
-
-			if (renderCount > 1) {
-				throw new Error("injected later-attempt failure");
-			}
-
-			const samples = new Float64Array(measurement.frameCount).fill(1);
-
-			await dest.append(samples, samples.length);
-		});
+		vi.spyOn(run.measurement.peakEnvelope, "close").mockRejectedValue(new Error("peak close failed"));
+		renderFailingAfterFirst(run.measurement.frameCount);
 
 		await expect(
-			iterateForTargets({
-				inputPath,
-				scratch,
-				sampleRate: measurement.sampleRate,
-				channelCount: measurement.channelCount,
-				weights: measurement.weights,
-				frameCount: measurement.frameCount,
-				anchorBase: {
-					floorDb: null,
-					pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-				},
-				smoothingMs: 1,
-				targetLufs: measurement.integratedLufs - 0.5,
-				targetTp: measurement.truePeakDb - 20,
-				limitAutoDb: measurement.limitAutoDb,
-				sourceLufs: measurement.integratedLufs,
-				sourcePeakDb: measurement.truePeakDb,
-				maxAttempts: 2,
-				tolerance: 0.01,
-				neverExpand: false,
-				histogram: measurement.detectionHistogram,
-				detectionEnvelope: measurement.detectionEnvelope,
-			}),
-		).rejects.toThrow(/detection close failed/);
+			iterateOn(
+				run,
+				{ targetLufs: run.measurement.integratedLufs - 0.5, targetTp: run.measurement.truePeakDb - 20 },
+				{ maxAttempts: 2, tolerance: 0.01 },
+			),
+		).rejects.toThrow(/peak close failed/);
 
-		expect(electedClose).toBeDefined();
-		expect(electedClose).toHaveBeenCalled();
+		expect(closes.get("envelope-0")).toHaveBeenCalled();
 	}, 30_000);
 
 	it("closes the new winner when the previous winner's close rejects", async () => {
-		scratch = await Scratch.create();
-
-		const inputPath = join(workingDirectory, "swap-close.wav");
-
-		await writeWav(inputPath, createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-		const originalCreate = SampleFile.create.bind(SampleFile);
-		let previousClose: ReturnType<typeof vi.spyOn> | undefined;
-		let nextClose: ReturnType<typeof vi.spyOn> | undefined;
-
-		vi.spyOn(SampleFile, "create").mockImplementation(async (createScratch, label) => {
-			const file = await originalCreate(createScratch, label);
-
-			if (label === "envelope-0") {
-				previousClose = vi.spyOn(file, "close").mockRejectedValue(new Error("previous winner close failed"));
-			}
-
-			if (label === "envelope-1") {
-				nextClose = vi.spyOn(file, "close");
-			}
-
-			return file;
-		});
+		const run = await measureWav("swap-close.wav", createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-12)));
+		const closes = spyOnEnvelopeClose(["envelope-1"], ["envelope-0"]);
 		let renderCount = 0;
 
 		vi.spyOn(envelope, "renderEnvelope").mockImplementation(async ({ dest }) => {
 			const gain = renderCount === 0 ? 10 : 1;
 
 			renderCount++;
-			const samples = new Float64Array(measurement.frameCount).fill(gain);
+
+			const samples = new Float64Array(run.measurement.frameCount).fill(gain);
 
 			await dest.append(samples, samples.length);
 		});
 
 		await expect(
-			iterateForTargets({
-				inputPath,
-				scratch,
-				sampleRate: measurement.sampleRate,
-				channelCount: measurement.channelCount,
-				weights: measurement.weights,
-				frameCount: measurement.frameCount,
-				anchorBase: {
-					floorDb: null,
-					pivotDb: Number.isFinite(measurement.pivotAutoDb) ? measurement.pivotAutoDb : -40,
-				},
-				smoothingMs: 1,
-				targetLufs: measurement.integratedLufs,
-				targetTp: measurement.truePeakDb,
-				limitAutoDb: measurement.limitAutoDb,
-				sourceLufs: measurement.integratedLufs,
-				sourcePeakDb: measurement.truePeakDb,
-				maxAttempts: 2,
-				tolerance: 0.5,
-				neverExpand: false,
-				histogram: measurement.detectionHistogram,
-				detectionEnvelope: measurement.detectionEnvelope,
-			}),
-		).rejects.toThrow(/previous winner close failed/);
+			iterateOn(
+				run,
+				{ targetLufs: run.measurement.integratedLufs, targetTp: run.measurement.truePeakDb },
+				{ maxAttempts: 2 },
+			),
+		).rejects.toThrow(/envelope-0 close failed/);
 
-		expect(previousClose).toBeDefined();
-		expect(previousClose).toHaveBeenCalled();
-		expect(nextClose).toBeDefined();
-		expect(nextClose).toHaveBeenCalled();
+		expect(closes.get("envelope-0")).toHaveBeenCalled();
+		expect(closes.get("envelope-1")).toHaveBeenCalled();
 	}, 30_000);
 });

@@ -4,33 +4,35 @@ import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoud
 import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
 import { linearToDb, lufsOrNull, peakDbOrNull } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
+import { quantizerOf } from "../../../wav/utils/sampleCodec";
 import { forEachEnvelopedBlock } from "./apply";
 import { gainDbAt } from "./curve";
 import { renderEnvelope } from "./envelope";
+import { CELL_COUNT, cellCentreDb } from "./measureSource";
 import { holdHalfWidthOf, windowSamplesFromMs } from "./window";
 import type { Anchors } from "./curve";
 import type { DetectionHistogram } from "./measureSource";
 import type { Scratch } from "../../../utils/Scratch";
+import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
-export const BOOST_LOWER_BOUND = -30;
-export const BOOST_UPPER_BOUND = 30;
+const DEFAULT_CEILING_DB = 0;
 
-const LINEAR_AMPLITUDE_EPSILON = 1e-12;
-const LIMIT_EPSILON_DB = 0.01;
 const CHECK_GRAIN_DB = 0.01;
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_TOLERANCE = 0.5;
 const MAX_BISECT_ITERATIONS = 50;
+const BRACKET_STEP_DB = 6;
+const MAX_BRACKET_STEPS = 64;
 
 export interface IterationAttempt {
 	boost: number;
-	limitDb: number;
+	peakGainDb: number | null;
+	ceilingDb: number;
 	lufsErr: number | null;
+	peakErr: number | null;
 	outputLufs: number | null;
 	outputTruePeakDb: number | null;
 	outputLra: number | null;
-	peakGainDb: number;
-	peakErr: number | null;
 }
 
 export type Targets =
@@ -40,85 +42,115 @@ export type Targets =
 export interface IterateResult {
 	bestSmoothedEnvelope: SampleFile;
 	bestB: number;
-	bestLimitDb: number;
-	bestPeakGainDb: number;
+	bestPeakGainDb: number | null;
 	attempts: ReadonlyArray<IterationAttempt>;
 	converged: boolean;
+	unreachableLufs: number | null;
 	winnerOutputLufs: number | null;
 	winnerOutputTruePeakDb: number | null;
 	winnerOutputLra: number | null;
 }
 
+export interface AnchorBase {
+	readonly floorDb: number | null;
+	readonly pivotDb: number;
+	readonly kneeDb: number | null;
+	readonly limitDb: number;
+}
+
 export const predictOutputLufs = (sourceLufs: number, anchors: Anchors, histogram: DetectionHistogram): number => {
-	const { heldEnergy, heldBucketMax, totalSamples } = histogram;
-	const bucketCount = heldEnergy.length;
-
-	if (bucketCount === 0 || heldBucketMax <= 0 || totalSamples === 0) {
-		return -Infinity;
-	}
-
 	if (!Number.isFinite(sourceLufs)) {
 		return -Infinity;
 	}
 
-	const bucketWidth = heldBucketMax / bucketCount;
-	let weightedGainEnergy = 0;
-	let weightedSourceEnergy = 0;
+	const { energy } = histogram;
+	let sourceEnergy = 0;
+	let outputEnergy = 0;
 
-	for (let bucketIndex = 0; bucketIndex < bucketCount; bucketIndex++) {
-		const energy = heldEnergy[bucketIndex] ?? 0;
+	for (let loudnessCell = 0; loudnessCell < CELL_COUNT; loudnessCell++) {
+		const row = loudnessCell * CELL_COUNT;
+		const loudnessDb = cellCentreDb(loudnessCell);
 
-		if (energy === 0) {
-			continue;
+		for (let peakCell = 0; peakCell < CELL_COUNT; peakCell++) {
+			const cellEnergy = energy[row + peakCell] ?? 0;
+
+			if (cellEnergy === 0) {
+				continue;
+			}
+
+			sourceEnergy += cellEnergy;
+			outputEnergy += cellEnergy * Math.pow(10, gainDbAt(loudnessDb, cellCentreDb(peakCell), anchors) / 10);
 		}
-
-		const centreLinear = (bucketIndex + 0.5) * bucketWidth;
-
-		if (centreLinear < LINEAR_AMPLITUDE_EPSILON) {
-			continue;
-		}
-
-		const centreDb = 20 * Math.log10(centreLinear);
-		const gainDb = gainDbAt(centreDb, anchors);
-		const gainLinear = Math.pow(10, gainDb / 20);
-
-		weightedSourceEnergy += energy;
-		weightedGainEnergy += energy * gainLinear * gainLinear;
 	}
 
-	if (weightedSourceEnergy <= 0 || weightedGainEnergy <= 0) {
+	if (sourceEnergy <= 0 || outputEnergy <= 0) {
 		return -Infinity;
 	}
 
-	return sourceLufs + 10 * Math.log10(weightedGainEnergy / weightedSourceEnergy);
+	return sourceLufs + 10 * Math.log10(outputEnergy / sourceEnergy);
 };
 
-export const assignPeakGainDb = (boost: number, tpCap: number | null, neverExpand: boolean): number => {
-	if (tpCap === null) {
-		return boost;
+const peakGainDbOf = (args: { boost: number; ceilingDb: number; limitDb: number; expansionDb: number }): number =>
+	Math.min(args.ceilingDb - args.limitDb, args.boost + args.expansionDb);
+
+export const bracketBoost = (args: {
+	predict: (B: number) => number;
+	targetLufs: number;
+	startB: number;
+	tolerance: number;
+}):
+	| { readonly kind: "bracket"; readonly lower: number; readonly upper: number }
+	| { readonly kind: "unreachable"; readonly loudestLufs: number; readonly boost: number } => {
+	const { predict, targetLufs, startB, tolerance } = args;
+	const startLufs = predict(startB);
+
+	if (startLufs === targetLufs) {
+		return { kind: "bracket", lower: startB, upper: startB };
 	}
 
-	return neverExpand ? Math.min(boost, tpCap) : tpCap;
-};
+	const direction = startLufs < targetLufs ? 1 : -1;
+	let previousB = startB;
+	let previousLufs = startLufs;
+	let step = BRACKET_STEP_DB;
 
-const truePeakResidual = (outputTruePeakDb: number, limitDb: number, peakGainDb: number): number =>
-	outputTruePeakDb - (limitDb + peakGainDb);
+	for (let stepIndex = 0; stepIndex < MAX_BRACKET_STEPS; stepIndex++) {
+		const candidateB = previousB + direction * step;
+		const candidateLufs = predict(candidateB);
+
+		if (direction > 0 ? candidateLufs >= targetLufs : candidateLufs <= targetLufs) {
+			return {
+				kind: "bracket",
+				lower: Math.min(previousB, candidateB),
+				upper: Math.max(previousB, candidateB),
+			};
+		}
+
+		if (direction > 0 && !(candidateLufs - previousLufs >= tolerance / 10)) {
+			return { kind: "unreachable", loudestLufs: Math.max(candidateLufs, previousLufs), boost: candidateB };
+		}
+
+		previousB = candidateB;
+		previousLufs = candidateLufs;
+		step *= 2;
+	}
+
+	return { kind: "unreachable", loudestLufs: previousLufs, boost: previousB };
+};
 
 const bisectRoot = (args: {
 	lower: number;
 	upper: number;
-	lowerError: number;
 	errorAt: (candidate: number) => number;
 	tolerance: number;
 }): number => {
 	const { errorAt, tolerance } = args;
 	let { lower, upper } = args;
+	let workingLowerError = errorAt(lower);
 	let best = lower;
-	let bestAbsError = Math.abs(args.lowerError);
-	let workingLowerError = args.lowerError;
+	let bestAbsError = Math.abs(workingLowerError);
 	const subToleranceBracket = tolerance / 100;
 
-	for (let iteration = 0; iteration < MAX_BISECT_ITERATIONS; iteration++) {
+	for (let iteration = 0; iteration < MAX_BISECT_ITERATIONS && upper - lower >= subToleranceBracket; iteration++) {
 		const mid = 0.5 * (lower + upper);
 		const midError = errorAt(mid);
 
@@ -133,97 +165,36 @@ const bisectRoot = (args: {
 		} else {
 			upper = mid;
 		}
-
-		if (upper - lower < subToleranceBracket) {
-			break;
-		}
 	}
 
 	return best;
 };
 
-export const bisectBForTargetLufs = (args: {
-	sourceLufs: number;
+const searchBoost = (args: {
+	predict: (B: number) => number;
 	targetLufs: number;
-	anchors: Pick<Anchors, "floorDb" | "pivotDb" | "limitDb">;
-	histogram: DetectionHistogram;
-	tpCap: number | null;
-	neverExpand: boolean;
-	residual: number;
+	startB: number;
 	tolerance: number;
-}): number => {
-	const { sourceLufs, targetLufs, anchors: anchorBase, histogram, tpCap, neverExpand, residual, tolerance } = args;
+}): { readonly boost: number; readonly unreachableLufs: number | null } => {
+	const bracket = bracketBoost(args);
 
-	if (!Number.isFinite(sourceLufs)) {
-		return 0;
+	if (bracket.kind === "unreachable") {
+		return { boost: bracket.boost, unreachableLufs: bracket.loudestLufs };
 	}
 
-	const predictAt = (candidateB: number): number => {
-		const candidateAnchors: Anchors = {
-			floorDb: anchorBase.floorDb,
-			pivotDb: anchorBase.pivotDb,
-			limitDb: anchorBase.limitDb,
-			B: candidateB,
-			peakGainDb: assignPeakGainDb(candidateB, tpCap, neverExpand),
-		};
+	if (bracket.lower === bracket.upper) {
+		return { boost: bracket.lower, unreachableLufs: null };
+	}
 
-		return predictOutputLufs(sourceLufs, candidateAnchors, histogram) + residual;
+	return {
+		boost: bisectRoot({
+			lower: bracket.lower,
+			upper: bracket.upper,
+			errorAt: (candidateB) => args.predict(candidateB) - args.targetLufs,
+			tolerance: args.tolerance,
+		}),
+		unreachableLufs: null,
 	};
-
-	const lower = BOOST_LOWER_BOUND;
-	const upper = BOOST_UPPER_BOUND;
-	const lowerLufs = predictAt(lower);
-	const upperLufs = predictAt(upper);
-	const lowerError = lowerLufs - targetLufs;
-	const upperError = upperLufs - targetLufs;
-
-	if (
-		!Number.isFinite(lowerError) ||
-		!Number.isFinite(upperError) ||
-		Math.sign(lowerError) === Math.sign(upperError)
-	) {
-		const lowerAbs = Number.isFinite(lowerError) ? Math.abs(lowerError) : Infinity;
-		const upperAbs = Number.isFinite(upperError) ? Math.abs(upperError) : Infinity;
-
-		return lowerAbs <= upperAbs ? lower : upper;
-	}
-
-	return bisectRoot({
-		lower,
-		upper,
-		lowerError,
-		errorAt: (candidateB) => predictAt(candidateB) - targetLufs,
-		tolerance,
-	});
-};
-
-export const bisectPeakGainForTargetLufs = (args: {
-	sourceLufs: number;
-	targetLufs: number;
-	anchors: Omit<Anchors, "peakGainDb">;
-	histogram: DetectionHistogram;
-	ceilingPeakGainDb: number;
-	residual: number;
-	tolerance: number;
-}): number => {
-	const { sourceLufs, targetLufs, anchors: anchorBase, histogram, ceilingPeakGainDb, residual, tolerance } = args;
-	const errorAt = (candidatePeakGainDb: number): number =>
-		predictOutputLufs(sourceLufs, { ...anchorBase, peakGainDb: candidatePeakGainDb }, histogram) +
-		residual -
-		targetLufs;
-	const ceilingError = errorAt(ceilingPeakGainDb);
-
-	if (!(ceilingError > 0) || ceilingPeakGainDb <= BOOST_LOWER_BOUND) {
-		return ceilingPeakGainDb;
-	}
-
-	const lowerError = errorAt(BOOST_LOWER_BOUND);
-
-	if (!(lowerError <= 0)) {
-		return BOOST_LOWER_BOUND;
-	}
-
-	return bisectRoot({ lower: BOOST_LOWER_BOUND, upper: ceilingPeakGainDb, lowerError, errorAt, tolerance });
 };
 
 const grainedDb = (errorDb: number): number => Math.round(errorDb / CHECK_GRAIN_DB) * CHECK_GRAIN_DB;
@@ -343,43 +314,8 @@ export const hasConverged = (
 	);
 };
 
-const clampBoost = (boost: number): number => {
-	if (!Number.isFinite(boost)) {
-		return 0;
-	}
-
-	if (boost < BOOST_LOWER_BOUND) {
-		return BOOST_LOWER_BOUND;
-	}
-
-	if (boost > BOOST_UPPER_BOUND) {
-		return BOOST_UPPER_BOUND;
-	}
-
-	return boost;
-};
-
-const clampLimit = (limitDb: number, pivotDb: number, sourcePeakDb: number): number => {
-	if (!Number.isFinite(limitDb)) {
-		return sourcePeakDb;
-	}
-
-	const lower = pivotDb + LIMIT_EPSILON_DB;
-
-	if (lower > sourcePeakDb) {
-		return sourcePeakDb;
-	}
-
-	if (limitDb < lower) {
-		return lower;
-	}
-
-	if (limitDb > sourcePeakDb) {
-		return sourcePeakDb;
-	}
-
-	return limitDb;
-};
+const nextCeilingDb = (ceilingDb: number, effectiveCeilingDb: number, outputTruePeakDb: number): number =>
+	Math.min(ceilingDb, effectiveCeilingDb - (outputTruePeakDb - ceilingDb));
 
 type MeasuredOutput = Pick<IterationAttempt, "outputLufs" | "outputLra" | "outputTruePeakDb"> & {
 	readonly residualLufs: number;
@@ -391,14 +327,15 @@ const measureAttemptOutput = async (args: {
 	sampleRate: number;
 	channelCount: number;
 	weights: Float64Array;
+	quantize: (sample: number) => number;
 	envelope: SampleFile;
 }): Promise<MeasuredOutput> => {
-	const { inputPath, sampleRate, channelCount, weights, envelope } = args;
+	const { inputPath, sampleRate, channelCount, weights, quantize, envelope } = args;
 	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, weights);
 	const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, weights);
 	const truePeakAccumulator = new TruePeakAccumulator(channelCount);
 
-	await forEachEnvelopedBlock(inputPath, envelope, (channels, frameCount) => {
+	await forEachEnvelopedBlock(inputPath, envelope, quantize, (channels, frameCount) => {
 		lufsAccumulator.push(channels, frameCount);
 		shortTermAccumulator.push(channels, frameCount);
 		truePeakAccumulator.push(channels, frameCount);
@@ -424,17 +361,16 @@ export const iterateForTargets = async (
 		channelCount: number;
 		weights: Float64Array;
 		frameCount: number;
-		anchorBase: { floorDb: number | null; pivotDb: number };
+		outputBitDepth: SourceBitDepth;
+		anchorBase: AnchorBase;
 		smoothingMs: number;
-		limitDbOverride?: number;
-		limitAutoDb: number;
 		sourceLufs: number;
-		sourcePeakDb: number;
 		maxAttempts?: number;
 		tolerance?: number;
 		neverExpand: boolean;
 		histogram: DetectionHistogram;
-		detectionEnvelope: SampleFile;
+		loudnessEnvelope: SampleFile;
+		peakEnvelope: SampleFile;
 		onAttempt?: (attempt: IterationAttempt, attemptIndex: number) => void;
 	} & Targets,
 ): Promise<IterateResult> => {
@@ -445,116 +381,95 @@ export const iterateForTargets = async (
 		channelCount,
 		weights,
 		frameCount,
+		outputBitDepth,
 		anchorBase,
 		smoothingMs,
 		targetLufs,
 		targetTp,
-		limitDbOverride,
-		limitAutoDb,
 		sourceLufs,
-		sourcePeakDb,
 		maxAttempts = DEFAULT_MAX_ATTEMPTS,
 		tolerance = DEFAULT_TOLERANCE,
 		neverExpand,
 		histogram,
-		detectionEnvelope,
+		loudnessEnvelope,
+		peakEnvelope,
 		onAttempt,
 	} = args;
+	const closeEnvelopes = async (): Promise<void> => {
+		try {
+			await loudnessEnvelope.close();
+		} finally {
+			await peakEnvelope.close();
+		}
+	};
 
 	if (channelCount === 0 || frameCount === 0) {
-		await detectionEnvelope.close();
+		await closeEnvelopes();
 
 		return {
 			bestSmoothedEnvelope: await SampleFile.create(scratch, "empty-envelope"),
 			bestB: 0,
-			bestLimitDb: sourcePeakDb,
-			bestPeakGainDb: 0,
+			bestPeakGainDb: null,
 			attempts: [],
 			converged: false,
+			unreachableLufs: null,
 			winnerOutputLufs: null,
 			winnerOutputTruePeakDb: null,
 			winnerOutputLra: null,
 		};
 	}
 
-	let currentLimit: number;
-
-	if (limitDbOverride !== undefined) {
-		currentLimit = clampLimit(limitDbOverride, anchorBase.pivotDb, sourcePeakDb);
-	} else if (Number.isFinite(limitAutoDb)) {
-		currentLimit = clampLimit(limitAutoDb, anchorBase.pivotDb, sourcePeakDb);
-	} else {
-		currentLimit = sourcePeakDb;
-	}
-
+	const { limitDb } = anchorBase;
+	const ceilingDb = targetTp ?? DEFAULT_CEILING_DB;
+	const isArmOn = anchorBase.kneeDb !== null;
+	const startBoost = targetLufs === undefined ? ceilingDb - limitDb : targetLufs - sourceLufs;
+	const expansionDb = neverExpand ? 0 : Math.max(0, ceilingDb - limitDb - startBoost);
 	const holdHalfWidth = holdHalfWidthOf(windowSamplesFromMs(smoothingMs, sampleRate));
-	let residual = 0;
-	let peakResidual = 0;
+	const quantize = quantizerOf(outputBitDepth);
 	const attempts: Array<IterationAttempt> = [];
-	const tpCapAt = (tp: number): number => tp - currentLimit - peakResidual;
-	const tpCapOf = (): number | null => (targetTp === undefined ? null : tpCapAt(targetTp));
-	const lufsBoostOf = (lufs: number): number =>
-		bisectBForTargetLufs({
-			sourceLufs,
-			targetLufs: lufs,
-			anchors: { floorDb: anchorBase.floorDb, pivotDb: anchorBase.pivotDb, limitDb: currentLimit },
-			histogram,
-			tpCap: tpCapOf(),
-			neverExpand,
-			residual,
-			tolerance,
-		});
-	const boostOf = (): number =>
-		args.targetLufs === undefined
-			? tpCapAt(args.targetTp)
-			: clampBoost(nextSearchBoost(attempts, lufsBoostOf(args.targetLufs), args.targetLufs));
-	const peakGainDbOf = (boost: number): number => {
-		const ceilingPeakGainDb = assignPeakGainDb(boost, tpCapOf(), neverExpand);
-
-		if (targetLufs === undefined || targetTp === undefined || boost !== BOOST_LOWER_BOUND) {
-			return ceilingPeakGainDb;
+	let effectiveCeilingDb = ceilingDb;
+	let residual = 0;
+	const anchorsAt = (boost: number): Anchors => ({
+		...anchorBase,
+		ceilingDb: effectiveCeilingDb,
+		B: boost,
+		peakGainDb: isArmOn ? peakGainDbOf({ boost, ceilingDb: effectiveCeilingDb, limitDb, expansionDb }) : boost,
+	});
+	const nextBoost = (): { readonly boost: number; readonly unreachableLufs: number | null } => {
+		if (targetLufs === undefined) {
+			return { boost: effectiveCeilingDb - limitDb, unreachableLufs: null };
 		}
 
-		return bisectPeakGainForTargetLufs({
-			sourceLufs,
+		const found = searchBoost({
+			predict: (boost) => predictOutputLufs(sourceLufs, anchorsAt(boost), histogram) + residual,
 			targetLufs,
-			anchors: { floorDb: anchorBase.floorDb, pivotDb: anchorBase.pivotDb, limitDb: currentLimit, B: boost },
-			histogram,
-			ceilingPeakGainDb,
-			residual,
+			startB: startBoost,
 			tolerance,
 		});
+
+		return found.unreachableLufs === null
+			? { boost: nextSearchBoost(attempts, found.boost, targetLufs), unreachableLufs: null }
+			: found;
 	};
-	let currentBoost = boostOf();
-	let currentPeakGainDb = peakGainDbOf(currentBoost);
 	let winningAttempt: IterationAttempt | undefined;
-	let bestBoost = currentBoost;
-	let bestPeakGainDb = currentPeakGainDb;
-	let winnerOutputLufs: number | null = null;
-	let winnerOutputTruePeakDb: number | null = null;
-	let winnerOutputLra: number | null = null;
 	let winningEnvelope: SampleFile | undefined;
+	let unreachableLufs: number | null = null;
 
 	try {
 		for (let attemptIndex = 0; attemptIndex < maxAttempts; attemptIndex++) {
-			const anchors: Anchors = {
-				floorDb: anchorBase.floorDb,
-				pivotDb: anchorBase.pivotDb,
-				limitDb: currentLimit,
-				B: currentBoost,
-				peakGainDb: currentPeakGainDb,
-			};
-			const predictedLufs = predictOutputLufs(sourceLufs, anchors, histogram);
+			const next = nextBoost();
+			const anchors = anchorsAt(next.boost);
 			const dest = await SampleFile.create(scratch, `envelope-${attemptIndex}`);
 			let measured: MeasuredOutput;
 
 			try {
-				await renderEnvelope({ detectionEnvelope, dest, anchors, holdHalfWidth });
+				await renderEnvelope({ loudnessEnvelope, peakEnvelope, dest, anchors, holdHalfWidth });
 				measured = await measureAttemptOutput({
 					inputPath,
 					sampleRate,
 					channelCount,
 					weights,
+					quantize,
 					envelope: dest,
 				});
 			} catch (error: unknown) {
@@ -564,29 +479,24 @@ export const iterateForTargets = async (
 			}
 
 			const attempt: IterationAttempt = {
-				boost: currentBoost,
-				limitDb: currentLimit,
+				boost: next.boost,
+				peakGainDb: isArmOn ? anchors.peakGainDb : null,
+				ceilingDb: effectiveCeilingDb,
 				lufsErr: targetLufs === undefined || measured.outputLufs === null ? null : measured.outputLufs - targetLufs,
-				outputLufs: measured.outputLufs,
-				outputTruePeakDb: measured.outputTruePeakDb,
-				outputLra: measured.outputLra,
-				peakGainDb: currentPeakGainDb,
 				peakErr:
 					targetTp === undefined || measured.outputTruePeakDb === null
 						? null
 						: measured.outputTruePeakDb - targetTp,
+				outputLufs: measured.outputLufs,
+				outputTruePeakDb: measured.outputTruePeakDb,
+				outputLra: measured.outputLra,
 			};
 
 			attempts.push(attempt);
 			onAttempt?.(attempt, attemptIndex);
 
-			if (attemptBeatsWinner(attempt, winningAttempt, targetLufs, targetTp)) {
+			if (attemptBeatsWinner(attempt, winningAttempt, targetLufs, ceilingDb)) {
 				winningAttempt = attempt;
-				bestBoost = currentBoost;
-				bestPeakGainDb = currentPeakGainDb;
-				winnerOutputLufs = measured.outputLufs;
-				winnerOutputTruePeakDb = measured.outputTruePeakDb;
-				winnerOutputLra = measured.outputLra;
 
 				const previousWinner = winningEnvelope;
 
@@ -599,40 +509,37 @@ export const iterateForTargets = async (
 				await dest.close();
 			}
 
-			residual = measured.residualLufs - predictedLufs;
-			peakResidual = truePeakResidual(measured.residualTruePeakDb, currentLimit, currentPeakGainDb);
+			if (targetLufs !== undefined) {
+				const measuredResidual = measured.residualLufs - predictOutputLufs(sourceLufs, anchors, histogram);
 
-			const boostBoundExhausted =
-				targetLufs !== undefined &&
-				((currentBoost === BOOST_UPPER_BOUND && measured.residualLufs < targetLufs) ||
-					(currentBoost === BOOST_LOWER_BOUND &&
-						currentPeakGainDb <= BOOST_LOWER_BOUND &&
-						measured.residualLufs > targetLufs));
+				residual = Number.isFinite(measuredResidual) ? measuredResidual : 0;
+			}
+
+			effectiveCeilingDb = nextCeilingDb(ceilingDb, effectiveCeilingDb, measured.residualTruePeakDb);
+
+			unreachableLufs = next.unreachableLufs;
 
 			if (
-				hasConverged(winningAttempt, targetLufs, targetTp, tolerance) ||
-				(boostBoundExhausted && holdsTruePeak(measured.outputTruePeakDb, targetTp)) ||
-				attemptIndex === maxAttempts - 1
+				hasConverged(winningAttempt, targetLufs, ceilingDb, tolerance) ||
+				(unreachableLufs !== null &&
+					isLegalAttempt(attempt.outputLufs, attempt.outputTruePeakDb, targetLufs, ceilingDb))
 			) {
 				break;
 			}
-
-			currentBoost = boostOf();
-			currentPeakGainDb = peakGainDbOf(currentBoost);
 		}
 
-		const converged = hasConverged(winningAttempt, targetLufs, targetTp, tolerance);
-
+		const converged = hasConverged(winningAttempt, targetLufs, ceilingDb, tolerance);
 		const result: IterateResult = {
 			bestSmoothedEnvelope: winningEnvelope ?? (await SampleFile.create(scratch, "empty-envelope")),
-			bestB: bestBoost,
-			bestLimitDb: currentLimit,
-			bestPeakGainDb,
+			bestB: winningAttempt?.boost ?? 0,
+			bestPeakGainDb: winningAttempt?.peakGainDb ?? null,
 			attempts,
 			converged,
-			winnerOutputLufs,
-			winnerOutputTruePeakDb,
-			winnerOutputLra,
+			unreachableLufs:
+				converged || unreachableLufs === null ? null : (winningAttempt?.outputLufs ?? unreachableLufs),
+			winnerOutputLufs: winningAttempt?.outputLufs ?? null,
+			winnerOutputTruePeakDb: winningAttempt?.outputTruePeakDb ?? null,
+			winnerOutputLra: winningAttempt?.outputLra ?? null,
 		};
 
 		winningEnvelope = undefined;
@@ -642,7 +549,7 @@ export const iterateForTargets = async (
 		try {
 			await winningEnvelope?.close();
 		} finally {
-			await detectionEnvelope.close();
+			await closeEnvelopes();
 		}
 	}
 };

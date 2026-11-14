@@ -13,7 +13,17 @@ import { BLOCK_FRAMES, WavReader, type AudioBlock, type BlockSource } from "../.
 import { WavWriter } from "../../../wav/WavWriter";
 import type { SampleFile } from "../../../utils/SampleFile";
 import { withWavReader } from "../../utils/withWavReader";
-import { computeLimitAutoDb, measureSource, type DetectionHistogram, type SourceMeasurement } from "./measureSource";
+import {
+	bodyPeakDbOf,
+	CELL_COUNT,
+	CELL_DB,
+	CELL_MIN_DB,
+	cellOf,
+	computeLimitAutoDb,
+	measureSource,
+	type DetectionHistogram,
+	type SourceMeasurement,
+} from "./measureSource";
 import { windowSamplesFromMs } from "./window";
 
 const SAMPLE_RATE = 48000;
@@ -49,6 +59,11 @@ const writeWav = async (path: string, channels: Array<Float64Array>): Promise<vo
 	await writer.close();
 };
 
+const closeEnvelopes = async (measurement: SourceMeasurement): Promise<void> => {
+	await measurement.loudnessEnvelope.close();
+	await measurement.peakEnvelope.close();
+};
+
 const readEnvelope = async (sampleFile: SampleFile): Promise<Float64Array> => {
 	const envelope = new Float64Array(sampleFile.frameCount);
 	let offset = 0;
@@ -61,32 +76,75 @@ const readEnvelope = async (sampleFile: SampleFile): Promise<Float64Array> => {
 	return envelope;
 };
 
+const PEAK_LEVEL_BINS = 13_000;
+
+const peakBinOf = (levelDb: number): number => Math.floor((levelDb - CELL_MIN_DB) / 0.01);
+
 describe("computeLimitAutoDb", () => {
-	it("returns +Infinity for an empty histogram", () => {
-		expect(computeLimitAutoDb(new Float64Array(16), 0, -20, 0.995)).toBe(Number.POSITIVE_INFINITY);
-		expect(computeLimitAutoDb(new Float64Array(16), 1, -20, 0.995)).toBe(Number.POSITIVE_INFINITY);
+	it("returns +Infinity when no frame has a level", () => {
+		expect(computeLimitAutoDb(new Float64Array(PEAK_LEVEL_BINS), 0.995)).toBe(Number.POSITIVE_INFINITY);
 	});
 
-	it("returns +Infinity when the post-pivot window is sparse", () => {
-		const buckets = new Float64Array(16);
+	it("returns the level the loudest 1 - p of frames reach", () => {
+		const counts = new Float64Array(PEAK_LEVEL_BINS);
 
-		buckets[0] = 10_000;
-		buckets[15] = 1;
+		counts[peakBinOf(-30)] = 9_900;
+		counts[peakBinOf(-12)] = 60;
+		counts[peakBinOf(-6)] = 40;
 
-		expect(computeLimitAutoDb(buckets, 1, 20 * Math.log10(0.9), 0.995)).toBe(Number.POSITIVE_INFINITY);
+		expect(Math.abs(computeLimitAutoDb(counts, 0.995) + 12)).toBeLessThanOrEqual(0.01);
+		expect(Math.abs(computeLimitAutoDb(counts, 0.997) + 6)).toBeLessThanOrEqual(0.01);
+		expect(Math.abs(computeLimitAutoDb(counts, 0.991) + 12)).toBeLessThanOrEqual(0.01);
+		expect(Math.abs(computeLimitAutoDb(counts, 0.98) + 30)).toBeLessThanOrEqual(0.01);
 	});
 
-	it("lands in the upper portion of a populated post-pivot window", () => {
-		const buckets = new Float64Array(16);
+	it("returns the loudest frame's level at percentile 1", () => {
+		const counts = new Float64Array(PEAK_LEVEL_BINS);
 
-		buckets.fill(100);
-		buckets[14] = 200;
-		buckets[15] = 50;
+		counts[peakBinOf(-30)] = 9_999;
+		counts[peakBinOf(-3)] = 1;
 
-		const limitDb = computeLimitAutoDb(buckets, 1, -40, 0.995);
+		expect(Math.abs(computeLimitAutoDb(counts, 1) + 3)).toBeLessThanOrEqual(0.01);
+	});
+});
 
-		expect(Number.isFinite(limitDb)).toBe(true);
-		expect(limitDb).toBeGreaterThan(-10);
+const histogramWith = (
+	frames: ReadonlyArray<{ loudnessDb: number; peakDb: number; count: number }>,
+): DetectionHistogram => {
+	const counts = new Float64Array(CELL_COUNT * CELL_COUNT);
+
+	for (const { loudnessDb, peakDb, count } of frames) {
+		const cell = cellOf(loudnessDb) * CELL_COUNT + cellOf(peakDb);
+
+		counts[cell] = (counts[cell] ?? 0) + count;
+	}
+
+	return { energy: new Float64Array(counts.length), counts, peakLevelCounts: new Float64Array(PEAK_LEVEL_BINS) };
+};
+
+describe("bodyPeakDbOf", () => {
+	it("returns the median held peak over frames at or above the pivot", () => {
+		const histogram = histogramWith([
+			{ loudnessDb: -45.1, peakDb: -50.1, count: 1_000 },
+			{ loudnessDb: -20.1, peakDb: -12.1, count: 30 },
+			{ loudnessDb: -20.1, peakDb: -10.1, count: 40 },
+			{ loudnessDb: -15.1, peakDb: -2.1, count: 20 },
+		]);
+
+		expect(bodyPeakDbOf(histogram, -20.2)).toBe(CELL_MIN_DB + (cellOf(-10.1) + 0.5) * CELL_DB);
+		expect(bodyPeakDbOf(histogram, -20.2)).toBe(-10.25);
+	});
+
+	it("counts the cell holding the pivot", () => {
+		const histogram = histogramWith([{ loudnessDb: -23.01, peakDb: -20.1, count: 100 }]);
+
+		expect(bodyPeakDbOf(histogram, -23.01)).toBe(-20.25);
+	});
+
+	it("returns -Infinity when no frame reaches the pivot", () => {
+		const histogram = histogramWith([{ loudnessDb: -45.1, peakDb: -30.1, count: 100 }]);
+
+		expect(bodyPeakDbOf(histogram, -20)).toBe(Number.NEGATIVE_INFINITY);
 	});
 });
 
@@ -97,6 +155,14 @@ describe("measureSource", () => {
 	beforeEach(async () => {
 		workingDirectory = await mkdtemp(join(tmpdir(), "loudness-tool-measure-source-"));
 	});
+
+	const activeScratchOf = (): Scratch => {
+		if (scratch === undefined) {
+			throw new Error("scratch must be created first");
+		}
+
+		return scratch;
+	};
 
 	afterEach(async () => {
 		if (scratch !== undefined) {
@@ -122,12 +188,13 @@ describe("measureSource", () => {
 			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
 		});
 
-		expect(measurement.detectionEnvelope.frameCount).toBe(frameCount);
+		expect(measurement.loudnessEnvelope.frameCount).toBe(frameCount);
+		expect(measurement.peakEnvelope.frameCount).toBe(frameCount);
 		expect(measurement.frameCount).toBe(frameCount);
 		expect(Number.isFinite(measurement.integratedLufs)).toBe(true);
 		expect(Number.isFinite(measurement.truePeakDb)).toBe(true);
 
-		await measurement.detectionEnvelope.close();
+		await closeEnvelopes(measurement);
 	});
 
 	it("returns +Infinity limitAutoDb for a silent source", async () => {
@@ -147,9 +214,9 @@ describe("measureSource", () => {
 		expect(measurement.limitAutoDb).toBe(Number.POSITIVE_INFINITY);
 		expect(measurement.truePeakDb).toBeNull();
 		expect(measurement.lra).toBeNull();
-		expect(measurement.detectionEnvelope.frameCount).toBe(SAMPLE_RATE);
+		expect(measurement.peakEnvelope.frameCount).toBe(SAMPLE_RATE);
 
-		await measurement.detectionEnvelope.close();
+		await closeEnvelopes(measurement);
 	});
 
 	it("returns an unfloored truePeakDb for a 1e-12-peak source", async () => {
@@ -169,7 +236,7 @@ describe("measureSource", () => {
 		expect(measurement.truePeakDb).toBeGreaterThan(-240);
 		expect(measurement.truePeakDb).toBeLessThan(-238);
 
-		await measurement.detectionEnvelope.close();
+		await closeEnvelopes(measurement);
 	});
 
 	it("derives considered-set anchors from a level-step programme", async () => {
@@ -202,7 +269,7 @@ describe("measureSource", () => {
 		expect(measurement.floorAutoDb).toBeLessThan(measurement.pivotAutoDb);
 		expect(measurement.lra).toBeGreaterThan(0);
 
-		await measurement.detectionEnvelope.close();
+		await closeEnvelopes(measurement);
 	});
 
 	it("returns empty source-only stats for a source shorter than one short-term window", async () => {
@@ -235,7 +302,7 @@ describe("measureSource", () => {
 		expect(Number.isFinite(measurement.integratedLufs)).toBe(true);
 		expect(Number.isFinite(tailIncluded.minimum)).toBe(true);
 
-		await measurement.detectionEnvelope.close();
+		await closeEnvelopes(measurement);
 	});
 
 	it("derives floorAutoDb from source-only windows when the source ends on a quiet segment", async () => {
@@ -271,7 +338,7 @@ describe("measureSource", () => {
 		expect(sourceOnly.minimum).not.toBe(tailIncluded.minimum);
 		expect(Math.abs(measurement.floorAutoDb - tailIncluded.minimum)).toBeGreaterThan(0.01);
 
-		await measurement.detectionEnvelope.close();
+		await closeEnvelopes(measurement);
 	});
 
 	it("derives the limit from the per-frame detection, unmoved by smoothing", async () => {
@@ -302,7 +369,7 @@ describe("measureSource", () => {
 			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
 		});
 
-		await narrow.detectionEnvelope.close();
+		await closeEnvelopes(narrow);
 
 		const wide = await measureFile({
 			inputPath,
@@ -311,7 +378,7 @@ describe("measureSource", () => {
 			halfWidth: windowSamplesFromMs(40, SAMPLE_RATE),
 		});
 
-		await wide.detectionEnvelope.close();
+		await closeEnvelopes(wide);
 
 		expect(burstCount * burstFrames).toBeLessThan(channel.length * 0.005);
 		expect(burstCount * windowSamplesFromMs(40, SAMPLE_RATE)).toBeGreaterThan(channel.length * 0.005);
@@ -320,92 +387,45 @@ describe("measureSource", () => {
 		expect(narrow.limitAutoDb).toBeLessThan((bedDb + burstDb) / 2);
 	});
 
-	it("keys held energy on the held level", async () => {
-		scratch = await Scratch.create();
-
-		const frameCount = SAMPLE_RATE;
-		const burstStart = SAMPLE_RATE / 2;
-		const burstFrames = windowSamplesFromMs(10, SAMPLE_RATE);
-		const bed = dbToLinear(-60);
-		const burst = dbToLinear(-6);
-		const channel = new Float64Array(frameCount);
-		let burstEnergy = 0;
-
-		for (let index = 0; index < frameCount; index++) {
-			const isBurst = index >= burstStart && index < burstStart + burstFrames;
-			const sample = (isBurst ? burst : bed) * Math.sin((2 * Math.PI * 1000 * index) / SAMPLE_RATE);
-
-			channel[index] = sample;
-
-			if (isBurst) {
-				burstEnergy += sample * sample;
-			}
-		}
-
-		const inputPath = join(workingDirectory, "burst.wav");
-
-		await writeWav(inputPath, [channel]);
-
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
-
-		await measurement.detectionEnvelope.close();
-
-		const { levelCounts, levelBucketMax, heldEnergy, heldBucketMax } = measurement.detectionHistogram;
-		const threshold = dbToLinear(-30);
-		const massAbove = (buckets: Float64Array, bucketMax: number): number => {
-			const bucketWidth = bucketMax / buckets.length;
-			let mass = 0;
-
-			for (let bucketIndex = 0; bucketIndex < buckets.length; bucketIndex++) {
-				if ((bucketIndex + 0.5) * bucketWidth > threshold) {
-					mass += buckets[bucketIndex] ?? 0;
-				}
-			}
-
-			return mass;
-		};
-
-		expect(Math.abs(massAbove(heldEnergy, heldBucketMax) / burstEnergy - 1)).toBeLessThan(0.01);
-		expect(Math.abs(massAbove(levelCounts, levelBucketMax) - burstFrames)).toBeLessThanOrEqual(12);
-	});
-
-	it("weights each channel's held energy by its stated position", async () => {
+	it("weights each channel's energy by its stated position", async () => {
 		scratch = await Scratch.create();
 
 		const frameCount = SAMPLE_RATE;
 		const [sine = new Float64Array(0)] = createSine(frameCount, 1, SAMPLE_RATE, 997, 0.5);
-		const channels = Array.from({ length: 6 }, (_channel, index) =>
-			index === 3 || index === 4 ? sine : new Float64Array(frameCount),
-		);
-		const inputPath = join(workingDirectory, "surround.wav");
+		const totalEnergyWith = async (signalChannel: number): Promise<number> => {
+			const channels = Array.from({ length: 6 }, (_channel, index) =>
+				index === signalChannel ? sine : new Float64Array(frameCount),
+			);
+			const inputPath = join(workingDirectory, `surround-${signalChannel}.wav`);
 
-		await writeExtensibleWav(inputPath, {
-			sampleRate: SAMPLE_RATE,
-			channelCount: channels.length,
-			bitDepth: "32f",
-			channelMask: 0x3f,
-			channels,
-		});
+			await writeExtensibleWav(inputPath, {
+				sampleRate: SAMPLE_RATE,
+				channelCount: channels.length,
+				bitDepth: "32f",
+				channelMask: 0x3f,
+				channels,
+			});
 
-		const measurement = await measureFile({
-			inputPath,
-			scratch,
-			limitPercentile: 0.995,
-			halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
-		});
+			const measurement = await measureFile({
+				inputPath,
+				scratch: activeScratchOf(),
+				limitPercentile: 0.995,
+				halfWidth: windowSamplesFromMs(1, SAMPLE_RATE),
+			});
 
-		await measurement.detectionEnvelope.close();
+			await closeEnvelopes(measurement);
 
-		const sineEnergy = sine.reduce((sum, sample) => sum + Math.fround(sample) * Math.fround(sample), 0);
-		const heldTotal = measurement.detectionHistogram.heldEnergy.reduce((sum, energy) => sum + energy, 0);
+			expect(Array.from(measurement.weights)).toEqual([1, 1, 1, 0, 1.41, 1.41]);
 
-		expect(Array.from(measurement.weights)).toEqual([1, 1, 1, 0, 1.41, 1.41]);
-		expect(Math.abs(heldTotal / (1.41 * sineEnergy) - 1)).toBeLessThan(1e-9);
+			return measurement.detectionHistogram.energy.reduce((sum, energy) => sum + energy, 0);
+		};
+		const front = await totalEnergyWith(0);
+		const lfe = await totalEnergyWith(3);
+		const back = await totalEnergyWith(4);
+
+		expect(front).toBeGreaterThan(0);
+		expect(lfe).toBe(0);
+		expect(Math.abs(back / (1.41 * front) - 1)).toBeLessThan(1e-9);
 	});
 
 	const measureImpulseEnvelope = async (
@@ -424,19 +444,19 @@ describe("measureSource", () => {
 		await writeWav(inputPath, [channel]);
 
 		const measurement = await measureFile({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 0 });
-		const envelope = await readEnvelope(measurement.detectionEnvelope);
+		const envelope = await readEnvelope(measurement.peakEnvelope);
 
-		await measurement.detectionEnvelope.close();
+		await closeEnvelopes(measurement);
 
 		return envelope;
 	};
 
-	it("keys held energy on the frame its held level measures across block boundaries", async () => {
+	it("pairs each frame's loudness and peak in the histogram across block boundaries", async () => {
 		scratch = await Scratch.create();
 
 		const frameCount = 2 * BLOCK_FRAMES + 8_000;
 		const channels = createNoise(frameCount, 2, 7).map((channel) =>
-			channel.map((sample, frameIndex) => sample * (0.3 + 0.25 * Math.sin((2 * Math.PI * frameIndex) / 3_001))),
+			channel.map((sample, frameIndex) => sample * (0.3 + 0.25 * Math.sin((2 * Math.PI * frameIndex) / 30_001))),
 		);
 		const [left = new Float64Array(0)] = channels;
 
@@ -446,44 +466,25 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, channels);
 
-		const energies = new Float64Array(frameCount);
-
-		for (const channel of channels) {
-			for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
-				const sample = Math.fround(channel[frameIndex] ?? 0);
-
-				energies[frameIndex] = (energies[frameIndex] ?? 0) + sample * sample;
-			}
-		}
-
 		for (const halfWidth of [0, 3, 48]) {
 			const measurement = await measureFile({ inputPath, scratch, limitPercentile: 0.995, halfWidth });
-			const levelsDb = await readEnvelope(measurement.detectionEnvelope);
+			const loudnessDb = await readEnvelope(measurement.loudnessEnvelope);
+			const peakDb = await readEnvelope(measurement.peakEnvelope);
 
-			await measurement.detectionEnvelope.close();
+			await closeEnvelopes(measurement);
 
-			const { heldEnergy, heldBucketMax } = measurement.detectionHistogram;
-			const expected = new Float64Array(heldEnergy.length);
-			const scale = heldEnergy.length / heldBucketMax;
-			let totalEnergy = 0;
+			const expected = new Float64Array(CELL_COUNT * CELL_COUNT);
 
 			for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
-				const bucketIndex = Math.min(
-					heldEnergy.length - 1,
-					Math.floor(dbToLinear(levelsDb[frameIndex] ?? 0) * scale),
-				);
+				const cell = cellOf(loudnessDb[frameIndex] ?? 0) * CELL_COUNT + cellOf(peakDb[frameIndex] ?? 0);
 
-				expected[bucketIndex] = (expected[bucketIndex] ?? 0) + (energies[frameIndex] ?? 0);
-				totalEnergy += energies[frameIndex] ?? 0;
+				expected[cell] = (expected[cell] ?? 0) + 1;
 			}
 
-			expect(levelsDb).toHaveLength(frameCount);
-
-			for (let bucketIndex = 0; bucketIndex < heldEnergy.length; bucketIndex++) {
-				expect(Math.abs((heldEnergy[bucketIndex] ?? 0) - (expected[bucketIndex] ?? 0))).toBeLessThan(
-					totalEnergy * 1e-12,
-				);
-			}
+			expect(loudnessDb).toHaveLength(frameCount);
+			expect(peakDb).toHaveLength(frameCount);
+			expect(expected.filter((count) => count > 0).length).toBeGreaterThan(20);
+			expect(measurement.detectionHistogram.counts).toEqual(expected);
 		}
 	}, 30_000);
 
@@ -529,7 +530,12 @@ describe("measureSource", () => {
 		const measureInChunks = async (
 			inputPath: string,
 			chunkFrames: number | undefined,
-		): Promise<{ envelope: Float64Array; histogram: DetectionHistogram; frameCount: number }> => {
+		): Promise<{
+			envelope: Float64Array;
+			loudness: Float64Array;
+			histogram: DetectionHistogram;
+			frameCount: number;
+		}> => {
 			const reader = await WavReader.open(inputPath);
 			const source: BlockSource = {
 				format: reader.format,
@@ -558,11 +564,17 @@ describe("measureSource", () => {
 					limitPercentile: 0.995,
 					halfWidthOf: (sampleRate) => windowSamplesFromMs(1, sampleRate),
 				});
-				const envelope = await readEnvelope(measurement.detectionEnvelope);
+				const loudness = await readEnvelope(measurement.loudnessEnvelope);
+				const envelope = await readEnvelope(measurement.peakEnvelope);
 
-				await measurement.detectionEnvelope.close();
+				await closeEnvelopes(measurement);
 
-				return { envelope, histogram: measurement.detectionHistogram, frameCount: measurement.frameCount };
+				return {
+					envelope,
+					loudness,
+					histogram: measurement.detectionHistogram,
+					frameCount: measurement.frameCount,
+				};
 			} finally {
 				await source.close();
 			}

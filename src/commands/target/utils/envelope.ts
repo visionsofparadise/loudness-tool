@@ -8,7 +8,7 @@ const GAIN_LUT_MAX_DB = 40;
 const GAIN_LUT_STEP_DB = 0.01;
 const GAIN_LUT_INV_STEP = 1 / GAIN_LUT_STEP_DB;
 const GAIN_LUT_SIZE = Math.round((GAIN_LUT_MAX_DB - GAIN_LUT_MIN_DB) / GAIN_LUT_STEP_DB) + 1;
-const GAIN_LUT_STORED_SILENCE_DB = -200;
+const STORED_SILENCE_DB = -200;
 
 const buildGainLut = (): Float64Array => {
 	const lut = new Float64Array(GAIN_LUT_SIZE);
@@ -34,14 +34,38 @@ const gainLutLerp = (lut: Float64Array, gainDb: number): number => {
 	return low + (high - low) * fraction;
 };
 
+const pairedBlocks = async function* (
+	loudnessEnvelope: SampleFile,
+	peakEnvelope: SampleFile,
+): AsyncIterableIterator<readonly [Float64Array, Float64Array]> {
+	if (loudnessEnvelope.frameCount !== peakEnvelope.frameCount) {
+		throw new Error(
+			`renderEnvelope: loudness envelope has ${loudnessEnvelope.frameCount} frames, peak envelope ${peakEnvelope.frameCount}`,
+		);
+	}
+
+	const peakBlocks = peakEnvelope.blocks();
+
+	for await (const loudnessChunk of loudnessEnvelope.blocks()) {
+		const peakChunk = await peakBlocks.next();
+
+		if (peakChunk.done === true || peakChunk.value.length !== loudnessChunk.length) {
+			throw new Error("renderEnvelope: loudness and peak envelopes read in different blocks");
+		}
+
+		yield [loudnessChunk, peakChunk.value];
+	}
+};
+
 export const renderEnvelope = async (args: {
-	detectionEnvelope: SampleFile;
+	loudnessEnvelope: SampleFile;
+	peakEnvelope: SampleFile;
 	dest: SampleFile;
 	anchors: Anchors;
 	holdHalfWidth: number;
 }): Promise<void> => {
-	const { detectionEnvelope, dest, anchors, holdHalfWidth } = args;
-	const totalFrames = detectionEnvelope.frameCount;
+	const { loudnessEnvelope, peakEnvelope, dest, anchors, holdHalfWidth } = args;
+	const totalFrames = loudnessEnvelope.frameCount;
 
 	if (totalFrames === 0) {
 		return;
@@ -52,12 +76,16 @@ export const renderEnvelope = async (args: {
 	const gainLut = buildGainLut();
 	let consumedFrames = 0;
 
-	for await (const levelChunk of detectionEnvelope.blocks()) {
-		const chunkLength = levelChunk.length;
+	for await (const [loudnessChunk, peakChunk] of pairedBlocks(loudnessEnvelope, peakEnvelope)) {
+		const chunkLength = loudnessChunk.length;
 		const gainDbChunk = new Float64Array(chunkLength);
 
 		for (let frameIndex = 0; frameIndex < chunkLength; frameIndex++) {
-			gainDbChunk[frameIndex] = gainDbAt(levelChunk[frameIndex] ?? GAIN_LUT_STORED_SILENCE_DB, anchors);
+			gainDbChunk[frameIndex] = gainDbAt(
+				loudnessChunk[frameIndex] ?? STORED_SILENCE_DB,
+				peakChunk[frameIndex] ?? STORED_SILENCE_DB,
+				anchors,
+			);
 		}
 
 		consumedFrames += chunkLength;

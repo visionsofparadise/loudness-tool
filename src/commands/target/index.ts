@@ -2,13 +2,14 @@ import { InvalidArgumentError, type Command } from "commander";
 import { figureText } from "../../utils/db";
 import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
+import { quantizerOf } from "../../wav/utils/sampleCodec";
 import { replayableInputOptionsOf, withAudioInput, type AudioInput } from "../utils/AudioInput";
 import { audioOptionsOf } from "../utils/AudioProgram";
 import { copyUnchanged } from "../utils/copyUnchanged";
 import { writeSummary, type AudioOutput } from "../utils/sinks";
 import { withWavWriter } from "../utils/withWavWriter";
 import { forEachEnvelopedBlock } from "./utils/apply";
-import { measureSource } from "./utils/measureSource";
+import { bodyPeakDbOf, measureSource } from "./utils/measureSource";
 import { iterateForTargets } from "./utils/solve";
 import { windowSamplesFromMs } from "./utils/window";
 import type { StreamOptions } from "../utils/streamOptions";
@@ -37,6 +38,7 @@ const DEFAULT_SMOOTHING_MS = 1;
 const DEFAULT_TOLERANCE = 0.5;
 const FLOOR_PIVOT_EPSILON_DB = 0.01;
 const PIVOT_FALLBACK_DB = -40;
+const ANCHOR_SPACING_DB = 6;
 const TARGET_LUFS_STEP = 0.1;
 
 const alignedLine = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}    ${value}`;
@@ -104,13 +106,15 @@ const parseTolerance = (value: string): number => parseFinite("tolerance", value
 const errorFieldsOf = (label: string, isTargeted: boolean, error: number | null): Array<string> =>
 	isTargeted ? [`${label} ${error === null ? "n/a" : error.toFixed(4)}`] : [];
 
+const gainText = (gainDb: number | null): string => (gainDb === null ? "n/a" : gainDb.toFixed(4));
+
 const formatAttempt = (attempt: IterationAttempt, attemptIndex: number, targets: Targets): string =>
 	[
 		`attempt ${attemptIndex + 1}`,
-		`B ${attempt.boost.toFixed(4)}`,
-		`peakGainDb ${attempt.peakGainDb.toFixed(4)}`,
-		...errorFieldsOf("lufsErr", targets.targetLufs !== undefined, attempt.lufsErr),
-		...errorFieldsOf("peakErr", targets.targetTp !== undefined, attempt.peakErr),
+		`body gain ${gainText(attempt.boost)}`,
+		`peak gain ${gainText(attempt.peakGainDb)}`,
+		...errorFieldsOf("loudness error", targets.targetLufs !== undefined, attempt.lufsErr),
+		...errorFieldsOf("peak error", targets.targetTp !== undefined, attempt.peakErr),
 	].join("    ");
 
 const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets => {
@@ -128,7 +132,7 @@ const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets =>
 const applyEnvelopeAndWrite = async (replayPath: string, output: AudioOutput, envelope: SampleFile): Promise<void> => {
 	await withWavWriter(replayPath, output, async (reader, writer) => {
 		await reader.close();
-		await forEachEnvelopedBlock(replayPath, envelope, async (channels) => {
+		await forEachEnvelopedBlock(replayPath, envelope, quantizerOf(output.bitDepth), async (channels) => {
 			await writer.write(channels);
 		});
 	});
@@ -148,7 +152,7 @@ const fitInput = async (
 	const { targets, limitPercentile, smoothingMs, tolerance, neverExpand } = settings;
 	const scratch = await Scratch.create(options.scratchDir);
 	const errors: Array<unknown> = [];
-	let winningEnvelope: SampleFile | undefined;
+	let openEnvelopes: Array<SampleFile> = [];
 
 	try {
 		const measurement = await input.withFirstPass(async (source) =>
@@ -160,7 +164,7 @@ const fitInput = async (
 			}),
 		);
 
-		winningEnvelope = measurement.detectionEnvelope;
+		openEnvelopes = [measurement.loudnessEnvelope, measurement.peakEnvelope];
 
 		if (!Number.isFinite(measurement.integratedLufs) || measurement.truePeakDb === null) {
 			await copyUnchanged(input.replayPath(), input.output());
@@ -184,7 +188,7 @@ const fitInput = async (
 			if (options.floor !== undefined) {
 				effectiveFloorDb = options.floor;
 			} else if (Number.isFinite(measurement.floorAutoDb)) {
-				effectiveFloorDb = measurement.floorAutoDb;
+				effectiveFloorDb = Math.min(measurement.floorAutoDb, effectivePivotDb - ANCHOR_SPACING_DB);
 			} else {
 				effectiveFloorDb = null;
 			}
@@ -193,6 +197,22 @@ const fitInput = async (
 				effectiveFloorDb = effectivePivotDb - FLOOR_PIVOT_EPSILON_DB;
 			}
 
+			const limitDb = Math.min(options.limitDb ?? measurement.limitAutoDb, measurement.truePeakDb);
+			const bodyPeakDb = bodyPeakDbOf(measurement.detectionHistogram, effectivePivotDb);
+			const isArmOn =
+				targets.targetTp !== undefined &&
+				Number.isFinite(bodyPeakDb) &&
+				(options.limitDb !== undefined || limitDb >= bodyPeakDb + ANCHOR_SPACING_DB);
+			let kneeDb: number | null = null;
+
+			if (isArmOn) {
+				kneeDb = options.limitDb === undefined ? bodyPeakDb : Math.min(bodyPeakDb, limitDb - ANCHOR_SPACING_DB);
+			}
+
+			const output = input.output();
+
+			openEnvelopes = [];
+
 			const result = await iterateForTargets({
 				inputPath: input.replayPath(),
 				scratch,
@@ -200,25 +220,30 @@ const fitInput = async (
 				channelCount: measurement.channelCount,
 				weights: measurement.weights,
 				frameCount: measurement.frameCount,
-				anchorBase: { floorDb: effectiveFloorDb, pivotDb: effectivePivotDb },
+				outputBitDepth: output.bitDepth,
+				anchorBase: { floorDb: effectiveFloorDb, pivotDb: effectivePivotDb, kneeDb, limitDb },
 				smoothingMs,
 				...targets,
-				limitDbOverride: options.limitDb,
-				limitAutoDb: measurement.limitAutoDb,
 				sourceLufs: measurement.integratedLufs,
-				sourcePeakDb: measurement.truePeakDb,
 				tolerance,
 				neverExpand,
 				histogram: measurement.detectionHistogram,
-				detectionEnvelope: measurement.detectionEnvelope,
+				loudnessEnvelope: measurement.loudnessEnvelope,
+				peakEnvelope: measurement.peakEnvelope,
 				onAttempt: (attempt, attemptIndex) => {
 					process.stderr.write(`${formatAttempt(attempt, attemptIndex, targets)}\n`);
 				},
 			});
 
-			winningEnvelope = result.bestSmoothedEnvelope;
+			openEnvelopes = [result.bestSmoothedEnvelope];
 
-			await applyEnvelopeAndWrite(input.replayPath(), input.output(), result.bestSmoothedEnvelope);
+			if (result.unreachableLufs !== null) {
+				process.stderr.write(
+					`target unreachable: loudness stops rising at ${result.unreachableLufs.toFixed(2)} LUFS\n`,
+				);
+			}
+
+			await applyEnvelopeAndWrite(input.replayPath(), output, result.bestSmoothedEnvelope);
 
 			await writeSummary(
 				options.output,
@@ -226,8 +251,8 @@ const fitInput = async (
 					alignedLine("output integrated", figureText(result.winnerOutputLufs, 2, "LUFS")),
 					alignedLine("output true peak", figureText(result.winnerOutputTruePeakDb, 2, "dBTP")),
 					alignedLine("loudness range", figureText(result.winnerOutputLra, 2, "LU")),
-					alignedLine("B", `${result.bestB.toFixed(4)} dB`),
-					alignedLine("peakGainDb", `${result.bestPeakGainDb.toFixed(4)} dB`),
+					alignedLine("body gain", figureText(result.bestB, 4, "dB")),
+					alignedLine("peak gain", figureText(result.bestPeakGainDb, 4, "dB")),
 					alignedLine("converged", String(result.converged)),
 					alignedLine("output", options.output),
 				].join("\n")}\n`,
@@ -236,10 +261,12 @@ const fitInput = async (
 	} catch (error: unknown) {
 		errors.push(error);
 	} finally {
-		try {
-			await winningEnvelope?.close();
-		} catch (error: unknown) {
-			errors.push(error);
+		for (const envelope of openEnvelopes) {
+			try {
+				await envelope.close();
+			} catch (error: unknown) {
+				errors.push(error);
+			}
 		}
 
 		try {
