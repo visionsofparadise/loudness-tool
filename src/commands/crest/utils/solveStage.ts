@@ -1,5 +1,5 @@
-import { FLUSH_FRAMES, TAPS_PER_PHASE, TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
 import { candidatesOf, costTableOf, WindowedSolve } from "./blend";
+import { CandidateUpsampler, FLUSH_FRAMES, TAPS_PER_PHASE } from "./CandidateUpsampler";
 import { stretchFrameCountOf, type CrestLayout } from "./layout";
 import {
 	chunkFrameCountOf,
@@ -20,7 +20,7 @@ interface DispersedFrames {
 }
 
 const upsampleWithTail = (input: Float64Array, frameCount: number, output: Float64Array, hasTail: boolean): void => {
-	const upsampler = new TruePeakUpsampler();
+	const upsampler = new CandidateUpsampler();
 	const written = upsampler.upsample(input, frameCount, output);
 
 	if (hasTail) {

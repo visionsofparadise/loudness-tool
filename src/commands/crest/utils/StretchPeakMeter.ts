@@ -1,20 +1,20 @@
-import { FLUSH_FRAMES, TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
+import { CandidateUpsampler, FLUSH_FRAMES } from "./CandidateUpsampler";
 import { OVERSAMPLE_FACTOR } from "./render";
 
 const INITIAL_STRETCHES = 16;
 
 export class StretchPeakMeter {
 	private readonly stretchFrames: number;
-	private readonly upsamplers: ReadonlyArray<TruePeakUpsampler>;
+	private readonly upsamplers: ReadonlyArray<CandidateUpsampler>;
 	private scratch = new Float64Array(0);
 	private peaks = new Float64Array(INITIAL_STRETCHES);
 	private framesPushed = 0;
 
 	constructor(args: { stretchFrames: number; channelCount: number }) {
-		const upsamplers: Array<TruePeakUpsampler> = [];
+		const upsamplers: Array<CandidateUpsampler> = [];
 
 		for (let channelIndex = 0; channelIndex < args.channelCount; channelIndex++) {
-			upsamplers.push(new TruePeakUpsampler());
+			upsamplers.push(new CandidateUpsampler());
 		}
 
 		this.stretchFrames = args.stretchFrames;

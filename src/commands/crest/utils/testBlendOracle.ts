@@ -1,12 +1,12 @@
-import { FLUSH_FRAMES, TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
 import { FLOOR, PAIR_COUNT, WEIGHT_STATES, pairIndexOf, weightBetween } from "./blend";
+import { CandidateUpsampler, FLUSH_FRAMES } from "./CandidateUpsampler";
 import { WEIGHT_LEVELS } from "./layout";
 import { OVERSAMPLE_FACTOR } from "./render";
 
 const BISECTION_ROUNDS = 60;
 
 export const upsampledOf = (samples: Float64Array): Float64Array => {
-	const upsampler = new TruePeakUpsampler();
+	const upsampler = new CandidateUpsampler();
 	const upsampled = new Float64Array((samples.length + FLUSH_FRAMES) * OVERSAMPLE_FACTOR);
 	const written = upsampler.upsample(samples, samples.length, upsampled);
 

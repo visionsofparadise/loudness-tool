@@ -32,10 +32,10 @@ describe("TruePeakAccumulator", () => {
 		expect(measure([impulse])).toBe(1);
 	});
 
-	it("includes a maximum that occurs only in the flushed FIR tail", () => {
-		const input = new Float64Array([-0.08388812094926834, 0.6030386090278625, -0.7042242288589478]);
+	it("includes a maximum that occurs only in the flushed tail, two samples of 0.5 peaking at 2/pi between them", () => {
+		const input = new Float64Array([0.5, 0.5]);
 
-		expect(Math.abs(measure([input]) - 0.7503057227)).toBeLessThan(1e-6);
+		expect(Math.abs(measure([input]) - 2 / Math.PI)).toBeLessThan(1e-4);
 	});
 
 	it("measures a steady 997 Hz sine at or above its sample peak", () => {

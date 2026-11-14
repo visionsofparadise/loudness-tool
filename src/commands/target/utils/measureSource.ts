@@ -4,19 +4,15 @@ import { IntegratedLufsAccumulator } from "../../../measurement/IntegratedLufsAc
 import { computeLoudnessRange, getLraConsideredStats } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { SlidingWindowMaxStream } from "../../../measurement/SlidingWindowStreams";
-import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
-import { TruePeakUpsampler } from "../../../measurement/TruePeakUpsampler";
+import { DELAY_FRAMES, FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "../../../measurement/TruePeakUpsampler";
 import { dbToLinear, linearToDb } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
 import { BLOCK_FRAMES, type BlockSource } from "../../../wav/WavReader";
 import type { Scratch } from "../../../utils/Scratch";
 import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
-const OVERSAMPLE_FACTOR = 4;
 const HISTOGRAM_BUCKETS = 1024;
 const PIVOT_FALLBACK_DB = -40;
-const DETECTION_DELAY_FRAMES = 6;
-const FLUSH_FRAMES = 11;
 
 export interface DetectionHistogram {
 	readonly levelCounts: Float64Array;
@@ -42,18 +38,52 @@ export interface SourceMeasurement {
 	readonly bitDepth: SourceBitDepth;
 }
 
-const collapseMaxOf4 = (oversampled: Float64Array, frameCount: number, output: Float64Array): void => {
+const collapseMaxPerFrame = (upsampled: Float64Array, frameCount: number, output: Float64Array): void => {
 	for (let baseIndex = 0; baseIndex < frameCount; baseIndex++) {
-		const offset = baseIndex * OVERSAMPLE_FACTOR;
-		const s0 = oversampled[offset] ?? 0;
-		const s1 = oversampled[offset + 1] ?? 0;
-		const s2 = oversampled[offset + 2] ?? 0;
-		const s3 = oversampled[offset + 3] ?? 0;
-		const m01 = s0 > s1 ? s0 : s1;
-		const m23 = s2 > s3 ? s2 : s3;
+		const offset = baseIndex * UPSAMPLE_FACTOR;
+		let max = 0;
 
-		output[baseIndex] = m01 > m23 ? m01 : m23;
+		for (let phase = 0; phase < UPSAMPLE_FACTOR; phase++) {
+			const sample = upsampled[offset + phase] ?? 0;
+
+			if (sample > max) {
+				max = sample;
+			}
+		}
+
+		output[baseIndex] = max;
 	}
+};
+
+const maxOf = (values: Float64Array, length: number, start: number): number => {
+	let max = start;
+
+	for (let index = 0; index < length; index++) {
+		const value = values[index] ?? 0;
+
+		if (value > max) {
+			max = value;
+		}
+	}
+
+	return max;
+};
+
+const absoluteMaxOf = (channels: ReadonlyArray<Float64Array>, frames: number, start: number): number => {
+	let max = start;
+
+	for (const channel of channels) {
+		for (let index = 0; index < frames; index++) {
+			const sample = channel[index] ?? 0;
+			const absolute = sample < 0 ? -sample : sample;
+
+			if (absolute > max) {
+				max = absolute;
+			}
+		}
+	}
+
+	return max;
 };
 
 const writeMaxAcrossChannels = (
@@ -170,13 +200,12 @@ export const measureSource = async (args: {
 		const { sampleRate, channelCount, channelMask, bitDepth } = source.format;
 		const weights = channelWeightsOf(channelCount, channelMask);
 		const halfWidth = halfWidthOf(sampleRate);
-		const truePeak = new TruePeakAccumulator(channelCount);
 		const integrated = new IntegratedLufsAccumulator(sampleRate, weights);
 		const shortTerm = new ShortTermLoudnessAccumulator(sampleRate, weights);
 		const levelHistogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
 		const heldHistogram = new AmplitudeHistogramAccumulator(HISTOGRAM_BUCKETS);
 		const slidingWindow = new SlidingWindowMaxStream(halfWidth);
-		const energyRing = new Float64Array(BLOCK_FRAMES + halfWidth + DETECTION_DELAY_FRAMES);
+		const energyRing = new Float64Array(BLOCK_FRAMES + halfWidth + DELAY_FRAMES);
 		const upsamplers: Array<TruePeakUpsampler> = [];
 		const upsampleScratches: Array<Float64Array> = [];
 
@@ -191,8 +220,10 @@ export const measureSource = async (args: {
 		let energyScratch = new Float64Array(0);
 		let frameIndex = 0;
 		let emittedIndex = 0;
-		let skipRemaining = DETECTION_DELAY_FRAMES * OVERSAMPLE_FACTOR;
+		let skipRemaining = DELAY_FRAMES * UPSAMPLE_FACTOR;
 		let detectedFrames = 0;
+		let rawMax = 0;
+		let interpolatedMax = 0;
 
 		const persistPooled = async (pooled: Float64Array): Promise<void> => {
 			if (pooled.length === 0) {
@@ -224,11 +255,13 @@ export const measureSource = async (args: {
 		};
 
 		const pushAlignedDetection = async (upLength: number): Promise<void> => {
+			interpolatedMax = maxOf(levelsScratch, upLength, interpolatedMax);
+
 			const skipped = Math.min(skipRemaining, upLength);
 
 			skipRemaining -= skipped;
 
-			const frames = Math.min((upLength - skipped) / OVERSAMPLE_FACTOR, frameIndex - detectedFrames);
+			const frames = Math.min((upLength - skipped) / UPSAMPLE_FACTOR, frameIndex - detectedFrames);
 
 			if (frames <= 0) {
 				return;
@@ -238,7 +271,7 @@ export const measureSource = async (args: {
 				baseScratch = new Float64Array(frames);
 			}
 
-			collapseMaxOf4(levelsScratch.subarray(skipped), frames, baseScratch);
+			collapseMaxPerFrame(levelsScratch.subarray(skipped), frames, baseScratch);
 			detectedFrames += frames;
 
 			await pushDetection(baseScratch.subarray(0, frames), frames);
@@ -251,11 +284,11 @@ export const measureSource = async (args: {
 				break;
 			}
 
-			truePeak.push(block.channels, frames);
+			rawMax = absoluteMaxOf(block.channels, frames, rawMax);
 			integrated.push(block.channels, frames);
 			shortTerm.push(block.channels, frames);
 
-			const upChunkLength = frames * OVERSAMPLE_FACTOR;
+			const upChunkLength = frames * UPSAMPLE_FACTOR;
 
 			if (levelsScratch.length < upChunkLength) {
 				levelsScratch = new Float64Array(upChunkLength);
@@ -291,7 +324,7 @@ export const measureSource = async (args: {
 			await pushAlignedDetection(upChunkLength);
 		}
 
-		const flushLength = FLUSH_FRAMES * OVERSAMPLE_FACTOR;
+		const flushLength = FLUSH_FRAMES * UPSAMPLE_FACTOR;
 		const flushChannels = upsamplers.map((upsampler) => {
 			const flushed = new Float64Array(flushLength);
 
@@ -317,7 +350,7 @@ export const measureSource = async (args: {
 		return {
 			integratedLufs: integrated.finalize(),
 			lra: shortTermSeries.length === 0 ? 0 : computeLoudnessRange(shortTermSeries),
-			truePeakDb: linearToDb(truePeak.finalize()),
+			truePeakDb: linearToDb(Math.max(rawMax, interpolatedMax)),
 			pivotAutoDb: stats.median,
 			floorAutoDb: stats.minimum,
 			limitAutoDb: computeLimitAutoDb(levelResult.buckets, levelResult.bucketMax, stats.median, limitPercentile),

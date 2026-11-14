@@ -484,13 +484,16 @@ describe("measureSource", () => {
 		}
 	}, 30_000);
 
-	it("reads an impulse's peak at its own frame", async () => {
+	it("reads an impulse's peak at its own frame, each frame holding its 16 interpolated samples", async () => {
 		const envelope = await measureImpulseEnvelope(SAMPLE_RATE, 1000);
+		const sincDb = (offset: number): number =>
+			20 * Math.log10(Math.abs(Math.sin(Math.PI * offset) / (Math.PI * offset)));
+		const firstSidelobeDb = sincDb(1.4303);
 
-		expect(Math.abs(envelope[999] ?? Number.NaN)).toBeLessThan(0.3);
-		expect(Math.abs(envelope[1000] ?? Number.NaN)).toBeLessThan(0.3);
-		expect(envelope[998]).toBeLessThan(-10);
-		expect(envelope[1001]).toBeLessThan(-10);
+		expect(Math.abs(envelope[1000] ?? Number.NaN)).toBeLessThan(1e-3);
+		expect(Math.abs((envelope[999] ?? Number.NaN) - sincDb(1 / 16))).toBeLessThan(0.01);
+		expect(Math.abs((envelope[998] ?? Number.NaN) - firstSidelobeDb)).toBeLessThan(0.05);
+		expect(Math.abs((envelope[1001] ?? Number.NaN) - firstSidelobeDb)).toBeLessThan(0.05);
 		expect(envelope[990]).toBeLessThan(-20);
 		expect(envelope[1010]).toBeLessThan(-20);
 	});

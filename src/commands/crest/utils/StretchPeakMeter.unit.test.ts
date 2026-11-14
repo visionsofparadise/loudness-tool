@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FLUSH_FRAMES } from "../../../measurement/TruePeakUpsampler";
+import { FLUSH_FRAMES } from "./CandidateUpsampler";
 import { createNoise } from "../../../utils/testSignals";
 import { StretchPeakMeter } from "./StretchPeakMeter";
 import { stretchPeaksOf, upsampledOf } from "./testBlendOracle";

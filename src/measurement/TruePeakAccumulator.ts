@@ -1,7 +1,6 @@
-import { FLUSH_FRAMES, TruePeakUpsampler } from "./TruePeakUpsampler";
+import { FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "./TruePeakUpsampler";
 
-const OVERSAMPLE_FACTOR = 4;
-const FLUSH_OUTPUT_SAMPLES = FLUSH_FRAMES * OVERSAMPLE_FACTOR;
+const FLUSH_OUTPUT_SAMPLES = FLUSH_FRAMES * UPSAMPLE_FACTOR;
 
 export class TruePeakAccumulator {
 	private readonly channelCount: number;
@@ -64,7 +63,7 @@ export class TruePeakAccumulator {
 				}
 			}
 
-			const outputLength = frameCount * OVERSAMPLE_FACTOR;
+			const outputLength = frameCount * UPSAMPLE_FACTOR;
 
 			if (this.upsampleScratch.length < outputLength) {
 				this.upsampleScratch = new Float64Array(outputLength);

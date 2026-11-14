@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProgram } from "../cli";
-import { dbToLinear, linearToDb } from "../utils/db";
+import { linearToDb } from "../utils/db";
 import {
 	captureWrites,
 	dataBytesOf,
@@ -27,67 +27,29 @@ vi.mock("node:fs/promises", { spy: true });
 
 const SAMPLE_RATE = 48000;
 
-const PHASE_COEFFICIENTS: ReadonlyArray<ReadonlyArray<number>> = [
-	[
-		0.001708984375, 0.010986328125, -0.0196533203125, 0.033203125, -0.0594482421875, 0.1373291015625, 0.97216796875,
-		-0.102294921875, 0.047607421875, -0.026611328125, 0.014892578125, -0.00830078125,
-	],
-	[
-		-0.0291748046875, 0.029296875, -0.0517578125, 0.089111328125, -0.16650390625, 0.465087890625, 0.77978515625,
-		-0.2003173828125, 0.1015625, -0.0582275390625, 0.0330810546875, -0.0189208984375,
-	],
-	[
-		-0.0189208984375, 0.0330810546875, -0.0582275390625, 0.1015625, -0.2003173828125, 0.77978515625, 0.465087890625,
-		-0.16650390625, 0.089111328125, -0.0517578125, 0.029296875, -0.0291748046875,
-	],
-	[
-		-0.00830078125, 0.014892578125, -0.026611328125, 0.047607421875, -0.102294921875, 0.97216796875, 0.1373291015625,
-		-0.0594482421875, 0.033203125, -0.0196533203125, 0.010986328125, 0.001708984375,
-	],
-];
-const PHASES = PHASE_COEFFICIENTS.length;
-const TAPS = PHASE_COEFFICIENTS[0]?.length ?? 0;
-const TAIL_POSITIONS = TAPS - 1;
+const TONE_PHASE = (33.75 * Math.PI) / 180;
+const TONE_FADE_FRAMES = 1000;
 
-const directConvolution = (input: Float64Array): Float64Array => {
-	const positions = input.length + TAIL_POSITIONS;
-	const output = new Float64Array(positions * PHASES);
+const createQuarterRateTone = (frameCount: number, channelCount: number, amplitude: number): Array<Float64Array> =>
+	Array.from({ length: channelCount }, () =>
+		Float64Array.from({ length: frameCount }, (_, index) => {
+			const edge = Math.min(index, frameCount - 1 - index);
+			const fade = edge < TONE_FADE_FRAMES ? 0.5 - 0.5 * Math.cos((Math.PI * edge) / TONE_FADE_FRAMES) : 1;
 
-	for (let position = 0; position < positions; position++) {
-		for (let phase = 0; phase < PHASES; phase++) {
-			const coefficients = PHASE_COEFFICIENTS[phase];
-			let sum = 0;
+			return amplitude * fade * Math.cos((Math.PI * index) / 2 + TONE_PHASE);
+		}),
+	);
 
-			for (let tap = 0; tap < TAPS; tap++) {
-				const inputIndex = position - tap;
-				const sample = inputIndex >= 0 && inputIndex < input.length ? (input[inputIndex] ?? 0) : 0;
-
-				sum += (coefficients?.[tap] ?? 0) * sample;
-			}
-
-			output[position * PHASES + phase] = sum;
-		}
-	}
-
-	return output;
-};
-
-const measureIndependent = (channels: ReadonlyArray<Float64Array>): number => {
-	let peak = 0;
+const toneTruePeakOf = (channels: ReadonlyArray<Float64Array>): number => {
+	let samplePeak = 0;
 
 	for (const channel of channels) {
 		for (const sample of channel) {
-			peak = Math.max(peak, Math.abs(sample));
-		}
-
-		const interpolated = directConvolution(channel);
-
-		for (const sample of interpolated) {
-			peak = Math.max(peak, Math.abs(sample));
+			samplePeak = Math.max(samplePeak, Math.abs(sample));
 		}
 	}
 
-	return peak;
+	return samplePeak / Math.cos(TONE_PHASE);
 };
 
 const mergeBlocks = (blocks: Array<AudioBlock>): Array<Float64Array> => {
@@ -143,7 +105,7 @@ const writeWav = async (path: string, channels: Array<Float64Array>): Promise<vo
 	await writer.close();
 };
 
-const measureFileIndependent = async (path: string): Promise<number> => measureIndependent(await readAll(path));
+const toneFileTruePeakOf = async (path: string): Promise<number> => toneTruePeakOf(await readAll(path));
 
 const capture = async (run: () => Promise<void>): Promise<{ stdout: string; stderr: string }> => {
 	const stdout: Array<string> = [];
@@ -228,10 +190,10 @@ describe("tp-norm", () => {
 		const outputPath = join(workingDirectory, "loud-out.wav");
 		const target = -1;
 
-		await writeWav(inputPath, createSine(12000, 1, SAMPLE_RATE, 997, 1));
+		await writeWav(inputPath, createQuarterRateTone(12000, 1, 1));
 
 		const { stdout } = await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
-		const measuredDb = linearToDb(await measureFileIndependent(outputPath));
+		const measuredDb = linearToDb(await toneFileTruePeakOf(outputPath));
 
 		expect(Math.abs(measuredDb - target)).toBeLessThan(0.01);
 		expect(stdout).toMatch(/source true peak/);
@@ -244,11 +206,11 @@ describe("tp-norm", () => {
 		const outputPath = join(workingDirectory, "quiet-out.wav");
 		const target = -1;
 
-		await writeWav(inputPath, createSine(12000, 1, SAMPLE_RATE, 997, 0.25));
+		await writeWav(inputPath, createQuarterRateTone(12000, 1, 0.25));
 
 		await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
 
-		expect(Math.abs(linearToDb(await measureFileIndependent(outputPath)) - target)).toBeLessThan(0.01);
+		expect(Math.abs(linearToDb(await toneFileTruePeakOf(outputPath)) - target)).toBeLessThan(0.01);
 	});
 
 	it("passes silence through unchanged", async () => {
@@ -265,7 +227,6 @@ describe("tp-norm", () => {
 		expect(stderr).toMatch(/no measurable true peak/);
 		expect(output[0]?.length).toBe(64);
 		expect(Array.from(output[0] ?? [])).toEqual(Array.from(silence[0] ?? []));
-		expect(await measureFileIndependent(outputPath)).toBe(0);
 		expect(Buffer.compare(await readFile(inputPath), await readFile(outputPath))).toBe(0);
 	});
 
@@ -310,13 +271,11 @@ describe("tp-norm", () => {
 		const inputPath = join(workingDirectory, "tiny.wav");
 		const outputPath = join(workingDirectory, "tiny-out.wav");
 		const target = -1;
-		const tiny = new Float64Array(256).fill(1e-12);
-
-		await writeWav(inputPath, [tiny]);
+		await writeWav(inputPath, createQuarterRateTone(4800, 1, 1e-12));
 
 		const { stdout } = await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
 
-		expect(Math.abs((await measureFileIndependent(outputPath)) - dbToLinear(target))).toBeLessThan(1e-6);
+		expect(Math.abs(linearToDb(await toneFileTruePeakOf(outputPath)) - target)).toBeLessThan(0.01);
 		expect(stdout).not.toMatch(/-200\.00 dBTP/);
 
 		const reported = stdout.match(/source true peak\s+(-?\d+\.\d+) dBTP/);
@@ -328,10 +287,10 @@ describe("tp-norm", () => {
 		const inputPath = join(workingDirectory, "inplace.wav");
 		const target = -1;
 
-		await writeWav(inputPath, createSine(4800, 2, SAMPLE_RATE, 997, 0.5));
+		await writeWav(inputPath, createQuarterRateTone(4800, 2, 0.5));
 		await capture(() => tpNorm(inputPath, { output: inputPath, tp: target }));
 
-		expect(Math.abs(linearToDb(await measureFileIndependent(inputPath)) - target)).toBeLessThan(0.01);
+		expect(Math.abs(linearToDb(await toneFileTruePeakOf(inputPath)) - target)).toBeLessThan(0.01);
 		expect(await temporaryNamesOf(workingDirectory)).toEqual([]);
 	});
 
@@ -340,10 +299,10 @@ describe("tp-norm", () => {
 		const outputPath = join(workingDirectory, "quad-out.wav");
 		const target = -1;
 
-		await writeWav(inputPath, createSine(4800, 4, SAMPLE_RATE, 997, 0.5));
+		await writeWav(inputPath, createQuarterRateTone(4800, 4, 0.5));
 		await capture(() => tpNorm(inputPath, { output: outputPath, tp: target }));
 
-		expect(Math.abs(linearToDb(await measureFileIndependent(outputPath)) - target)).toBeLessThan(0.01);
+		expect(Math.abs(linearToDb(await toneFileTruePeakOf(outputPath)) - target)).toBeLessThan(0.01);
 	});
 
 	it("rejects a target outside [-24, 0) at the CLI parser", async () => {
@@ -369,12 +328,12 @@ describe("tp-norm", () => {
 		const outputPath = join(workingDirectory, "bound-out.wav");
 		const target = -24;
 
-		await writeWav(inputPath, createSine(12000, 1, SAMPLE_RATE, 997, 1));
+		await writeWav(inputPath, createQuarterRateTone(12000, 1, 1));
 		await capture(async () => {
 			await parseProgram(["tp-norm", inputPath, "-o", outputPath, "--tp", "-24"]);
 		});
 
-		expect(Math.abs(linearToDb(await measureFileIndependent(outputPath)) - target)).toBeLessThan(0.01);
+		expect(Math.abs(linearToDb(await toneFileTruePeakOf(outputPath)) - target)).toBeLessThan(0.01);
 	});
 
 	it("leaves the destination untouched when a write fails", async () => {

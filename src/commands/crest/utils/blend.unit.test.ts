@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FLUSH_FRAMES } from "../../../measurement/TruePeakUpsampler";
+import { FLUSH_FRAMES } from "./CandidateUpsampler";
 import { createNoise } from "../../../utils/testSignals";
 import { candidatesOf, costTableOf, pairIndexOf, PAIR_COUNT, weightBetween, weightOf, WindowedSolve } from "./blend";
 import { WEIGHT_LEVELS } from "./layout";
