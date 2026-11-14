@@ -6,9 +6,28 @@ import { resolveOutput, type AudioOutput, type OutputRequest } from "./sinks";
 import { descriptorOf, readableOf } from "./stdioPath";
 import { DEFAULT_STREAM_OPTIONS, inputFormatOf, type StreamOptions } from "./streamOptions";
 import { withWavReader } from "./withWavReader";
-import type { BlockSource, StreamFormat } from "../../wav/WavReader";
+import type { AudioBlock, BlockSource, StreamFormat } from "../../wav/WavReader";
 
 const SPOOL_LABEL = "input.wav";
+
+async function* finiteBlocksOf(
+	blocks: AsyncIterableIterator<AudioBlock>,
+	label: string,
+): AsyncIterableIterator<AudioBlock> {
+	for await (const block of blocks) {
+		for (const [channelIndex, channel] of block.channels.entries()) {
+			for (let index = 0; index < channel.length; index++) {
+				if (!Number.isFinite(channel[index])) {
+					throw new Error(
+						`"${label}" holds a sample that is not a finite number at frame ${block.frameIndex + index}, channel ${channelIndex}`,
+					);
+				}
+			}
+		}
+
+		yield block;
+	}
+}
 
 interface AudioInputOptions {
 	readonly replayable: boolean;
@@ -139,10 +158,11 @@ export class AudioInput {
 
 	private sourceOf(reader: BlockSource, format: StreamFormat): BlockSource {
 		const resolved = this.resolve(format);
+		const isFloat = format.bitDepth === "32f" || format.bitDepth === "64f";
 
 		return {
 			format: resolved,
-			blocks: () => reader.blocks(),
+			blocks: () => (isFloat ? finiteBlocksOf(reader.blocks(), this.label) : reader.blocks()),
 			close: async () => reader.close(),
 		};
 	}

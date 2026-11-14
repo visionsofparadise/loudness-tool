@@ -24,7 +24,7 @@ loudness-tool stats --json a.wav b.wav
 loudness-tool stats - < input.wav
 ```
 
-Prints the path, sample rate, channels, bit depth, duration, true peak, integrated loudness, and loudness range for each input. `--json` writes an array of those fields to stdout. An input of `-` reads stdin, once per run, and prints its path as `-`.
+Prints the path, sample rate, channels, bit depth, duration, true peak, integrated loudness, and loudness range for each input. `--json` writes an array of those fields to stdout. A float input holding a NaN or infinite sample fails with an error naming its frame and channel. An input of `-` reads stdin, once per run, and prints its path as `-`.
 
 ### tp-norm
 
