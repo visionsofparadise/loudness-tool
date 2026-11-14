@@ -52,7 +52,8 @@ const scaled = (channels: ReadonlyArray<Float64Array>, gain: number): Array<Floa
 
 const NOISE_RMS = 1 / Math.sqrt(3);
 const BACKGROUND_CLEARANCE_SECONDS = 0.1;
-const UNREACHABLE_PATTERN = /^target unreachable: loudness stops rising at (-?\d+\.\d+) LUFS$/m;
+const BODY_LIMIT_PATTERN = /^target unreachable: loudness reaches (-?\d+\.\d+) LUFS at the body's limit$/m;
+const STOPS_RISING_PATTERN = /^target unreachable: loudness stops rising at (-?\d+\.\d+) LUFS$/m;
 
 const largestBackgroundGainDbOf = (
 	speech: SpeechLike,
@@ -221,7 +222,7 @@ describe("target's search", () => {
 		const [output = new Float64Array(0)] = await decodedSamplesOf(outputPath);
 		const background = largestBackgroundGainDbOf(speech, input, output, SAMPLE_RATE);
 		const writtenLufs = written.integratedLufs ?? Infinity;
-		const unreachable = UNREACHABLE_PATTERN.exec(stderr)?.[1];
+		const unreachable = (BODY_LIMIT_PATTERN.exec(stderr) ?? STOPS_RISING_PATTERN.exec(stderr))?.[1];
 
 		expect(background.windows).toBeGreaterThan(20);
 		expect(background.largestDb).toBeLessThan(1);
@@ -255,7 +256,7 @@ describe("target's search", () => {
 			tolerance: TOLERANCE,
 		});
 
-		expect(stderr).toMatch(UNREACHABLE_PATTERN);
+		expect(stderr).toMatch(BODY_LIMIT_PATTERN);
 	}, 60_000);
 
 	it("stops at the body's saturation on speech with a cough under both targets, leaving the room tone at unity", async () => {
@@ -275,7 +276,7 @@ describe("target's search", () => {
 			tolerance: TOLERANCE,
 		});
 
-		expect(stderr).toMatch(UNREACHABLE_PATTERN);
+		expect(stderr).toMatch(BODY_LIMIT_PATTERN);
 	}, 60_000);
 
 	it("ends at or under --lufs on quiet speech over room tone whose attempts land over the target", async () => {
@@ -336,7 +337,7 @@ describe("target's search", () => {
 	it("stops unreachable without repeating a body gain where the predicted loudness stops rising under the body bound", async () => {
 		const { stderr, written } = await runTarget("pulses-lead-in", [pulsedNoise(0.046, 2)], ["--lufs", "-16"]);
 		const bodyGains = [...stderr.matchAll(/^attempt \d+ +body gain (-?\d+\.\d+)/gm)].map((match) => match[1]);
-		const unreachable = UNREACHABLE_PATTERN.exec(stderr);
+		const unreachable = BODY_LIMIT_PATTERN.exec(stderr);
 
 		expect(new Set(bodyGains).size).toBe(bodyGains.length);
 		expect(unreachable).not.toBeNull();

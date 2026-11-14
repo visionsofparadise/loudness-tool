@@ -26,6 +26,7 @@ import {
 	repeatsAttempt,
 	searchCapOf,
 	stopsRisingAt,
+	unreachableCauseOf,
 	type IterationAttempt,
 	type Targets,
 } from "./solve";
@@ -331,6 +332,27 @@ describe("stopsRisingAt", () => {
 	it("keeps searching after an attempt under the cap or over the ceiling", () => {
 		expect(stopsRisingAt(stopArgsOf(attemptOf({ boost: 9.9, outputLufs: -22.2, outputTruePeakDb: 0 })))).toBe(false);
 		expect(stopsRisingAt(stopArgsOf(attemptOf({ boost: 10, outputLufs: -22.2, outputTruePeakDb: 0.2 })))).toBe(false);
+	});
+});
+
+describe("unreachableCauseOf", () => {
+	it("names the body's limit while each higher body gain landed louder by at least 0.01 LU per dB", () => {
+		expect(unreachableCauseOf([attemptOf({ boost: 7.7792, outputLufs: -20 })])).toBe("body-limit");
+		expect(
+			unreachableCauseOf([
+				attemptOf({ boost: 14.4204, outputLufs: -16.5868 }),
+				attemptOf({ boost: 14.6905, outputLufs: -16.5694 }),
+			]),
+		).toBe("body-limit");
+	});
+
+	it("says loudness stops rising once a higher body gain landed quieter or rose by under 0.01 LU per dB", () => {
+		expect(
+			unreachableCauseOf([attemptOf({ boost: 10, outputLufs: -18 }), attemptOf({ boost: 12, outputLufs: -18.1 })]),
+		).toBe("stops-rising");
+		expect(
+			unreachableCauseOf([attemptOf({ boost: 10, outputLufs: -18 }), attemptOf({ boost: 12, outputLufs: -17.99 })]),
+		).toBe("stops-rising");
 	});
 });
 

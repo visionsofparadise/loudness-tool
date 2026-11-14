@@ -50,10 +50,13 @@ export interface IterateResult {
 	attempts: ReadonlyArray<IterationAttempt>;
 	converged: boolean;
 	unreachableLufs: number | null;
+	unreachableCause: UnreachableCause | null;
 	winnerOutputLufs: number | null;
 	winnerOutputTruePeakDb: number | null;
 	winnerOutputLra: number | null;
 }
+
+export type UnreachableCause = "body-limit" | "stops-rising";
 
 export interface AnchorBase {
 	readonly floorDb: number | null;
@@ -271,6 +274,18 @@ export const stopsRisingAt = (args: {
 			grainedDb(levelOf(attempt.outputLufs) - targetLufs) <= -tolerance,
 	);
 };
+
+export const unreachableCauseOf = (attempts: ReadonlyArray<IterationAttempt>): UnreachableCause =>
+	attempts.some((lower) =>
+		attempts.some(
+			(higher) =>
+				higher.boost > lower.boost &&
+				(levelOf(higher.outputLufs) - levelOf(lower.outputLufs)) / (higher.boost - lower.boost) <
+					MIN_OVERSHOOT_SLOPE,
+		),
+	)
+		? "stops-rising"
+		: "body-limit";
 
 export const repeatsAttempt = (
 	attempts: ReadonlyArray<IterationAttempt>,
@@ -575,6 +590,7 @@ export const iterateForTargets = async (
 			attempts: [],
 			converged: false,
 			unreachableLufs: null,
+			unreachableCause: null,
 			winnerOutputLufs: null,
 			winnerOutputTruePeakDb: null,
 			winnerOutputLra: null,
@@ -744,6 +760,7 @@ export const iterateForTargets = async (
 			attempts,
 			converged,
 			unreachableLufs: stoppedRising ? (winningAttempt?.outputLufs ?? null) : null,
+			unreachableCause: stoppedRising ? unreachableCauseOf(attempts) : null,
 			winnerOutputLufs: winningAttempt?.outputLufs ?? null,
 			winnerOutputTruePeakDb: winningAttempt?.outputTruePeakDb ?? null,
 			winnerOutputLra: winningAttempt?.outputLra ?? null,

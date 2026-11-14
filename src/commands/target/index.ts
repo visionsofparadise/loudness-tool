@@ -260,8 +260,12 @@ const fitMeasured = async (
 
 	try {
 		if (result.unreachableLufs !== null) {
+			const lufsText = fixedText(result.unreachableLufs, 2);
+
 			process.stderr.write(
-				`target unreachable: loudness stops rising at ${fixedText(result.unreachableLufs, 2)} LUFS\n`,
+				result.unreachableCause === "stops-rising"
+					? `target unreachable: loudness stops rising at ${lufsText} LUFS\n`
+					: `target unreachable: loudness reaches ${lufsText} LUFS at the body's limit\n`,
 			);
 		}
 
