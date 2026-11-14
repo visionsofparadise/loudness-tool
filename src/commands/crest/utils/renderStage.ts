@@ -49,7 +49,7 @@ export const renderStage = async (args: {
 		await reader.close();
 
 		const meter = new StretchPeakMeter({ stretchFrames: layout.stretchFrames, channelCount });
-		const accumulator = new TruePeakAccumulator(channelCount);
+		const accumulator = isLast ? new TruePeakAccumulator(channelCount) : undefined;
 		const frames = Array.from({ length: channelCount }, () => new Float64Array(capacity));
 		const window = await SourceWindow.open(currentPath, capacity);
 		let writtenFrames = 0;
@@ -58,7 +58,7 @@ export const renderStage = async (args: {
 			const written = frames.map((channel) => channel.subarray(0, frameCount));
 
 			meter.push(written, frameCount);
-			accumulator.push(written, frameCount);
+			accumulator?.push(written, frameCount);
 
 			await (isLast ? writer.writeQuantized(written) : writer.write(written));
 
@@ -119,7 +119,7 @@ export const renderStage = async (args: {
 			await window.close();
 		}
 
-		result = { peaks: meter.finish(), truePeak: accumulator.finalize() };
+		result = { peaks: meter.finish(), truePeak: accumulator?.finalize() ?? 0 };
 	});
 
 	return result;
