@@ -386,7 +386,7 @@ describe("inputFormatOf", () => {
 	it.each([
 		[{ sampleRate: -48000 }, "Invalid sample rate: -48000"],
 		[{ sampleRate: 0 }, "Invalid sample rate: 0"],
-		[{ sampleRate: 4 }, "Unsupported sample rate: 4"],
+		[{ sampleRate: 7999 }, "Unsupported sample rate: 7999"],
 		[{ sampleRate: 768001 }, "Unsupported sample rate: 768001"],
 		[{ sampleRate: 2147483647 }, "Unsupported sample rate: 2147483647"],
 		[{ channelCount: 0 }, "Invalid channel count: 0; the most is 512"],
@@ -395,24 +395,26 @@ describe("inputFormatOf", () => {
 		expect(() => inputFormatOf(streamOf({ format: "s16le", ...options }), "-", undefined)).toThrow(message);
 	});
 
-	it("reads 512 channels, 5 Hz and 768000 Hz on a raw input", () => {
-		expect(inputFormatOf(streamOf({ format: "s16le", channelCount: 512, sampleRate: 5 }), "-", undefined)).toEqual({
-			sampleRate: 5,
-			channelCount: 512,
-			channelMask: 0,
-			bitDepth: "16",
-		});
+	it("reads 512 channels, 8000 Hz and 768000 Hz on a raw input", () => {
+		expect(inputFormatOf(streamOf({ format: "s16le", channelCount: 512, sampleRate: 8000 }), "-", undefined)).toEqual(
+			{
+				sampleRate: 8000,
+				channelCount: 512,
+				channelMask: 0,
+				bitDepth: "16",
+			},
+		);
 		expect(inputFormatOf(streamOf({ format: "s16le", sampleRate: 768000 }), "-", undefined).sampleRate).toBe(768000);
 	});
 
-	it("applies the 5 Hz and 768000 Hz limits to a WAV input", () => {
-		for (const sampleRate of [4, 768001]) {
+	it("applies the 8000 Hz and 768000 Hz limits to a WAV input", () => {
+		for (const sampleRate of [7999, 768001]) {
 			expect(() => inputFormatOf(DEFAULT_STREAM_OPTIONS, "in.wav", { ...header, sampleRate })).toThrow(
 				`Unsupported sample rate: ${sampleRate}`,
 			);
 		}
 
-		for (const sampleRate of [5, 768000]) {
+		for (const sampleRate of [8000, 768000]) {
 			expect(inputFormatOf(DEFAULT_STREAM_OPTIONS, "in.wav", { ...header, sampleRate }).sampleRate).toBe(sampleRate);
 		}
 	});

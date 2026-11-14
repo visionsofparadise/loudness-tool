@@ -146,7 +146,7 @@ An output keeps its input's sample rate and channels:
 7. **Formats.** Every format ffmpeg knows beyond those seven is an error, since loudness-tool reads and writes WAV and raw PCM only.
 8. **No `-sample_rate` arithmetic.** An expression such as `2*24000` is an error, where ffmpeg reads 48000, since an expression language for a sample rate is beyond the tool.
 
-A WAV or raw input below 5 Hz or above 768000 Hz fails with `Unsupported sample rate: <n>`. Below 5 Hz, BS.1770's 100 ms gating step rounds to no samples. 768000 Hz is the highest PCM rate in standard use, and above it a run's fixed cost outgrows its audio, since the 1.5 s of silence that closes the loudness range measurement and `crest`'s spreads are sized in samples, whatever the input's length.
+A WAV or raw input below 8000 Hz or above 768000 Hz fails with `Unsupported sample rate: <n>`. Below 8000 Hz there is too little audio band for the K-weighting to match its 48 kHz response, and 8000 Hz is the lowest rate in common use. 768000 Hz is the highest PCM rate in standard use, and above it a run's fixed cost outgrows its audio, since the 1.5 s of silence that closes the loudness range measurement and `crest`'s spreads are sized in samples, whatever the input's length.
 
 ## Temporary files
 

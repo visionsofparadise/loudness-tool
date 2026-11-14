@@ -644,15 +644,15 @@ describe("raw PCM and pipes across the commands", () => {
 		["lufs-norm", "-o", "-"],
 		["crest", "-o", "-"],
 		["target", "-o", "-", "--lufs", "-16"],
-	])("fails a 4 Hz WAV input in %s", async (name, ...options) => {
+	])("fails a 7999 Hz WAV input in %s", async (name, ...options) => {
 		const inputPath = join(workingDirectory, "slow.wav");
 
-		await writeTestWav(inputPath, createNoise(8, 2, 3), { bitDepth: "16", sampleRate: 4 });
+		await writeTestWav(inputPath, createNoise(8, 2, 3), { bitDepth: "16", sampleRate: 7999 });
 
 		const run = await runCli([name, inputPath, ...options]);
 
 		expect(run.exitCode).toBe(1);
-		expect(run.stderr).toContain("Unsupported sample rate: 4\n");
+		expect(run.stderr).toContain("Unsupported sample rate: 7999\n");
 	});
 
 	it.each([

@@ -488,15 +488,15 @@ describe("tp-norm on raw PCM", () => {
 		});
 	});
 
-	it("fails a 4 Hz WAV input before any pass", async () => {
+	it("fails a 7999 Hz WAV input before any pass", async () => {
 		const inputPath = join(workingDirectory, "slow.wav");
 
-		await writeTestWav(inputPath, createNoise(8, 2, 3), { bitDepth: "16", sampleRate: 4 });
+		await writeTestWav(inputPath, createNoise(8, 2, 3), { bitDepth: "16", sampleRate: 7999 });
 
 		const run = await runCli(["tp-norm", inputPath, "-o", "-"]);
 
 		expect(run.exitCode).toBe(1);
-		expect(run.stderr).toBe("error: Unsupported sample rate: 4\n");
+		expect(run.stderr).toBe("error: Unsupported sample rate: 7999\n");
 		expect(run.stdout.length).toBe(0);
 	});
 

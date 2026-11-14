@@ -41,7 +41,7 @@ const RAW_BIT_DEPTHS: Readonly<Record<RawFormatName, SourceBitDepth>> = {
 const RAW_DEFAULT_SAMPLE_RATE = 44100;
 const RAW_DEFAULT_CHANNEL_COUNT = 1;
 const MAXIMUM_CHANNEL_COUNT = 512;
-const MINIMUM_SAMPLE_RATE = 5;
+const MINIMUM_SAMPLE_RATE = 8000;
 const MAXIMUM_SAMPLE_RATE = 768000;
 const NEGATIVE_NUMBER = /^-(\d+|\d*\.\d+)(e[+-]?\d+)?$/;
 const STREAM_OPTION = /^-(f|ar|ac|ch_layout|channel_layout|sample_rate)(?::(.*))?$/s;
@@ -406,4 +406,4 @@ Stream options, as in ffmpeg, each applying to the input or -o output that follo
   -ar <rate>           raw input sample rate in Hz (default 44100; -sample_rate on an input); on an output, the input's rate or 0
   -ac <channels>       raw input channel count (default 1); on an output, the input's count or 0
   -ch_layout <layout>  channel layout, such as 5.1, FL+FR+LFE, 0x3f or 6C (also -channel_layout); outranks -ac
-Sample rates below 5 Hz or above 768000 Hz are not supported.`;
+Sample rates below 8000 Hz or above 768000 Hz are not supported.`;
