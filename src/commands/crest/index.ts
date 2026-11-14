@@ -117,7 +117,7 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 		const scratch = await Scratch.create(options.scratchDir);
 		let currentPath = sourcePath;
 		let peaks = measurement.peaks;
-		let outputTruePeak = 0;
+		let outputTruePeak: number | undefined;
 
 		try {
 			for (const [stepIndex] of layout.steps.entries()) {
@@ -150,6 +150,10 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 			}
 		} finally {
 			await scratch.dispose();
+		}
+
+		if (outputTruePeak === undefined) {
+			throw new Error("crest metered no output true peak; its last stage did not render");
 		}
 
 		const sourceDb = printedDbOf(measurement.truePeak);

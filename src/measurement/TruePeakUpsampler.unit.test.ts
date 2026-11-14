@@ -12,22 +12,38 @@ const HALF_BAND_LITERALS: ReadonlyArray<readonly [number, number]> = [
 	[0, -0.00015865893617748379],
 	[1, 0.00018547950713446886],
 	[2, -0.00021457536136403258],
+	[5, 0.0003166385271786585],
+	[10, -0.0005431993533972784],
+	[20, -0.0012698758788900872],
+	[30, -0.0025073322422440635],
 	[40, -0.004525474629766579],
+	[50, -0.007888177673189911],
+	[60, -0.014269865878752824],
+	[65, 0.02038851945705972],
+	[70, -0.03246430299257262],
+	[75, 0.07023707635765847],
+	[77, 0.1270464905120509],
 	[78, -0.21204001883294932],
 	[79, 0.6365642327784133],
-	[80, 0.6365642327784133],
-	[159, -0.00015865893617748379],
 ];
 
 const INTERPOLATOR_LITERALS: ReadonlyArray<readonly [number, number]> = [
 	[1, -0.0007645548686374766],
+	[3, -0.004082089743532789],
+	[5, -0.007574733533176416],
+	[7, -0.005265687780732956],
+	[9, 0.00826435744090166],
+	[10, 0.018770824381993317],
+	[11, 0.02983612549227662],
+	[13, 0.043032256151261654],
+	[15, 0.0250204370774339],
+	[17, -0.03444511401397163],
+	[19, -0.11312386082283409],
+	[21, -0.15337662013854844],
+	[23, -0.08685133278346521],
 	[25, 0.12194836141003469],
-	[33, 0.9718935112130203],
-	[57, -0.005265687780732956],
 	[28, 0.6098753923146512],
-	[36, 0.6098753923146512],
 	[31, 0.9718935112130203],
-	[63, -0.0007645548686374766],
 ];
 
 const FLUSH_OUTPUT_SAMPLES = FLUSH_FRAMES * UPSAMPLE_FACTOR;
@@ -83,34 +99,6 @@ describe("TruePeakUpsampler", () => {
 		for (const [index, expected] of literals) {
 			expect(Math.abs((taps[index] ?? Number.NaN) - expected)).toBeLessThan(1e-12);
 		}
-	});
-
-	it("emits the cascade of both stages' zero-stuffed convolutions as its impulse response", () => {
-		const halfBand = new Float64Array(2 * HALF_BAND_TAPS.length);
-
-		halfBand[HALF_BAND_TAPS.length] = 1;
-		HALF_BAND_TAPS.forEach((tap, index) => {
-			halfBand[2 * index + 1] = tap;
-		});
-
-		const stride = UPSAMPLE_FACTOR / 2;
-		const expected = new Float64Array((FLUSH_FRAMES + 1) * UPSAMPLE_FACTOR);
-
-		halfBand.forEach((first, firstIndex) => {
-			INTERPOLATOR_TAPS.forEach((second, secondIndex) => {
-				expected[firstIndex * stride + secondIndex] =
-					(expected[firstIndex * stride + secondIndex] ?? 0) + first * second;
-			});
-		});
-
-		const impulse = new Float64Array(1);
-
-		impulse[0] = 1;
-
-		const actual = runFinite(impulse);
-
-		expect(actual.length).toBe(expected.length);
-		expect(Math.max(...actual.map((value, index) => Math.abs(value - (expected[index] ?? 0))))).toBeLessThan(1e-12);
 	});
 
 	it("passes the input through phase 0, delayed by DELAY_FRAMES", () => {

@@ -8,6 +8,11 @@ import { StretchPeakMeter } from "./StretchPeakMeter";
 import type { CrestLayout } from "./layout";
 import type { AudioOutput } from "../../utils/sinks";
 
+interface RenderedStage {
+	readonly peaks: Float64Array;
+	readonly truePeak?: number;
+}
+
 const blendedChunksOf = (layout: CrestLayout, path: Int32Array): Array<number> => {
 	const chunkStretches = chunkStretchesOf(layout);
 	const chunks: Array<number> = [];
@@ -34,14 +39,11 @@ export const renderStage = async (args: {
 	path: Int32Array;
 	output: AudioOutput;
 	isLast: boolean;
-}): Promise<{ readonly peaks: Float64Array; readonly truePeak: number }> => {
+}): Promise<RenderedStage> => {
 	const { sourcePath, currentPath, layout, stepIndex, path, output, isLast } = args;
 	const quantize = isLast ? quantizerOf(output.bitDepth) : (sample: number): number => sample;
 	const capacity = chunkStretchesOf(layout) * layout.stretchFrames;
-	let result: { readonly peaks: Float64Array; readonly truePeak: number } = {
-		peaks: new Float64Array(0),
-		truePeak: 0,
-	};
+	let result: RenderedStage = { peaks: new Float64Array(0) };
 
 	await withWavWriter(currentPath, output, async (reader, writer) => {
 		const { channelCount } = reader.format;
@@ -119,7 +121,7 @@ export const renderStage = async (args: {
 			await window.close();
 		}
 
-		result = { peaks: meter.finish(), truePeak: accumulator?.finalize() ?? 0 };
+		result = { peaks: meter.finish(), truePeak: accumulator?.finalize() };
 	});
 
 	return result;

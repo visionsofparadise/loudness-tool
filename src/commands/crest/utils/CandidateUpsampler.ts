@@ -1,15 +1,15 @@
 // eslint-disable-next-line comment-rules/no-restricted-comments
 // Four-phase, 12-tap FIR coefficient columns from ITU-R BS.1770-5 Annex 2.
 
-const OVERSAMPLE_FACTOR = 4;
+import { GuardedUpsampler } from "../../../measurement/GuardedUpsampler";
+
+export const OVERSAMPLE_FACTOR = 4;
 
 export const TAPS_PER_PHASE = 12;
 
 const HISTORY_LENGTH = TAPS_PER_PHASE;
 
 export const FLUSH_FRAMES = TAPS_PER_PHASE - 1;
-
-const FLUSH_INPUT = new Float64Array(FLUSH_FRAMES);
 
 const P0T0 = 0.001708984375;
 const P0T1 = 0.010986328125;
@@ -63,56 +63,20 @@ const P3T9 = -0.0196533203125;
 const P3T10 = 0.010986328125;
 const P3T11 = 0.001708984375;
 
-export class CandidateUpsampler {
+export class CandidateUpsampler extends GuardedUpsampler {
 	private readonly history = new Float64Array(HISTORY_LENGTH);
 	private work: Float64Array = new Float64Array(0);
-	private flushed = false;
 
-	upsample(input: Float64Array, frameCount: number, output: Float64Array): number {
-		if (this.flushed) {
-			throw new Error("CandidateUpsampler: upsample after flush; call reset() first");
-		}
-
-		if (frameCount < 0) {
-			throw new Error(`CandidateUpsampler: frameCount must be non-negative, got ${frameCount}`);
-		}
-
-		if (input.length < frameCount) {
-			throw new Error(
-				`CandidateUpsampler: input has ${input.length} samples, fewer than the requested ${frameCount}`,
-			);
-		}
-
-		return this.process(input, frameCount, output);
+	constructor() {
+		super("CandidateUpsampler", OVERSAMPLE_FACTOR, FLUSH_FRAMES);
 	}
 
-	flush(output: Float64Array): number {
-		if (this.flushed) {
-			return 0;
-		}
-
-		const written = this.process(FLUSH_INPUT, FLUSH_INPUT.length, output);
-
-		this.flushed = true;
-
-		return written;
-	}
-
-	reset(): void {
+	protected clear(): void {
 		this.history.fill(0);
 		this.work = new Float64Array(0);
-		this.flushed = false;
 	}
 
-	private process(input: Float64Array, frameCount: number, output: Float64Array): number {
-		const outputLength = frameCount * OVERSAMPLE_FACTOR;
-
-		if (output.length < outputLength) {
-			throw new Error(
-				`CandidateUpsampler: output length ${output.length} is below the ${outputLength} samples required`,
-			);
-		}
-
+	protected process(input: Float64Array, frameCount: number, output: Float64Array): void {
 		const history = this.history;
 		const workLength = HISTORY_LENGTH + frameCount;
 
@@ -215,7 +179,5 @@ export class CandidateUpsampler {
 			history.copyWithin(0, frameCount);
 			history.set(work.subarray(HISTORY_LENGTH, workLength), HISTORY_LENGTH - frameCount);
 		}
-
-		return outputLength;
 	}
 }

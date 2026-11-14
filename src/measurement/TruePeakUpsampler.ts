@@ -1,3 +1,5 @@
+import { GuardedUpsampler } from "./GuardedUpsampler";
+
 const HALF_BAND_PHASE_TAPS = 160;
 const HALF_BAND_BETA = 5;
 const HALF_BAND_FOLDED_TAPS = HALF_BAND_PHASE_TAPS / 2;
@@ -61,56 +63,24 @@ const PHASE_TAPS = Float64Array.from({ length: INTERPOLATOR_LENGTH }, (_, index)
 	return INTERPOLATOR_TAPS[tap * INTERPOLATOR_FACTOR + phase] ?? 0;
 });
 
-const FLUSH_INPUT = new Float64Array(FLUSH_FRAMES);
-
-export class TruePeakUpsampler {
+export class TruePeakUpsampler extends GuardedUpsampler {
 	private readonly inputHistory = new Float64Array(HALF_BAND_HISTORY);
 	private readonly halfBandHistory = new Float64Array(INTERPOLATOR_HISTORY);
 	private inputWork: Float64Array = new Float64Array(0);
 	private halfBandWork: Float64Array = new Float64Array(0);
-	private flushed = false;
 
-	upsample(input: Float64Array, frameCount: number, output: Float64Array): number {
-		const problem = this.flushed
-			? "upsample after flush; call reset() first"
-			: frameCount < 0
-				? `frameCount must be non-negative, got ${frameCount}`
-				: input.length < frameCount
-					? `input has ${input.length} samples, fewer than the requested ${frameCount}`
-					: undefined;
-
-		if (problem !== undefined) {
-			throw new Error(`TruePeakUpsampler: ${problem}`);
-		}
-
-		return this.process(input, frameCount, output);
+	constructor() {
+		super("TruePeakUpsampler", UPSAMPLE_FACTOR, FLUSH_FRAMES);
 	}
 
-	flush(output: Float64Array): number {
-		const written = this.flushed ? 0 : this.process(FLUSH_INPUT, FLUSH_FRAMES, output);
-
-		this.flushed = true;
-
-		return written;
-	}
-
-	reset(): void {
+	protected clear(): void {
 		this.inputHistory.fill(0);
 		this.halfBandHistory.fill(0);
 		this.inputWork = new Float64Array(0);
 		this.halfBandWork = new Float64Array(0);
-		this.flushed = false;
 	}
 
-	private process(input: Float64Array, frameCount: number, output: Float64Array): number {
-		const outputLength = frameCount * UPSAMPLE_FACTOR;
-
-		if (output.length < outputLength) {
-			throw new Error(
-				`TruePeakUpsampler: output length ${output.length} is below the ${outputLength} samples required`,
-			);
-		}
-
+	protected process(input: Float64Array, frameCount: number, output: Float64Array): void {
 		const halfBandCount = 2 * frameCount;
 		const inputWork = this.workOf("inputWork", HALF_BAND_HISTORY + frameCount);
 		const halfBandWork = this.workOf("halfBandWork", INTERPOLATOR_HISTORY + halfBandCount);
@@ -165,8 +135,6 @@ export class TruePeakUpsampler {
 
 		this.inputHistory.set(inputWork.subarray(frameCount, frameCount + HALF_BAND_HISTORY));
 		this.halfBandHistory.set(halfBandWork.subarray(halfBandCount, halfBandCount + INTERPOLATOR_HISTORY));
-
-		return outputLength;
 	}
 
 	private workOf(key: "inputWork" | "halfBandWork", length: number): Float64Array {

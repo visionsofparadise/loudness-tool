@@ -2,7 +2,7 @@ import { Disperser } from "./Disperser";
 import { SourceWindow } from "./SourceWindow";
 import type { CrestLayout } from "./layout";
 
-export const OVERSAMPLE_FACTOR = 4;
+export { OVERSAMPLE_FACTOR } from "./CandidateUpsampler";
 
 const TARGET_CHUNK_FRAMES = 16384;
 

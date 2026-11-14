@@ -224,6 +224,7 @@ export const measureSource = async (args: {
 		let detectedFrames = 0;
 		let rawMax = 0;
 		let interpolatedMax = 0;
+		let preRingMax = 0;
 
 		const persistPooled = async (pooled: Float64Array): Promise<void> => {
 			if (pooled.length === 0) {
@@ -260,6 +261,7 @@ export const measureSource = async (args: {
 			const skipped = Math.min(skipRemaining, upLength);
 
 			skipRemaining -= skipped;
+			preRingMax = maxOf(levelsScratch, skipped, preRingMax);
 
 			const frames = Math.min((upLength - skipped) / UPSAMPLE_FACTOR, frameIndex - detectedFrames);
 
@@ -272,7 +274,19 @@ export const measureSource = async (args: {
 			}
 
 			collapseMaxPerFrame(levelsScratch.subarray(skipped), frames, baseScratch);
+
+			if (detectedFrames === 0) {
+				baseScratch[0] = Math.max(baseScratch[0] ?? 0, preRingMax);
+			}
+
 			detectedFrames += frames;
+
+			if (detectedFrames === frameIndex) {
+				const tailStart = skipped + frames * UPSAMPLE_FACTOR;
+				const tailMax = maxOf(levelsScratch.subarray(tailStart), upLength - tailStart, 0);
+
+				baseScratch[frames - 1] = Math.max(baseScratch[frames - 1] ?? 0, tailMax);
+			}
 
 			await pushDetection(baseScratch.subarray(0, frames), frames);
 		};
