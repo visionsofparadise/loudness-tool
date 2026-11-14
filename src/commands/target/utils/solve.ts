@@ -239,25 +239,21 @@ export const measuredCapOf = (attempts: ReadonlyArray<IterationAttempt>): number
 };
 
 export const overshootBoost = (attempts: ReadonlyArray<IterationAttempt>, targetLufs: number): number | null => {
-	if (attempts.length === 0 || attempts.some((attempt) => grainedDb(levelOf(attempt.outputLufs) - targetLufs) <= 0)) {
+	if (attempts.length < 2 || attempts.some((attempt) => grainedDb(levelOf(attempt.outputLufs) - targetLufs) <= 0)) {
 		return null;
 	}
 
 	const [lowest, nextLowest] = [...attempts].sort((left, right) => left.boost - right.boost);
 
-	if (lowest === undefined) {
+	if (lowest === undefined || nextLowest === undefined) {
 		return null;
 	}
 
-	if (nextLowest !== undefined) {
-		const slope = (levelOf(nextLowest.outputLufs) - levelOf(lowest.outputLufs)) / (nextLowest.boost - lowest.boost);
+	const slope = (levelOf(nextLowest.outputLufs) - levelOf(lowest.outputLufs)) / (nextLowest.boost - lowest.boost);
 
-		if (Number.isFinite(slope) && slope >= MIN_OVERSHOOT_SLOPE) {
-			return lowest.boost - (levelOf(lowest.outputLufs) - targetLufs) / slope;
-		}
-	}
-
-	return lowest.boost - OVERSHOOT_STEP_DB * 2 ** (attempts.length - 1);
+	return Number.isFinite(slope) && slope >= MIN_OVERSHOOT_SLOPE
+		? lowest.boost - (levelOf(lowest.outputLufs) - targetLufs) / slope
+		: lowest.boost - OVERSHOOT_STEP_DB * 2 ** (attempts.length - 2);
 };
 
 const bisectRoot = (args: {

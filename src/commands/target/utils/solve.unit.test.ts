@@ -285,14 +285,17 @@ describe("overshootBoost", () => {
 		expect(overshootBoost(attempts, -16)).toBeCloseTo(48 - 0.2 / 0.15, 12);
 	});
 
-	it("steps down 1 dB from one attempt and doubles the step while the slope stays under 0.01 LU/dB", () => {
+	it("steps down 1 dB from two attempts whose slope is under 0.01 LU/dB and doubles the step after", () => {
 		const first = attemptOf({ boost: 50, outputLufs: -15.5 });
 		const second = attemptOf({ boost: 49, outputLufs: -15.505 });
-		const third = attemptOf({ boost: 47, outputLufs: -15.506 });
+		const third = attemptOf({ boost: 48, outputLufs: -15.506 });
 
-		expect(overshootBoost([first], -16)).toBe(49);
-		expect(overshootBoost([first, second], -16)).toBe(47);
-		expect(overshootBoost([first, second, third], -16)).toBe(43);
+		expect(overshootBoost([first, second], -16)).toBe(48);
+		expect(overshootBoost([first, second, third], -16)).toBe(46);
+	});
+
+	it("leaves a single over-target attempt to the residual-corrected search", () => {
+		expect(overshootBoost([attemptOf({ boost: 50, outputLufs: -15.5 })], -16)).toBeNull();
 	});
 
 	it("returns null once an attempt lands at or under the target", () => {
