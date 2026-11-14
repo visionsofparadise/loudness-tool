@@ -26,6 +26,7 @@ const MAX_BRACKET_STEPS = 64;
 const MIN_OVERSHOOT_SLOPE = 0.01;
 const OVERSHOOT_STEP_DB = 1;
 const LEGALITY_ATTEMPT_LIMIT = 20;
+const REPEAT_GRAIN_DB = 1e-4;
 
 export interface IterationAttempt {
 	boost: number;
@@ -237,6 +238,50 @@ export const measuredCapOf = (attempts: ReadonlyArray<IterationAttempt>): number
 
 	return cap;
 };
+
+export const searchCapOf = (args: {
+	predict: (B: number) => number;
+	anchorsAt: (B: number) => Anchors;
+	histogram: DetectionHistogram;
+	attempts: ReadonlyArray<IterationAttempt>;
+	targetLufs: number;
+	startB: number;
+	tolerance: number;
+}): number => {
+	const { predict, anchorsAt, histogram, attempts, targetLufs, startB, tolerance } = args;
+	const cap = Math.min(bodySaturationBoost({ anchorsAt, histogram, startB, tolerance }), measuredCapOf(attempts));
+	const plateau = bracketBoost({ predict, targetLufs, startB, maxB: cap, tolerance });
+
+	return plateau.kind === "capped" ? plateau.boost : cap;
+};
+
+export const stopsRisingAt = (args: {
+	attempts: ReadonlyArray<IterationAttempt>;
+	cap: number;
+	targetLufs: number;
+	ceilingDb: number;
+	tolerance: number;
+}): boolean => {
+	const { attempts, cap, targetLufs, ceilingDb, tolerance } = args;
+
+	return attempts.some(
+		(attempt) =>
+			attempt.boost >= cap - CHECK_GRAIN_DB &&
+			isLegalAttempt(attempt.outputLufs, attempt.outputTruePeakDb, targetLufs, ceilingDb) &&
+			grainedDb(levelOf(attempt.outputLufs) - targetLufs) <= -tolerance,
+	);
+};
+
+export const repeatsAttempt = (
+	attempts: ReadonlyArray<IterationAttempt>,
+	boost: number,
+	effectiveCeilingDb: number,
+): boolean =>
+	attempts.some(
+		(attempt) =>
+			Math.abs(attempt.boost - boost) < REPEAT_GRAIN_DB &&
+			Math.abs(attempt.ceilingDb - effectiveCeilingDb) < REPEAT_GRAIN_DB,
+	);
 
 export const overshootBoost = (attempts: ReadonlyArray<IterationAttempt>, targetLufs: number): number | null => {
 	if (attempts.length < 2 || attempts.some((attempt) => grainedDb(levelOf(attempt.outputLufs) - targetLufs) <= 0)) {
@@ -554,38 +599,20 @@ export const iterateForTargets = async (
 	});
 	const predictWithResidual = (boost: number): number =>
 		predictOutputLufs(sourceLufs, anchorsAt(boost), histogram) + residual;
-	const searchCapOf = (lufsTarget: number | undefined): number => {
-		if (lufsTarget === undefined) {
-			return Number.POSITIVE_INFINITY;
-		}
-
-		const cap = Math.min(
-			bodySaturationBoost({ anchorsAt, histogram, startB: startBoost, tolerance }),
-			measuredCapOf(attempts),
-		);
-
-		if (Number.isFinite(cap)) {
-			return cap;
-		}
-
-		const plateau = bracketBoost({
-			predict: predictWithResidual,
-			targetLufs: lufsTarget,
-			startB: startBoost,
-			maxB: cap,
-			tolerance,
-		});
-
-		return plateau.kind === "capped" ? plateau.boost : cap;
-	};
-	const stopsRisingAt = (cap: number): boolean =>
-		targetLufs !== undefined &&
-		attempts.some(
-			(attempt) =>
-				attempt.boost >= cap - CHECK_GRAIN_DB &&
-				isLegalAttempt(attempt.outputLufs, attempt.outputTruePeakDb, targetLufs, ceilingDb) &&
-				grainedDb(levelOf(attempt.outputLufs) - targetLufs) <= -tolerance,
-		);
+	const capOf = (lufsTarget: number | undefined): number =>
+		lufsTarget === undefined
+			? Number.POSITIVE_INFINITY
+			: searchCapOf({
+					predict: predictWithResidual,
+					anchorsAt,
+					histogram,
+					attempts,
+					targetLufs: lufsTarget,
+					startB: startBoost,
+					tolerance,
+				});
+	const stopsRising = (cap: number): boolean =>
+		targetLufs !== undefined && stopsRisingAt({ attempts, cap, targetLufs, ceilingDb, tolerance });
 	const nextBoost = (cap: number): number => {
 		if (targetLufs === undefined) {
 			return effectiveCeilingDb - limitDb;
@@ -628,15 +655,20 @@ export const iterateForTargets = async (
 				));
 			attemptIndex++
 		) {
-			const cap = searchCapOf(targetLufs);
+			const cap = capOf(targetLufs);
 
-			if (stopsRisingAt(cap)) {
+			if (stopsRising(cap)) {
 				stoppedRising = true;
 
 				break;
 			}
 
 			const boost = nextBoost(cap);
+
+			if (repeatsAttempt(attempts, boost, effectiveCeilingDb)) {
+				break;
+			}
+
 			const anchors = anchorsAt(boost);
 			const dest = await SampleFile.create(scratch, `envelope-${attemptIndex}`);
 			let measured: MeasuredOutput;
@@ -703,7 +735,7 @@ export const iterateForTargets = async (
 
 		const converged = hasConverged(winningAttempt, targetLufs, ceilingDb, tolerance);
 
-		stoppedRising = !converged && (stoppedRising || stopsRisingAt(searchCapOf(targetLufs)));
+		stoppedRising = !converged && (stoppedRising || stopsRising(capOf(targetLufs)));
 
 		const result: IterateResult = {
 			bestSmoothedEnvelope: winningEnvelope ?? (await SampleFile.create(scratch, "empty-envelope")),

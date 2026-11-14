@@ -312,16 +312,36 @@ describe("target's search", () => {
 		expectLanded(written.truePeakDb, -1);
 	}, 60_000);
 
-	it("holds 0 dBTP under --lufs alone on noise carrying full-scale pulses", async () => {
+	const pulsedNoise = (firstPulseSeconds: number, pulseFrames: number): Float64Array => {
 		const [noise = new Float64Array(0)] = scaled(createNoise(10 * SAMPLE_RATE, 1, 41), dbToLinear(-26) / NOISE_RMS);
 		const pulsePeriod = Math.round(0.0685 * SAMPLE_RATE);
 
-		for (let index = pulsePeriod; index < noise.length; index += pulsePeriod) {
-			noise[index] = 1;
+		for (
+			let index = Math.round(firstPulseSeconds * SAMPLE_RATE);
+			index + pulseFrames <= noise.length;
+			index += pulsePeriod
+		) {
+			noise.fill(1, index, index + pulseFrames);
 		}
 
-		const { written } = await runTarget("pulses", [noise], ["--lufs", "-16"]);
+		return noise;
+	};
 
+	it("holds 0 dBTP under --lufs alone on noise carrying full-scale pulses", async () => {
+		const { written } = await runTarget("pulses", [pulsedNoise(0.0685, 1)], ["--lufs", "-16"]);
+
+		expect(written.truePeakDb ?? Infinity).toBeLessThanOrEqual(GRAIN);
+	}, 60_000);
+
+	it("stops unreachable without repeating a body gain where the predicted loudness stops rising under the body bound", async () => {
+		const { stderr, written } = await runTarget("pulses-lead-in", [pulsedNoise(0.046, 2)], ["--lufs", "-16"]);
+		const bodyGains = [...stderr.matchAll(/^attempt \d+ +body gain (-?\d+\.\d+)/gm)].map((match) => match[1]);
+		const unreachable = UNREACHABLE_PATTERN.exec(stderr);
+
+		expect(new Set(bodyGains).size).toBe(bodyGains.length);
+		expect(unreachable).not.toBeNull();
+		expect(Number(unreachable?.[1])).toBeCloseTo(written.integratedLufs ?? Infinity, 2);
+		expect(Number(unreachable?.[1])).toBeLessThan(-16 - TOLERANCE);
 		expect(written.truePeakDb ?? Infinity).toBeLessThanOrEqual(GRAIN);
 	}, 60_000);
 

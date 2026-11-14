@@ -23,6 +23,9 @@ import {
 	nextSearchBoost,
 	overshootBoost,
 	predictOutputLufs,
+	repeatsAttempt,
+	searchCapOf,
+	stopsRisingAt,
 	type IterationAttempt,
 	type Targets,
 } from "./solve";
@@ -275,6 +278,72 @@ describe("measuredCapOf", () => {
 		const attempts = [attemptOf({ boost: 10, outputLufs: -18 }), attemptOf({ boost: 20, outputLufs: -17 })];
 
 		expect(measuredCapOf(attempts)).toBe(Number.POSITIVE_INFINITY);
+	});
+});
+
+describe("searchCapOf", () => {
+	const anchorsAt = (boost: number): Anchors => anchorsOf({ pivotDb: -25, ceilingDb: 0, B: boost, peakGainDb: boost });
+	const capArgsOf = (histogram: DetectionHistogram) => ({
+		predict: (boost: number): number => predictOutputLufs(-20, anchorsAt(boost), histogram),
+		anchorsAt,
+		histogram,
+		attempts: [],
+		targetLufs: -16,
+		startB: 4,
+		tolerance: 0.5,
+	});
+	const histogramOf = (quietEnergy: number): DetectionHistogram =>
+		histogramWith([
+			{ loudnessDb: -20.1, peakDb: 2.1, energy: 1 },
+			{ loudnessDb: -20.1, peakDb: -12.9, energy: 0.005 },
+			{ loudnessDb: -30.1, peakDb: 2.1, energy: quietEnergy },
+		]);
+
+	it("caps at the body gain where the predicted loudness stops rising when that comes before the body bound", () => {
+		const histogram = histogramOf(10);
+
+		expect(bodySaturationBoost({ anchorsAt, histogram, startB: 4, tolerance: 0.5 })).toBeGreaterThan(12);
+		expect(searchCapOf(capArgsOf(histogram))).toBe(10);
+	});
+
+	it("keeps the body bound while the predicted loudness rises up to it", () => {
+		const histogram = histogramOf(1);
+
+		expect(searchCapOf(capArgsOf(histogram))).toBe(
+			bodySaturationBoost({ anchorsAt, histogram, startB: 4, tolerance: 0.5 }),
+		);
+	});
+});
+
+describe("stopsRisingAt", () => {
+	const stopArgsOf = (attempt: IterationAttempt) => ({
+		attempts: [attempt],
+		cap: 10,
+		targetLufs: -16,
+		ceilingDb: 0,
+		tolerance: 0.5,
+	});
+
+	it("stops on a legal attempt at the cap landing under the target by the tolerance", () => {
+		expect(stopsRisingAt(stopArgsOf(attemptOf({ boost: 10, outputLufs: -22.2, outputTruePeakDb: 0 })))).toBe(true);
+	});
+
+	it("keeps searching after an attempt under the cap or over the ceiling", () => {
+		expect(stopsRisingAt(stopArgsOf(attemptOf({ boost: 9.9, outputLufs: -22.2, outputTruePeakDb: 0 })))).toBe(false);
+		expect(stopsRisingAt(stopArgsOf(attemptOf({ boost: 10, outputLufs: -22.2, outputTruePeakDb: 0.2 })))).toBe(false);
+	});
+});
+
+describe("repeatsAttempt", () => {
+	const attempts = [attemptOf({ boost: 7.7792, ceilingDb: -1.6e-6 })];
+
+	it("matches a body gain already measured at the same effective ceiling", () => {
+		expect(repeatsAttempt(attempts, 7.7792, -1.7e-6)).toBe(true);
+	});
+
+	it("leaves a new body gain, or the same one under a corrected ceiling, to be measured", () => {
+		expect(repeatsAttempt(attempts, 7.7892, -1.6e-6)).toBe(false);
+		expect(repeatsAttempt(attempts, 7.7792, -0.2)).toBe(false);
 	});
 });
 
