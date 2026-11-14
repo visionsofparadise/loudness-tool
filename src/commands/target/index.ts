@@ -1,8 +1,9 @@
 import { InvalidArgumentError, type Command } from "commander";
-import { figureText } from "../../utils/db";
+import { dbToLinear, figureText } from "../../utils/db";
 import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
 import { quantizerOf } from "../../wav/utils/sampleCodec";
+import { applyUniformGain } from "../utils/applyUniformGain";
 import { replayableInputOptionsOf, withAudioInput, type AudioInput } from "../utils/AudioInput";
 import { audioOptionsOf } from "../utils/AudioProgram";
 import { copyUnchanged } from "../utils/copyUnchanged";
@@ -13,7 +14,8 @@ import { bodyPeakDbOf, measureSource } from "./utils/measureSource";
 import { iterateForTargets } from "./utils/solve";
 import { windowSamplesFromMs } from "./utils/window";
 import type { StreamOptions } from "../utils/streamOptions";
-import type { IterationAttempt, Targets } from "./utils/solve";
+import type { SourceMeasurement } from "./utils/measureSource";
+import type { AnchorBase, IterationAttempt, Targets } from "./utils/solve";
 import type { SampleFile } from "../../utils/SampleFile";
 
 interface TargetOptions {
@@ -34,9 +36,8 @@ interface TargetOptions {
 
 const LABEL_WIDTH = 18;
 const DEFAULT_LIMIT_PERCENTILE = 0.995;
-const DEFAULT_SMOOTHING_MS = 1;
+const DEFAULT_SMOOTHING_MS = 40;
 const DEFAULT_TOLERANCE = 0.5;
-const FLOOR_PIVOT_EPSILON_DB = 0.01;
 const PIVOT_FALLBACK_DB = -40;
 const ANCHOR_SPACING_DB = 6;
 const TARGET_LUFS_STEP = 0.1;
@@ -129,6 +130,24 @@ const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets =>
 	throw new Error("at least one of --lufs and --tp is required");
 };
 
+const assertAppliesWithTp = (targets: Targets, options: TargetOptions): void => {
+	if (targets.targetTp !== undefined) {
+		return;
+	}
+
+	const given: ReadonlyArray<readonly [string, boolean]> = [
+		["--limit-db", options.limitDb !== undefined],
+		["--limit-percentile", options.limitPercentile !== undefined],
+		["--never-expand", options.neverExpand === true],
+	];
+
+	for (const [option, isGiven] of given) {
+		if (isGiven) {
+			throw new Error(`${option} applies only with --tp`);
+		}
+	}
+};
+
 const applyEnvelopeAndWrite = async (replayPath: string, output: AudioOutput, envelope: SampleFile): Promise<void> => {
 	await withWavWriter(replayPath, output, async (reader, writer) => {
 		await reader.close();
@@ -138,18 +157,133 @@ const applyEnvelopeAndWrite = async (replayPath: string, output: AudioOutput, en
 	});
 };
 
-const fitInput = async (
+const pivotOf = (options: TargetOptions, measurement: SourceMeasurement): number => {
+	if (options.pivot !== undefined) {
+		return options.pivot;
+	}
+
+	if (Number.isFinite(measurement.pivotAutoDb)) {
+		return measurement.pivotAutoDb;
+	}
+
+	process.stderr.write(
+		`pivot auto-derivation produced no considered LRA blocks; falling back to ${PIVOT_FALLBACK_DB} dB. Supply --pivot explicitly for tighter control on short or near-silent sources\n`,
+	);
+
+	return PIVOT_FALLBACK_DB;
+};
+
+const floorOf = (options: TargetOptions, measurement: SourceMeasurement, pivotDb: number): number | null => {
+	if (options.floor !== undefined) {
+		if (options.pivot === undefined && options.floor >= pivotDb) {
+			throw new Error(
+				`floor ${options.floor} must be below the automatic pivot ${pivotDb.toFixed(2)} LUFS; set --pivot above it`,
+			);
+		}
+
+		return options.floor;
+	}
+
+	return Number.isFinite(measurement.floorAutoDb)
+		? Math.min(measurement.floorAutoDb, pivotDb - ANCHOR_SPACING_DB)
+		: null;
+};
+
+const anchorBaseOf = (
+	options: TargetOptions,
+	targets: Targets,
+	measurement: SourceMeasurement,
+	truePeakDb: number,
+): AnchorBase => {
+	const pivotDb = pivotOf(options, measurement);
+	const floorDb = floorOf(options, measurement, pivotDb);
+	const limitDb = Math.min(options.limitDb ?? measurement.limitAutoDb, truePeakDb);
+	const bodyPeakDb = bodyPeakDbOf(measurement.detectionHistogram, pivotDb);
+	const isArmOn =
+		targets.targetTp !== undefined &&
+		Number.isFinite(bodyPeakDb) &&
+		(options.limitDb !== undefined || limitDb >= bodyPeakDb + ANCHOR_SPACING_DB);
+	let kneeDb: number | null = null;
+
+	if (isArmOn) {
+		kneeDb = options.limitDb === undefined ? bodyPeakDb : Math.min(bodyPeakDb, limitDb - ANCHOR_SPACING_DB);
+	}
+
+	return { floorDb, pivotDb, kneeDb, limitDb };
+};
+
+interface FitSettings {
+	readonly targets: Targets;
+	readonly limitPercentile: number;
+	readonly smoothingMs: number;
+	readonly tolerance: number;
+	readonly neverExpand: boolean;
+}
+
+const fitMeasured = async (
 	input: AudioInput,
 	options: TargetOptions,
-	settings: {
-		readonly targets: Targets;
-		readonly limitPercentile: number;
-		readonly smoothingMs: number;
-		readonly tolerance: number;
-		readonly neverExpand: boolean;
+	settings: FitSettings & {
+		readonly scratch: Scratch;
+		readonly measurement: SourceMeasurement;
+		readonly anchorBase: AnchorBase;
 	},
-): Promise<void> => {
-	const { targets, limitPercentile, smoothingMs, tolerance, neverExpand } = settings;
+): Promise<SampleFile> => {
+	const { targets, smoothingMs, tolerance, neverExpand, measurement, anchorBase } = settings;
+	const output = input.output();
+	const result = await iterateForTargets({
+		inputPath: input.replayPath(),
+		scratch: settings.scratch,
+		sampleRate: measurement.sampleRate,
+		channelCount: measurement.channelCount,
+		weights: measurement.weights,
+		frameCount: measurement.frameCount,
+		outputBitDepth: output.bitDepth,
+		anchorBase,
+		smoothingMs,
+		...targets,
+		sourceLufs: measurement.integratedLufs,
+		tolerance,
+		neverExpand,
+		histogram: measurement.detectionHistogram,
+		loudnessEnvelope: measurement.loudnessEnvelope,
+		peakEnvelope: measurement.peakEnvelope,
+		onAttempt: (attempt, attemptIndex) => {
+			process.stderr.write(`${formatAttempt(attempt, attemptIndex, targets)}\n`);
+		},
+	});
+
+	try {
+		if (result.unreachableLufs !== null) {
+			process.stderr.write(
+				`target unreachable: loudness stops rising at ${result.unreachableLufs.toFixed(2)} LUFS\n`,
+			);
+		}
+
+		await applyEnvelopeAndWrite(input.replayPath(), output, result.bestSmoothedEnvelope);
+		await writeSummary(
+			options.output,
+			`${[
+				alignedLine("output integrated", figureText(result.winnerOutputLufs, 2, "LUFS")),
+				alignedLine("output true peak", figureText(result.winnerOutputTruePeakDb, 2, "dBTP")),
+				alignedLine("loudness range", figureText(result.winnerOutputLra, 2, "LU")),
+				alignedLine("body gain", figureText(result.bestB, 4, "dB")),
+				alignedLine("peak gain", figureText(result.bestPeakGainDb, 4, "dB")),
+				alignedLine("converged", String(result.converged)),
+				alignedLine("output", options.output),
+			].join("\n")}\n`,
+		);
+	} catch (error: unknown) {
+		await result.bestSmoothedEnvelope.close();
+
+		throw error;
+	}
+
+	return result.bestSmoothedEnvelope;
+};
+
+const fitInput = async (input: AudioInput, options: TargetOptions, settings: FitSettings): Promise<void> => {
+	const { targets, limitPercentile, smoothingMs } = settings;
 	const scratch = await Scratch.create(options.scratchDir);
 	const errors: Array<unknown> = [];
 	let openEnvelopes: Array<SampleFile> = [];
@@ -166,97 +300,29 @@ const fitInput = async (
 
 		openEnvelopes = [measurement.loudnessEnvelope, measurement.peakEnvelope];
 
-		if (!Number.isFinite(measurement.integratedLufs) || measurement.truePeakDb === null) {
+		const { integratedLufs, truePeakDb } = measurement;
+		const { targetLufs, targetTp } = targets;
+
+		if (truePeakDb === null || (!Number.isFinite(integratedLufs) && targetTp === undefined)) {
 			await copyUnchanged(input.replayPath(), input.output());
-			process.stderr.write("source has no measurable loudness; passed through unchanged\n");
+			process.stderr.write("source has no measurable loudness; passed through\n");
+		} else if (!Number.isFinite(integratedLufs) && targetLufs !== undefined && targetTp !== undefined) {
+			if (truePeakDb > targetTp) {
+				await applyUniformGain(input.replayPath(), input.output(), dbToLinear(targetTp - truePeakDb));
+				process.stderr.write("source has no measurable loudness; lowered to the true-peak target\n");
+			} else {
+				await copyUnchanged(input.replayPath(), input.output());
+				process.stderr.write("source has no measurable loudness; passed through\n");
+			}
 		} else {
-			let effectivePivotDb: number;
-
-			if (options.pivot !== undefined) {
-				effectivePivotDb = options.pivot;
-			} else if (Number.isFinite(measurement.pivotAutoDb)) {
-				effectivePivotDb = measurement.pivotAutoDb;
-			} else {
-				effectivePivotDb = PIVOT_FALLBACK_DB;
-				process.stderr.write(
-					`pivot auto-derivation produced no considered LRA blocks; falling back to ${PIVOT_FALLBACK_DB} dB. Supply --pivot explicitly for tighter control on short or near-silent sources\n`,
-				);
+			if (!Number.isFinite(integratedLufs)) {
+				process.stderr.write("source has no measurable loudness; fitting true peak only\n");
 			}
 
-			let effectiveFloorDb: number | null;
-
-			if (options.floor !== undefined) {
-				effectiveFloorDb = options.floor;
-			} else if (Number.isFinite(measurement.floorAutoDb)) {
-				effectiveFloorDb = Math.min(measurement.floorAutoDb, effectivePivotDb - ANCHOR_SPACING_DB);
-			} else {
-				effectiveFloorDb = null;
-			}
-
-			if (effectiveFloorDb !== null && effectiveFloorDb >= effectivePivotDb) {
-				effectiveFloorDb = effectivePivotDb - FLOOR_PIVOT_EPSILON_DB;
-			}
-
-			const limitDb = Math.min(options.limitDb ?? measurement.limitAutoDb, measurement.truePeakDb);
-			const bodyPeakDb = bodyPeakDbOf(measurement.detectionHistogram, effectivePivotDb);
-			const isArmOn =
-				targets.targetTp !== undefined &&
-				Number.isFinite(bodyPeakDb) &&
-				(options.limitDb !== undefined || limitDb >= bodyPeakDb + ANCHOR_SPACING_DB);
-			let kneeDb: number | null = null;
-
-			if (isArmOn) {
-				kneeDb = options.limitDb === undefined ? bodyPeakDb : Math.min(bodyPeakDb, limitDb - ANCHOR_SPACING_DB);
-			}
-
-			const output = input.output();
+			const anchorBase = anchorBaseOf(options, targets, measurement, truePeakDb);
 
 			openEnvelopes = [];
-
-			const result = await iterateForTargets({
-				inputPath: input.replayPath(),
-				scratch,
-				sampleRate: measurement.sampleRate,
-				channelCount: measurement.channelCount,
-				weights: measurement.weights,
-				frameCount: measurement.frameCount,
-				outputBitDepth: output.bitDepth,
-				anchorBase: { floorDb: effectiveFloorDb, pivotDb: effectivePivotDb, kneeDb, limitDb },
-				smoothingMs,
-				...targets,
-				sourceLufs: measurement.integratedLufs,
-				tolerance,
-				neverExpand,
-				histogram: measurement.detectionHistogram,
-				loudnessEnvelope: measurement.loudnessEnvelope,
-				peakEnvelope: measurement.peakEnvelope,
-				onAttempt: (attempt, attemptIndex) => {
-					process.stderr.write(`${formatAttempt(attempt, attemptIndex, targets)}\n`);
-				},
-			});
-
-			openEnvelopes = [result.bestSmoothedEnvelope];
-
-			if (result.unreachableLufs !== null) {
-				process.stderr.write(
-					`target unreachable: loudness stops rising at ${result.unreachableLufs.toFixed(2)} LUFS\n`,
-				);
-			}
-
-			await applyEnvelopeAndWrite(input.replayPath(), output, result.bestSmoothedEnvelope);
-
-			await writeSummary(
-				options.output,
-				`${[
-					alignedLine("output integrated", figureText(result.winnerOutputLufs, 2, "LUFS")),
-					alignedLine("output true peak", figureText(result.winnerOutputTruePeakDb, 2, "dBTP")),
-					alignedLine("loudness range", figureText(result.winnerOutputLra, 2, "LU")),
-					alignedLine("body gain", figureText(result.bestB, 4, "dB")),
-					alignedLine("peak gain", figureText(result.bestPeakGainDb, 4, "dB")),
-					alignedLine("converged", String(result.converged)),
-					alignedLine("output", options.output),
-				].join("\n")}\n`,
-			);
+			openEnvelopes = [await fitMeasured(input, options, { ...settings, scratch, measurement, anchorBase })];
 		}
 	} catch (error: unknown) {
 		errors.push(error);
@@ -306,6 +372,8 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 
 	const targets = targetsOf(options.lufs, options.tp);
 
+	assertAppliesWithTp(targets, options);
+
 	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) =>
 		fitInput(input, options, { targets, limitPercentile, smoothingMs, tolerance, neverExpand }),
 	);
@@ -320,30 +388,38 @@ export const addTargetCommand = (program: Command): void => {
 		"-o, --output <path>",
 		"output path, WAV unless -f names a raw format, or - or pipe: for a pipe",
 	);
+	command.option("--lufs <n>", "target integrated loudness in LUFS", parseLufs);
+	command.option("--tp <dBTP>", "target true peak in dBTP, also the ceiling", parseNegativeDb("tp", -24));
 	command.option(
-		"--lufs <n>",
-		"target integrated loudness in LUFS; without it the body gain follows the limit gain",
-		parseLufs,
+		"--floor <dB>",
+		"loudness below which audio is never raised, in LUFS",
+		parseNegativeDb("floor", -100),
 	);
 	command.option(
-		"--tp <dBTP>",
-		"target true peak in dBTP; without it the limit gain follows the body gain",
-		parseNegativeDb("tp", -24),
+		"--pivot <dB>",
+		"loudness at which audio takes the full body gain, in LUFS",
+		parseNegativeDb("pivot", -80),
 	);
-	command.option("--pivot <dB>", "body-anchor level in dB", parseNegativeDb("pivot", -80));
-	command.option("--floor <dB>", "noise-gate level in dB", parseNegativeDb("floor", -100));
 	command.option(
 		"--limit-percentile <p>",
-		"top 1-p fraction of detection samples to brick-wall",
+		`share of the audio's true-peak levels below the limit (default: ${DEFAULT_LIMIT_PERCENTILE})`,
 		parseLimitPercentile,
-		DEFAULT_LIMIT_PERCENTILE,
 	);
-	command.option("--limit-db <dB>", "limit-anchor override in dB", parseNegativeDb("limit-db", -60));
-	command.option("--smoothing <ms>", "envelope window in milliseconds", parseSmoothing, DEFAULT_SMOOTHING_MS);
-	command.option("--never-expand", "keep the upper arm flat or compressive");
+	command.option(
+		"--limit-db <dB>",
+		"true-peak level from which the peaks take the peak gain, in dBTP",
+		parseNegativeDb("limit-db", -60),
+	);
+	command.option("--never-expand", "peaks never get more gain than the body");
+	command.option(
+		"--smoothing <ms>",
+		"how gradually the gain changes, in milliseconds",
+		parseSmoothing,
+		DEFAULT_SMOOTHING_MS,
+	);
 	command.option(
 		"--tolerance <dB>",
-		"landing tolerance in dB on the targeted figure",
+		"how close the loudness lands to --lufs, or the true peak to --tp without --lufs, in dB",
 		parseTolerance,
 		DEFAULT_TOLERANCE,
 	);

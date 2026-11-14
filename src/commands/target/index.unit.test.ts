@@ -303,6 +303,8 @@ describe("target", () => {
 				cliOutputPath,
 				"--lufs",
 				"-16.1",
+				"--tp",
+				"-1",
 				"--limit-percentile",
 				"0.5",
 				"--smoothing",
@@ -315,6 +317,7 @@ describe("target", () => {
 			target(inputPath, {
 				output: functionOutputPath,
 				lufs: -50,
+				tp: -1,
 				limitPercentile: 1,
 				smoothing: 200,
 				tolerance: 6,
@@ -414,7 +417,7 @@ describe("target", () => {
 		await writeWav(inputPath, [makeCrossAxis(3)]);
 
 		const { stdout, stderr, exitCode } = await capture(() =>
-			target(inputPath, { output: outputPath, lufs: targetLufs, limitDb: -10, tolerance }),
+			target(inputPath, { output: outputPath, lufs: targetLufs, tolerance }),
 		);
 		const measured = await measureFile(outputPath);
 
@@ -465,7 +468,7 @@ describe("target", () => {
 		});
 
 		const { stdout, exitCode } = await capture(() =>
-			target(inputPath, { output: outputPath, lufs: targetLufs, limitDb: -10, tolerance }),
+			target(inputPath, { output: outputPath, lufs: targetLufs, tp: -1, limitDb: -10, tolerance }),
 		);
 		const statsRun = await capture(() => stats([outputPath], { json: true }));
 		const [measured] = JSON.parse(statsRun.stdout) as Array<{ channelCount: number; integratedLufs: number }>;
@@ -497,7 +500,7 @@ describe("target", () => {
 		});
 
 		const { stdout, exitCode } = await capture(() =>
-			target(inputPath, { output: outputPath, lufs: targetLufs, limitDb: -10, tolerance }),
+			target(inputPath, { output: outputPath, lufs: targetLufs, tp: -1, limitDb: -10, tolerance }),
 		);
 		const weightedOutputLufs = await withWavReader(outputPath, async (reader) => {
 			const lufs = new IntegratedLufsAccumulator(reader.format.sampleRate, channelWeightsOf(6, 0x3f));
@@ -529,7 +532,7 @@ describe("target", () => {
 		});
 
 		const { stdout, exitCode } = await capture(() =>
-			target(inputPath, { output: outputPath, lufs: targetLufs, limitDb: -10, tolerance }),
+			target(inputPath, { output: outputPath, lufs: targetLufs, tp: -1, limitDb: -10, tolerance }),
 		);
 		const statsRun = await capture(() => stats([outputPath], { json: true }));
 		const [measured] = JSON.parse(statsRun.stdout) as Array<{ channelCount: number; integratedLufs: number }>;
@@ -688,7 +691,7 @@ describe("target on stdin and stdout", () => {
 
 		expect(runs.fileRun.exitCode).toBeUndefined();
 		expect(runs.pipeRun.exitCode).toBeUndefined();
-		expect(runs.pipeRun.stderr).toContain("passed through unchanged");
+		expect(runs.pipeRun.stderr).toContain("source has no measurable loudness; passed through\n");
 		expect(runs.fileSamples).toEqual(runs.inputSamples);
 		expect(runs.pipeSamples).toEqual(runs.inputSamples);
 	});
