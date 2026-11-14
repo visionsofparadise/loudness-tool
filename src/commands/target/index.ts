@@ -34,13 +34,14 @@ interface TargetOptions {
 	readonly outputStream?: StreamOptions;
 }
 
-const LABEL_WIDTH = 18;
+const LABEL_WIDTH = 26;
 const DEFAULT_LIMIT_PERCENTILE = 0.995;
 const DEFAULT_SMOOTHING_MS = 40;
 const DEFAULT_TOLERANCE = 0.5;
 const PIVOT_FALLBACK_DB = -40;
 const ANCHOR_SPACING_DB = 6;
 const TARGET_LUFS_STEP = 0.1;
+const DEFAULT_CEILING_DB = 0;
 
 const alignedLine = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}    ${value}`;
 
@@ -131,6 +132,10 @@ const targetsOf = (lufs: number | undefined, tp: number | undefined): Targets =>
 };
 
 const assertAppliesWithTp = (targets: Targets, options: TargetOptions): void => {
+	if (targets.targetLufs === undefined && options.neverExpand === true) {
+		throw new Error("--never-expand applies only with --lufs and --tp");
+	}
+
 	if (targets.targetTp !== undefined) {
 		return;
 	}
@@ -189,16 +194,16 @@ const floorOf = (options: TargetOptions, measurement: SourceMeasurement, pivotDb
 		: null;
 };
 
-const anchorBaseOf = (
+const anchorBaseOf = async (
 	options: TargetOptions,
 	targets: Targets,
 	measurement: SourceMeasurement,
 	truePeakDb: number,
-): AnchorBase => {
+): Promise<AnchorBase> => {
 	const pivotDb = pivotOf(options, measurement);
 	const floorDb = floorOf(options, measurement, pivotDb);
 	const limitDb = Math.min(options.limitDb ?? measurement.limitAutoDb, truePeakDb);
-	const bodyPeakDb = bodyPeakDbOf(measurement.detectionHistogram, pivotDb);
+	const bodyPeakDb = await bodyPeakDbOf(measurement.loudnessEnvelope, measurement.peakEnvelope, pivotDb);
 	const isArmOn =
 		targets.targetTp !== undefined &&
 		Number.isFinite(bodyPeakDb) &&
@@ -267,8 +272,8 @@ const fitMeasured = async (
 				alignedLine("output integrated", figureText(result.winnerOutputLufs, 2, "LUFS")),
 				alignedLine("output true peak", figureText(result.winnerOutputTruePeakDb, 2, "dBTP")),
 				alignedLine("loudness range", figureText(result.winnerOutputLra, 2, "LU")),
-				alignedLine("body gain", figureText(result.bestB, 4, "dB")),
-				alignedLine("peak gain", figureText(result.bestPeakGainDb, 4, "dB")),
+				alignedLine("body gain (before ceiling)", figureText(result.bestB, 4, "dB")),
+				alignedLine("peak gain (before ceiling)", figureText(result.bestPeakGainDb, 4, "dB")),
 				alignedLine("converged", String(result.converged)),
 				alignedLine("output", options.output),
 			].join("\n")}\n`,
@@ -303,13 +308,17 @@ const fitInput = async (input: AudioInput, options: TargetOptions, settings: Fit
 		const { integratedLufs, truePeakDb } = measurement;
 		const { targetLufs, targetTp } = targets;
 
-		if (truePeakDb === null || (!Number.isFinite(integratedLufs) && targetTp === undefined)) {
+		if (truePeakDb === null) {
 			await copyUnchanged(input.replayPath(), input.output());
 			process.stderr.write("source has no measurable loudness; passed through\n");
-		} else if (!Number.isFinite(integratedLufs) && targetLufs !== undefined && targetTp !== undefined) {
-			if (truePeakDb > targetTp) {
-				await applyUniformGain(input.replayPath(), input.output(), dbToLinear(targetTp - truePeakDb));
-				process.stderr.write("source has no measurable loudness; lowered to the true-peak target\n");
+		} else if (!Number.isFinite(integratedLufs) && targetLufs !== undefined) {
+			const ceilingDb = targetTp ?? DEFAULT_CEILING_DB;
+
+			if (truePeakDb > ceilingDb) {
+				await applyUniformGain(input.replayPath(), input.output(), dbToLinear(ceilingDb - truePeakDb));
+				process.stderr.write(
+					`source has no measurable loudness; lowered to the ${targetTp === undefined ? "ceiling" : "true-peak target"}\n`,
+				);
 			} else {
 				await copyUnchanged(input.replayPath(), input.output());
 				process.stderr.write("source has no measurable loudness; passed through\n");
@@ -319,7 +328,7 @@ const fitInput = async (input: AudioInput, options: TargetOptions, settings: Fit
 				process.stderr.write("source has no measurable loudness; fitting true peak only\n");
 			}
 
-			const anchorBase = anchorBaseOf(options, targets, measurement, truePeakDb);
+			const anchorBase = await anchorBaseOf(options, targets, measurement, truePeakDb);
 
 			openEnvelopes = [];
 			openEnvelopes = [await fitMeasured(input, options, { ...settings, scratch, measurement, anchorBase })];

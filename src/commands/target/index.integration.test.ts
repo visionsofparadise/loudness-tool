@@ -63,6 +63,18 @@ describe("target", () => {
 		expect((await truePeakOf(outputPath)) ?? Infinity).toBeLessThanOrEqual(-1 + 0.01);
 	});
 
+	it("lowers a source too short to measure its loudness to the 0 dBTP ceiling under --lufs alone", async () => {
+		const inputPath = await writeSine("short.wav", 0.37, 1.17);
+		const outputPath = join(workingDirectory, "short-lufs.wav");
+		const run = await runCli(["target", inputPath, "-o", outputPath, "--lufs", "-16"]);
+		const truePeakDb = await truePeakOf(outputPath);
+
+		expect(run.exitCode).toBeUndefined();
+		expect(run.stderr).toBe("source has no measurable loudness; lowered to the ceiling\n");
+		expect(truePeakDb ?? Infinity).toBeLessThanOrEqual(0.01);
+		expect(truePeakDb ?? -Infinity).toBeGreaterThan(-0.1);
+	});
+
 	it("fails when --floor sits at or above the automatic pivot", async () => {
 		const inputPath = await writeSine("quiet.wav", 10, -30);
 		const outputPath = join(workingDirectory, "quiet-out.wav");
@@ -86,6 +98,16 @@ describe("target", () => {
 
 		expect(run.exitCode).toBe(1);
 		expect(run.stderr).toBe(`error: ${name} applies only with --tp\n`);
+		expect(existsSync(outputPath)).toBe(false);
+	});
+
+	it("fails on --never-expand under --tp alone", async () => {
+		const inputPath = await writeSine("sine.wav", 1, -20);
+		const outputPath = join(workingDirectory, "sine-out.wav");
+		const run = await runCli(["target", inputPath, "-o", outputPath, "--tp", "-1", "--never-expand"]);
+
+		expect(run.exitCode).toBe(1);
+		expect(run.stderr).toBe("error: --never-expand applies only with --lufs and --tp\n");
 		expect(existsSync(outputPath)).toBe(false);
 	});
 });

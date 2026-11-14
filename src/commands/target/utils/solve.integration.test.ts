@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { dbToLinear } from "../../../utils/db";
 import { decodedSamplesOf, runCli, writeTestWav } from "../../../utils/testCli";
-import { createNoise, createSine } from "../../../utils/testSignals";
+import { createNoise, createSine, createSpeechLike, type SpeechLike } from "../../../utils/testSignals";
 
 const SAMPLE_RATE = 48000;
 const TOLERANCE = 0.5;
@@ -51,6 +51,37 @@ const scaled = (channels: ReadonlyArray<Float64Array>, gain: number): Array<Floa
 	channels.map((channel) => channel.map((sample) => sample * gain));
 
 const NOISE_RMS = 1 / Math.sqrt(3);
+const BACKGROUND_CLEARANCE_SECONDS = 0.1;
+const UNREACHABLE_PATTERN = /^target unreachable: loudness stops rising at (-?\d+\.\d+) LUFS$/m;
+
+const largestBackgroundGainDbOf = (
+	speech: SpeechLike,
+	input: Float64Array,
+	output: Float64Array,
+	sampleRate: number,
+): { readonly windows: number; readonly largestDb: number } => {
+	const windowFrames = Math.round(0.02 * sampleRate);
+	const clearance = Math.round(BACKGROUND_CLEARANCE_SECONDS * sampleRate);
+	let windows = 0;
+	let largestDb = 0;
+
+	for (let start = 0; start + windowFrames <= input.length; start += windowFrames) {
+		const centre = start + windowFrames / 2;
+		const isClear = speech.activeSpans.every(
+			([spanStart, spanEnd]) => centre < spanStart - clearance || centre >= spanEnd + clearance,
+		);
+
+		if (isClear) {
+			windows++;
+			largestDb = Math.max(
+				largestDb,
+				Math.abs(rmsDbOf(output, start, start + windowFrames) - rmsDbOf(input, start, start + windowFrames)),
+			);
+		}
+	}
+
+	return { windows, largestDb };
+};
 
 describe("target's search", () => {
 	let workingDirectory: string;
@@ -105,7 +136,7 @@ describe("target's search", () => {
 
 		expectLanded(written.integratedLufs, -16);
 		expect(written.truePeakDb ?? Infinity).toBeLessThanOrEqual(-1 + GRAIN);
-		expect(stdout).toMatch(/^peak gain +n\/a$/m);
+		expect(stdout).toMatch(/^peak gain \(before ceiling\) +n\/a$/m);
 	}, 60_000);
 
 	it("gives a dense loud passage and a quiet one the same gain", async () => {
@@ -177,6 +208,95 @@ describe("target's search", () => {
 			).toBeLessThan(0.05);
 		}
 	}, 60_000);
+
+	const expectSpeechLikeFit = async (args: {
+		readonly name: string;
+		readonly speech: SpeechLike;
+		readonly options: ReadonlyArray<string>;
+		readonly tolerance: number;
+	}): Promise<string> => {
+		const { name, speech, options, tolerance } = args;
+		const { stdout, stderr, inputPath, outputPath, written } = await runTarget(name, [speech.channel], options);
+		const [input = new Float64Array(0)] = await decodedSamplesOf(inputPath);
+		const [output = new Float64Array(0)] = await decodedSamplesOf(outputPath);
+		const background = largestBackgroundGainDbOf(speech, input, output, SAMPLE_RATE);
+		const writtenLufs = written.integratedLufs ?? Infinity;
+		const unreachable = UNREACHABLE_PATTERN.exec(stderr)?.[1];
+
+		expect(background.windows).toBeGreaterThan(20);
+		expect(background.largestDb).toBeLessThan(1);
+		expect(writtenLufs).toBeLessThanOrEqual(-16 + GRAIN);
+
+		if (unreachable === undefined) {
+			expect(Math.abs(writtenLufs + 16)).toBeLessThan(tolerance);
+		} else {
+			expect(Math.abs(Number(unreachable) - writtenLufs)).toBeLessThanOrEqual(0.005 + 1e-9);
+			expect(printedFigureOf(stdout, "output integrated")).toBe(Number(unreachable));
+			expect(writtenLufs).toBeLessThanOrEqual(-16 - tolerance + GRAIN);
+		}
+
+		return stderr;
+	};
+
+	it("stops at the body's saturation on speech with a cough under --lufs alone, leaving the room tone at unity", async () => {
+		const speech = createSpeechLike({
+			seconds: 9,
+			sampleRate: SAMPLE_RATE,
+			roomToneDb: -95,
+			syllableDb: [-50, -24],
+			spike: { aboveDb: -30, db: -4 },
+			coughDb: -14,
+			seed: 5,
+		});
+		const stderr = await expectSpeechLikeFit({
+			name: "cough-lufs",
+			speech,
+			options: ["--lufs", "-16"],
+			tolerance: TOLERANCE,
+		});
+
+		expect(stderr).toMatch(UNREACHABLE_PATTERN);
+	}, 60_000);
+
+	it("stops at the body's saturation on speech with a cough under both targets, leaving the room tone at unity", async () => {
+		const speech = createSpeechLike({
+			seconds: 9,
+			sampleRate: SAMPLE_RATE,
+			roomToneDb: -77,
+			syllableDb: [-55, -28],
+			spike: { aboveDb: -34, db: -6 },
+			coughDb: -12,
+			seed: 3,
+		});
+		const stderr = await expectSpeechLikeFit({
+			name: "cough-both",
+			speech,
+			options: ["--lufs", "-16", "--tp", "-1"],
+			tolerance: TOLERANCE,
+		});
+
+		expect(stderr).toMatch(UNREACHABLE_PATTERN);
+	}, 60_000);
+
+	it("ends at or under --lufs on quiet speech over room tone whose attempts land over the target", async () => {
+		const speech = createSpeechLike({
+			seconds: 9,
+			sampleRate: SAMPLE_RATE,
+			roomToneDb: -82,
+			syllableDb: [-76, -57],
+			spike: null,
+			coughDb: null,
+			seed: 1,
+		});
+		const stderr = await expectSpeechLikeFit({
+			name: "room-tone",
+			speech,
+			options: ["--lufs", "-16", "--tp", "-1", "--floor", "-71", "--pivot", "-61", "--tolerance", "0.1"],
+			tolerance: 0.1,
+		});
+
+		expect(stderr).toMatch(/^attempt 2 .*loudness error 0\.\d+/m);
+	}, 120_000);
 
 	it("lands a loud source on --lufs -50", async () => {
 		const noise = scaled(createNoise(5 * SAMPLE_RATE, 2, 31), dbToLinear(-10) / NOISE_RMS);

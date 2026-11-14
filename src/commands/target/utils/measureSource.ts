@@ -7,17 +7,19 @@ import { SlidingWindowMaxStream, SlidingWindowMeanStream } from "../../../measur
 import { DELAY_FRAMES, FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "../../../measurement/TruePeakUpsampler";
 import { linearToDb, peakDbOrNull } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
+import { pairedBlocks } from "./envelope";
 import type { Scratch } from "../../../utils/Scratch";
 import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 import type { BlockSource } from "../../../wav/WavReader";
 
-export const CELL_DB = 0.5;
 export const CELL_MIN_DB = -120;
 export const CELL_COUNT = 260;
 
+const CELL_DB = 0.5;
 const PEAK_LEVEL_BIN_DB = 0.01;
 const PEAK_LEVEL_BIN_COUNT = Math.round((CELL_COUNT * CELL_DB) / PEAK_LEVEL_BIN_DB);
 const MOMENTARY_HALF_WINDOW_SECONDS = 0.2;
+const LOCAL_HALF_WINDOW_SECONDS = 0.05;
 const LUFS_OFFSET = -0.691;
 const SILENT_MEAN_SQUARE = 1e-20;
 const SILENT_LOUDNESS_DB = -200;
@@ -86,20 +88,11 @@ export const computeLimitAutoDb = (peakLevelCounts: Float64Array, limitPercentil
 	return Number.POSITIVE_INFINITY;
 };
 
-export const bodyPeakDbOf = (histogram: DetectionHistogram, pivotDb: number): number => {
-	const { counts } = histogram;
-	const peakCounts = new Float64Array(CELL_COUNT);
+export const medianLevelDbOf = (levelCounts: Float64Array): number => {
 	let total = 0;
 
-	for (let loudnessCell = cellOf(pivotDb); loudnessCell < CELL_COUNT; loudnessCell++) {
-		const row = loudnessCell * CELL_COUNT;
-
-		for (let peakCell = 0; peakCell < CELL_COUNT; peakCell++) {
-			const count = counts[row + peakCell] ?? 0;
-
-			peakCounts[peakCell] = (peakCounts[peakCell] ?? 0) + count;
-			total += count;
-		}
+	for (let binIndex = 0; binIndex < levelCounts.length; binIndex++) {
+		total += levelCounts[binIndex] ?? 0;
 	}
 
 	if (total === 0) {
@@ -108,15 +101,35 @@ export const bodyPeakDbOf = (histogram: DetectionHistogram, pivotDb: number): nu
 
 	let cumulative = 0;
 
-	for (let peakCell = 0; peakCell < CELL_COUNT; peakCell++) {
-		cumulative += peakCounts[peakCell] ?? 0;
+	for (let binIndex = 0; binIndex < levelCounts.length; binIndex++) {
+		cumulative += levelCounts[binIndex] ?? 0;
 
 		if (cumulative >= total / 2) {
-			return cellCentreDb(peakCell);
+			return CELL_MIN_DB + (binIndex + 0.5) * PEAK_LEVEL_BIN_DB;
 		}
 	}
 
-	return cellCentreDb(CELL_COUNT - 1);
+	return Number.NEGATIVE_INFINITY;
+};
+
+export const bodyPeakDbOf = async (
+	loudnessEnvelope: SampleFile,
+	peakEnvelope: SampleFile,
+	pivotDb: number,
+): Promise<number> => {
+	const levelCounts = new Float64Array(PEAK_LEVEL_BIN_COUNT);
+
+	for await (const [loudnessChunk, peakChunk] of pairedBlocks(loudnessEnvelope, peakEnvelope)) {
+		for (let index = 0; index < loudnessChunk.length; index++) {
+			if ((loudnessChunk[index] ?? SILENT_LOUDNESS_DB) >= pivotDb) {
+				const bin = peakLevelBinOf(peakChunk[index] ?? SILENT_LOUDNESS_DB);
+
+				levelCounts[bin] = (levelCounts[bin] ?? 0) + 1;
+			}
+		}
+	}
+
+	return medianLevelDbOf(levelCounts);
 };
 
 class FrameQueue {
@@ -246,7 +259,10 @@ export const measureSource = async (args: {
 		const integrated = new IntegratedLufsAccumulator(sampleRate, weights);
 		const shortTerm = new ShortTermLoudnessAccumulator(sampleRate, weights);
 		const kWeighted = new KWeightedSquaredSum(sampleRate, weights);
-		const loudnessWindow = new SlidingWindowMeanStream(Math.floor(MOMENTARY_HALF_WINDOW_SECONDS * sampleRate));
+		const momentaryWindow = new SlidingWindowMeanStream(Math.floor(MOMENTARY_HALF_WINDOW_SECONDS * sampleRate));
+		const localWindow = new SlidingWindowMeanStream(Math.floor(LOCAL_HALF_WINDOW_SECONDS * sampleRate));
+		const momentaryQueue = new FrameQueue();
+		const localQueue = new FrameQueue();
 		const peakHold = new SlidingWindowMaxStream(halfWidthOf(sampleRate));
 		const energy = new Float64Array(CELL_COUNT * CELL_COUNT);
 		const counts = new Float64Array(CELL_COUNT * CELL_COUNT);
@@ -293,11 +309,17 @@ export const measureSource = async (args: {
 			}
 		};
 
-		const persistLoudness = async (meanSquares: Float64Array): Promise<void> => {
-			const loudnessDb = new Float64Array(meanSquares.length);
+		const persistLoudness = async (momentary: Float64Array, local: Float64Array): Promise<void> => {
+			momentaryQueue.push(momentary);
+			localQueue.push(local);
 
-			for (let index = 0; index < meanSquares.length; index++) {
-				loudnessDb[index] = loudnessDbOf(Math.max(0, meanSquares[index] ?? 0));
+			const frames = Math.min(momentaryQueue.length, localQueue.length);
+			const momentaryMeans = momentaryQueue.take(frames);
+			const localMeans = localQueue.take(frames);
+			const loudnessDb = new Float64Array(frames);
+
+			for (let index = 0; index < frames; index++) {
+				loudnessDb[index] = loudnessDbOf(Math.max(0, Math.min(momentaryMeans[index] ?? 0, localMeans[index] ?? 0)));
 			}
 
 			await loudnessEnvelope.append(loudnessDb, loudnessDb.length);
@@ -384,7 +406,7 @@ export const measureSource = async (args: {
 
 			kWeighted.push(block.channels, frames, frameEnergy);
 			energyQueue.push(frameEnergy);
-			await persistLoudness(loudnessWindow.push(frameEnergy, false));
+			await persistLoudness(momentaryWindow.push(frameEnergy, false), localWindow.push(frameEnergy, false));
 
 			const upChunkLength = frames * UPSAMPLE_FACTOR;
 
@@ -438,7 +460,10 @@ export const measureSource = async (args: {
 
 		await pushAlignedDetection(flushLength);
 		await persistPeak(peakHold.push(new Float64Array(0), true));
-		await persistLoudness(loudnessWindow.push(new Float64Array(0), true));
+		await persistLoudness(
+			momentaryWindow.push(new Float64Array(0), true),
+			localWindow.push(new Float64Array(0), true),
+		);
 
 		const shortTermSeries = shortTerm.finalize();
 		const stats = getLraConsideredStats(shortTermSeries.subarray(0, shortTerm.sourceWindowCount));

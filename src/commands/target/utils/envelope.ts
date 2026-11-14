@@ -34,13 +34,13 @@ const gainLutLerp = (lut: Float64Array, gainDb: number): number => {
 	return low + (high - low) * fraction;
 };
 
-const pairedBlocks = async function* (
+export const pairedBlocks = async function* (
 	loudnessEnvelope: SampleFile,
 	peakEnvelope: SampleFile,
 ): AsyncIterableIterator<readonly [Float64Array, Float64Array]> {
 	if (loudnessEnvelope.frameCount !== peakEnvelope.frameCount) {
 		throw new Error(
-			`renderEnvelope: loudness envelope has ${loudnessEnvelope.frameCount} frames, peak envelope ${peakEnvelope.frameCount}`,
+			`loudness envelope has ${loudnessEnvelope.frameCount} frames, peak envelope ${peakEnvelope.frameCount}`,
 		);
 	}
 
@@ -50,7 +50,7 @@ const pairedBlocks = async function* (
 		const peakChunk = await peakBlocks.next();
 
 		if (peakChunk.done === true || peakChunk.value.length !== loudnessChunk.length) {
-			throw new Error("renderEnvelope: loudness and peak envelopes read in different blocks");
+			throw new Error("loudness and peak envelopes read in different blocks");
 		}
 
 		yield [loudnessChunk, peakChunk.value];

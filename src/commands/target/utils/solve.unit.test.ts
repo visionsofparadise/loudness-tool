@@ -13,12 +13,15 @@ import * as envelope from "./envelope";
 import { CELL_COUNT, cellOf, measureSource, type DetectionHistogram, type SourceMeasurement } from "./measureSource";
 import {
 	attemptBeatsWinner,
+	bodySaturationBoost,
 	bracketBoost,
 	hasConverged,
 	holdsTruePeak,
 	isLegalAttempt,
 	iterateForTargets,
+	measuredCapOf,
 	nextSearchBoost,
+	overshootBoost,
 	predictOutputLufs,
 	type IterationAttempt,
 	type Targets,
@@ -118,7 +121,13 @@ describe("bracketBoost", () => {
 
 	it("brackets a target 40 dB above the starting body gain", () => {
 		const predict = predictOn(histogramWith([{ loudnessDb: -50.1, peakDb: -47.1, energy: 1 }]), null);
-		const bracket = bracketBoost({ predict, targetLufs: sourceLufs + 40, startB: 0, tolerance: 0.5 });
+		const bracket = bracketBoost({
+			predict,
+			targetLufs: sourceLufs + 40,
+			startB: 0,
+			maxB: Number.POSITIVE_INFINITY,
+			tolerance: 0.5,
+		});
 
 		expect(bracket).toEqual({ kind: "bracket", lower: 18, upper: 42 });
 		expect(predict(18)).toBeLessThan(sourceLufs + 40);
@@ -128,19 +137,46 @@ describe("bracketBoost", () => {
 	it("brackets a target below the starting body gain", () => {
 		const predict = predictOn(histogramWith([{ loudnessDb: -50.1, peakDb: -47.1, energy: 1 }]), null);
 
-		expect(bracketBoost({ predict, targetLufs: sourceLufs - 10, startB: 0, tolerance: 0.5 })).toEqual({
+		expect(
+			bracketBoost({
+				predict,
+				targetLufs: sourceLufs - 10,
+				startB: 0,
+				maxB: Number.POSITIVE_INFINITY,
+				tolerance: 0.5,
+			}),
+		).toEqual({
 			kind: "bracket",
 			lower: -18,
 			upper: -6,
 		});
 	});
 
-	it("finds the target unreachable when the energy sits under the floor", () => {
-		const predict = predictOn(histogramWith([{ loudnessDb: -60.1, peakDb: -50.1, energy: 1 }]), -45);
-		const bracket = bracketBoost({ predict, targetLufs: sourceLufs + 10, startB: 10, tolerance: 0.5 });
+	it("stops at the cap when the target lies past it", () => {
+		const predict = predictOn(histogramWith([{ loudnessDb: -50.1, peakDb: -47.1, energy: 1 }]), null);
 
-		expect(bracket.kind).toBe("unreachable");
-		expect(bracket.kind === "unreachable" ? bracket.loudestLufs : Number.NaN).toBeCloseTo(sourceLufs, 12);
+		expect(bracketBoost({ predict, targetLufs: sourceLufs + 40, startB: 0, maxB: 30, tolerance: 0.5 })).toEqual({
+			kind: "capped",
+			boost: 30,
+		});
+		expect(bracketBoost({ predict, targetLufs: sourceLufs + 40, startB: 35, maxB: 30, tolerance: 0.5 })).toEqual({
+			kind: "capped",
+			boost: 30,
+		});
+	});
+
+	it("stops where the predicted loudness stops rising when no cap applies", () => {
+		const predict = predictOn(histogramWith([{ loudnessDb: -60.1, peakDb: -50.1, energy: 1 }]), -45);
+
+		expect(
+			bracketBoost({
+				predict,
+				targetLufs: sourceLufs + 10,
+				startB: 10,
+				maxB: Number.POSITIVE_INFINITY,
+				tolerance: 0.5,
+			}),
+		).toEqual({ kind: "capped", boost: 16 });
 	});
 });
 
@@ -199,6 +235,71 @@ describe("nextSearchBoost", () => {
 		const attempts = [attemptOf({ boost: -30 }), attemptOf({ boost: 2, outputLufs: -12 })];
 
 		expect(nextSearchBoost(attempts, 5, -16)).toBe(-14);
+	});
+});
+
+describe("bodySaturationBoost", () => {
+	const anchorsAt = (boost: number): Anchors => anchorsOf({ pivotDb: -25, ceilingDb: 0, B: boost, peakGainDb: boost });
+
+	it("returns the smallest body gain past which a 6 dB step lifts the body by under a tenth of the tolerance", () => {
+		const histogram = histogramWith([
+			{ loudnessDb: -20.1, peakDb: -10.1, energy: 1 },
+			{ loudnessDb: -60.1, peakDb: -90.1, energy: 1_000 },
+		]);
+		const boost = bodySaturationBoost({ anchorsAt, histogram, startB: -40, tolerance: 0.5 });
+
+		expect(boost).toBeGreaterThanOrEqual(10.2);
+		expect(boost).toBeLessThanOrEqual(10.21);
+		expect(bodySaturationBoost({ anchorsAt, histogram, startB: 300, tolerance: 0.5 })).toBeCloseTo(boost, 1);
+	});
+
+	it("returns +Infinity when no frame reaches the pivot", () => {
+		const histogram = histogramWith([{ loudnessDb: -60.1, peakDb: -50.1, energy: 1 }]);
+
+		expect(bodySaturationBoost({ anchorsAt, histogram, startB: 0, tolerance: 0.5 })).toBe(Number.POSITIVE_INFINITY);
+	});
+});
+
+describe("measuredCapOf", () => {
+	it("caps at the lower body gain of a pair whose higher gain landed quieter", () => {
+		const attempts = [
+			attemptOf({ boost: 10, outputLufs: -18 }),
+			attemptOf({ boost: 30, outputLufs: -17.5 }),
+			attemptOf({ boost: 20, outputLufs: -17 }),
+		];
+
+		expect(measuredCapOf(attempts)).toBe(20);
+	});
+
+	it("returns +Infinity while louder attempts follow higher body gains", () => {
+		const attempts = [attemptOf({ boost: 10, outputLufs: -18 }), attemptOf({ boost: 20, outputLufs: -17 })];
+
+		expect(measuredCapOf(attempts)).toBe(Number.POSITIVE_INFINITY);
+	});
+});
+
+describe("overshootBoost", () => {
+	it("steps the lowest body gain down by its overshoot over the slope between the two lowest attempts", () => {
+		const attempts = [attemptOf({ boost: 50, outputLufs: -15.5 }), attemptOf({ boost: 48, outputLufs: -15.8 })];
+
+		expect(overshootBoost(attempts, -16)).toBeCloseTo(48 - 0.2 / 0.15, 12);
+	});
+
+	it("steps down 1 dB from one attempt and doubles the step while the slope stays under 0.01 LU/dB", () => {
+		const first = attemptOf({ boost: 50, outputLufs: -15.5 });
+		const second = attemptOf({ boost: 49, outputLufs: -15.505 });
+		const third = attemptOf({ boost: 47, outputLufs: -15.506 });
+
+		expect(overshootBoost([first], -16)).toBe(49);
+		expect(overshootBoost([first, second], -16)).toBe(47);
+		expect(overshootBoost([first, second, third], -16)).toBe(43);
+	});
+
+	it("returns null once an attempt lands at or under the target", () => {
+		const attempts = [attemptOf({ boost: 50, outputLufs: -15.5 }), attemptOf({ boost: 40, outputLufs: -16.004 })];
+
+		expect(overshootBoost(attempts, -16)).toBeNull();
+		expect(overshootBoost([], -16)).toBeNull();
 	});
 });
 

@@ -78,3 +78,79 @@ export const createLevelSegments = (
 		return 0;
 	});
 };
+
+export interface SpeechLike {
+	readonly channel: Float64Array;
+	readonly activeSpans: ReadonlyArray<readonly [number, number]>;
+}
+
+const UNIFORM_NOISE_RMS = 1 / Math.sqrt(3);
+const SYLLABLE_RAMP_SECONDS = 0.02;
+const SPIKE_SPACING_SECONDS = 0.05;
+const COUGH_SECONDS = 0.15;
+
+export const createSpeechLike = (args: {
+	readonly seconds: number;
+	readonly sampleRate: number;
+	readonly roomToneDb: number;
+	readonly syllableDb: readonly [number, number];
+	readonly spike: { readonly aboveDb: number; readonly db: number } | null;
+	readonly coughDb: number | null;
+	readonly seed: number;
+}): SpeechLike => {
+	const { seconds, sampleRate, roomToneDb, syllableDb, spike, coughDb, seed } = args;
+	const frameCount = Math.round(seconds * sampleRate);
+	let state = seed >>> 0;
+	const uniform = (): number => {
+		state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+
+		return state / 0x100000000;
+	};
+	const noise = (): number => (2 * uniform() - 1) / UNIFORM_NOISE_RMS;
+	const channel = new Float64Array(frameCount).map(() => noise() * dbToLinear(roomToneDb));
+	const activeSpans: Array<readonly [number, number]> = [];
+	const rampFrames = Math.round(SYLLABLE_RAMP_SECONDS * sampleRate);
+	const spikeSpacing = Math.round(SPIKE_SPACING_SECONDS * sampleRate);
+	const lastStart = frameCount - Math.round(0.3 * sampleRate);
+	let start = Math.round(0.3 * sampleRate);
+
+	for (;;) {
+		const length = Math.round((0.12 + 0.18 * uniform()) * sampleRate);
+
+		if (start + length >= lastStart) {
+			break;
+		}
+
+		const levelDb = syllableDb[0] + (syllableDb[1] - syllableDb[0]) * uniform();
+		const isSpiked = spike !== null && levelDb > spike.aboveDb;
+
+		for (let offset = 0; offset < length; offset++) {
+			const edge = Math.min(offset, length - 1 - offset);
+			const ramp = edge < rampFrames ? 0.5 - 0.5 * Math.cos((Math.PI * edge) / rampFrames) : 1;
+			const index = start + offset;
+			const isSpike = isSpiked && edge >= rampFrames && (offset - rampFrames) % spikeSpacing === 0;
+
+			channel[index] =
+				(channel[index] ?? 0) + (isSpike ? dbToLinear(spike.db) : noise() * dbToLinear(levelDb) * ramp);
+		}
+
+		activeSpans.push([start, start + length]);
+		start += length + Math.round((0.05 + 0.25 * uniform()) * sampleRate);
+	}
+
+	if (coughDb !== null) {
+		const coughStart = Math.round((seconds / 2) * sampleRate);
+		const coughFrames = Math.round(COUGH_SECONDS * sampleRate);
+
+		for (let offset = 0; offset < coughFrames; offset++) {
+			const window = 0.5 - 0.5 * Math.cos((2 * Math.PI * offset) / (coughFrames - 1));
+			const index = coughStart + offset;
+
+			channel[index] = (channel[index] ?? 0) + noise() * dbToLinear(coughDb) * window;
+		}
+
+		activeSpans.push([coughStart, coughStart + coughFrames]);
+	}
+
+	return { channel, activeSpans };
+};
