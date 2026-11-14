@@ -1,7 +1,6 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { channelWeightsOf } from "../measurement/channelWeights";
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
-import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
 import { dbToLinear, figureText, peakDbOrNull } from "../utils/db";
 import { isMultipleOf } from "../utils/multipleOf";
 import { applyUniformGain } from "./utils/applyUniformGain";
@@ -44,19 +43,43 @@ const parseTargetLufs = (value: string): number => {
 	return parsed;
 };
 
-const measureIntegratedAndTruePeak = async (
-	source: BlockSource,
-): Promise<{ readonly integratedLufs: number; readonly truePeak: number }> => {
+const MAX_GAIN_UPDATES = 10;
+const LANDING_TOLERANCE_LU = 0.01;
+
+const measureIntegrated = async (source: BlockSource): Promise<IntegratedLufsAccumulator> => {
 	const { sampleRate, channelCount, channelMask } = source.format;
-	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, channelWeightsOf(channelCount, channelMask));
-	const truePeakAccumulator = new TruePeakAccumulator(channelCount);
+	const accumulator = new IntegratedLufsAccumulator(sampleRate, channelWeightsOf(channelCount, channelMask));
 
-	await pushWavBlocks(source, [lufsAccumulator, truePeakAccumulator]);
+	await pushWavBlocks(source, [accumulator]);
 
-	return {
-		integratedLufs: lufsAccumulator.finalize(),
-		truePeak: truePeakAccumulator.finalize(),
-	};
+	return accumulator;
+};
+
+const gainDbFor = (accumulator: IntegratedLufsAccumulator, target: number): number => {
+	let gainDb = target - accumulator.finalize();
+	let bestGainDb = gainDb;
+	let bestDistance = Number.POSITIVE_INFINITY;
+
+	for (let update = 0; update <= MAX_GAIN_UPDATES; update++) {
+		const error = target - accumulator.integratedAtGain(gainDb);
+
+		if (!Number.isFinite(error)) {
+			break;
+		}
+
+		if (Math.abs(error) < bestDistance) {
+			bestGainDb = gainDb;
+			bestDistance = Math.abs(error);
+		}
+
+		if (bestDistance <= LANDING_TOLERANCE_LU) {
+			break;
+		}
+
+		gainDb += error;
+	}
+
+	return bestGainDb;
 };
 
 export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Promise<void> => {
@@ -67,32 +90,28 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 	}
 
 	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) => {
-		const measurement = await input.withFirstPass(measureIntegratedAndTruePeak);
+		const accumulator = await input.withFirstPass(measureIntegrated);
+		const sourceLufs = accumulator.finalize();
 
-		if (!Number.isFinite(measurement.integratedLufs)) {
+		if (!Number.isFinite(sourceLufs)) {
 			await copyUnchanged(input.replayPath(), input.output());
 			process.stderr.write("source has no measurable loudness; passed through unchanged\n");
 
 			return;
 		}
 
-		const gainDb = target - measurement.integratedLufs;
-		const gain = dbToLinear(gainDb);
-		const sourceTpDb = peakDbOrNull(measurement.truePeak);
-		const outputTruePeakDb = sourceTpDb === null ? null : sourceTpDb + gainDb;
-
-		await applyUniformGain(input.replayPath(), input.output(), gain);
+		const gainDb = gainDbFor(accumulator, target);
+		const { truePeak } = await applyUniformGain(input.replayPath(), input.output(), dbToLinear(gainDb));
+		const outputTruePeakDb = peakDbOrNull(truePeak);
 
 		if (outputTruePeakDb !== null && outputTruePeakDb > 0) {
-			process.stderr.write(
-				`warning: predicted output true peak ${outputTruePeakDb.toFixed(2)} dBTP exceeds 0 dBTP\n`,
-			);
+			process.stderr.write(`warning: output true peak ${outputTruePeakDb.toFixed(2)} dBTP exceeds 0 dBTP\n`);
 		}
 
 		await writeSummary(
 			options.output,
 			`${[
-				alignedLine("source integrated", `${measurement.integratedLufs.toFixed(2)} LUFS`),
+				alignedLine("source integrated", `${sourceLufs.toFixed(2)} LUFS`),
 				alignedLine("target", `${target.toFixed(2)} LUFS`),
 				alignedLine("applied gain", `${gainDb.toFixed(2)} dB`),
 				alignedLine("output true peak", figureText(outputTruePeakDb, 2, "dBTP")),

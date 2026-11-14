@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBs1770Gating } from "./gating";
+import { applyBs1770Gating, gatedLoudnessAtGain } from "./gating";
 
 const LUFS_OFFSET = -0.691;
 const ABSOLUTE_GATE_LUFS = -70;
@@ -70,5 +70,18 @@ describe("applyBs1770Gating", () => {
 		]);
 
 		expect(applyBs1770Gating(blockSums, BLOCK_SIZE)).toBeCloseTo(-20, 10);
+	});
+});
+
+describe("gatedLoudnessAtGain", () => {
+	it("gates the block sums at the gain, keeping a block the gain carries across the absolute gate", () => {
+		const blockSums = Float64Array.from([blockSumOfLufs(-62), blockSumOfLufs(-62), blockSumOfLufs(-71)]);
+		const expectedMean = (2 * powerOfLufs(-59) + powerOfLufs(-68)) / 3;
+
+		expect(gatedLoudnessAtGain(blockSums, BLOCK_SIZE, 0)).toBeCloseTo(-62, 10);
+		expect(gatedLoudnessAtGain(blockSums, BLOCK_SIZE, 3)).toBeCloseTo(
+			LUFS_OFFSET + 10 * Math.log10(expectedMean),
+			10,
+		);
 	});
 });

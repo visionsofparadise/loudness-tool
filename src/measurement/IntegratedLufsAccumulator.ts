@@ -1,5 +1,5 @@
 import { BlockSumAccumulator } from "./BlockSumAccumulator";
-import { applyBs1770Gating } from "./gating";
+import { applyBs1770Gating, gatedLoudnessAtGain } from "./gating";
 import { KWeightedSquaredSum } from "./KWeightedSquaredSum";
 
 const BLOCK_DURATION_SECONDS = 0.4;
@@ -14,6 +14,7 @@ export class IntegratedLufsAccumulator {
 	private readonly blocks: BlockSumAccumulator;
 
 	private outputBuffer: Float64Array = new Float64Array(0);
+	private blockSums: Float64Array = new Float64Array(0);
 	private finalizedResult: number | undefined;
 
 	constructor(sampleRate: number, weights: Float64Array) {
@@ -51,8 +52,15 @@ export class IntegratedLufsAccumulator {
 			return this.finalizedResult;
 		}
 
-		this.finalizedResult = applyBs1770Gating(this.blocks.finalize(), this.blockSize);
+		this.blockSums = this.blocks.finalize();
+		this.finalizedResult = applyBs1770Gating(this.blockSums, this.blockSize);
 
 		return this.finalizedResult;
+	}
+
+	integratedAtGain(gainDb: number): number {
+		this.finalize();
+
+		return gatedLoudnessAtGain(this.blockSums, this.blockSize, gainDb);
 	}
 }

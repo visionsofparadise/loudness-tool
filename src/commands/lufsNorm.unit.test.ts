@@ -416,7 +416,7 @@ describe("lufs-norm", () => {
 		).toBeCloseTo(-20 + appliedGainDb, 1);
 	});
 
-	it("warns when predicted output true peak exceeds 0 dBTP", async () => {
+	it("warns when the output true peak exceeds 0 dBTP", async () => {
 		const inputPath = join(workingDirectory, "boost.wav");
 		const outputPath = join(workingDirectory, "boost-out.wav");
 
@@ -425,8 +425,7 @@ describe("lufs-norm", () => {
 		const { stdout, stderr } = await capture(() => lufsNorm(inputPath, { output: outputPath, lufs: 0 }));
 
 		expect(stdout).toMatch(/output true peak/);
-		expect(stderr).toMatch(/warning: predicted output true peak/);
-		expect(stderr).toMatch(/exceeds 0 dBTP/);
+		expect(stderr).toMatch(/^warning: output true peak \d+\.\d+ dBTP exceeds 0 dBTP\n$/);
 	});
 });
 

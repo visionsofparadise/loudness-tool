@@ -50,3 +50,12 @@ export const applyBs1770Gating = (blockSums: Float64Array, blockSize: number): n
 
 	return LUFS_OFFSET + 10 * Math.log10(relativeSum / relativeSurvivorCount);
 };
+
+export const gatedLoudnessAtGain = (blockSums: Float64Array, blockSize: number, gainDb: number): number => {
+	const power = Math.pow(10, gainDb / 10);
+
+	return applyBs1770Gating(
+		blockSums.map((blockSum) => blockSum * power),
+		blockSize,
+	);
+};
