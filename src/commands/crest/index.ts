@@ -175,7 +175,9 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 export const addCrestCommand = (program: Command): void => {
 	const command = program.command("crest");
 
-	command.description("Lower the true peak of audio by blending it with phase-spread copies");
+	command.description(
+		"Lower true peak by blending peaks with copies whose phase is spread a few milliseconds earlier and later; loudness drops where it acts",
+	);
 	command.argument("<input>", "input path, WAV unless -f names a raw format, or - or pipe: for a pipe");
 	command.requiredOption(
 		"-o, --output <path>",
