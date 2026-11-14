@@ -39,7 +39,7 @@ const formatHuman = (result: StatsJson): string =>
 		alignedLine("sample rate", `${result.sampleRate} Hz`),
 		alignedLine("channels", String(result.channelCount)),
 		alignedLine("bit depth", result.bitDepth),
-		alignedLine("duration", `${result.durationSeconds.toFixed(3)} s`),
+		alignedLine("duration", figureText(result.durationSeconds, 3, "s")),
 		alignedLine("true peak", figureText(result.truePeakDb, 2, "dBTP")),
 		alignedLine("integrated", figureText(result.integratedLufs, 2, "LUFS")),
 		alignedLine("loudness range", figureText(result.loudnessRange, 2, "LU")),

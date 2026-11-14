@@ -1,6 +1,6 @@
 import { WavReader, type BlockSource } from "../../wav/WavReader";
 
-interface BlockConsumer {
+export interface BlockConsumer {
 	push(channels: ReadonlyArray<Float64Array>, frameCount: number): void;
 }
 

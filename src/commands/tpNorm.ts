@@ -62,8 +62,8 @@ export const tpNorm = async (inputPath: string, options: TpNormOptions): Promise
 			options.output,
 			`${[
 				alignedLine("source true peak", figureText(peakDbOrNull(measurement.truePeak), 2, "dBTP")),
-				alignedLine("target", `${target.toFixed(2)} dBTP`),
-				alignedLine("applied gain", `${gainDb.toFixed(2)} dB`),
+				alignedLine("target", figureText(target, 2, "dBTP")),
+				alignedLine("applied gain", figureText(gainDb, 2, "dB")),
 				alignedLine("output", options.output),
 			].join("\n")}\n`,
 		);

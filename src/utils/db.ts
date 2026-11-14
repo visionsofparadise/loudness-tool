@@ -13,5 +13,11 @@ export const peakDbOrNull = (linear: number): number | null =>
 
 export const lufsOrNull = (value: number): number | null => (Number.isFinite(value) ? value : null);
 
+export const fixedText = (value: number, digits: number): string => {
+	const text = value.toFixed(digits);
+
+	return Number(text) === 0 ? (0).toFixed(digits) : text;
+};
+
 export const figureText = (value: number | null, digits: number, unit: string): string =>
-	value === null || !Number.isFinite(value) ? "n/a" : `${value.toFixed(digits)} ${unit}`;
+	value === null || !Number.isFinite(value) ? "n/a" : `${fixedText(value, digits)} ${unit}`;

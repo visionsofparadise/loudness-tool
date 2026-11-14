@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dbToLinear, figureText, linearToDb, peakDbOrNull } from "./db";
+import { dbToLinear, figureText, fixedText, linearToDb, peakDbOrNull } from "./db";
 
 describe("dbToLinear", () => {
 	it("converts 0 dB to 1.0", () => {
@@ -60,5 +60,13 @@ describe("figureText", () => {
 	it("prints a value with its digits and unit", () => {
 		expect(figureText(-23.456, 2, "LUFS")).toBe("-23.46 LUFS");
 		expect(figureText(-3.25, 4, "dB")).toBe("-3.2500 dB");
+	});
+});
+
+describe("fixedText", () => {
+	it("prints a figure that rounds to zero without a sign", () => {
+		expect(fixedText(-0.004, 2)).toBe("0.00");
+		expect(fixedText(-0, 4)).toBe("0.0000");
+		expect(fixedText(-0.006, 2)).toBe("-0.01");
 	});
 });

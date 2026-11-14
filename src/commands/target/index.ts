@@ -1,5 +1,5 @@
 import { InvalidArgumentError, type Command } from "commander";
-import { dbToLinear, figureText } from "../../utils/db";
+import { dbToLinear, figureText, fixedText } from "../../utils/db";
 import { isMultipleOf } from "../../utils/multipleOf";
 import { Scratch } from "../../utils/Scratch";
 import { quantizerOf } from "../../wav/utils/sampleCodec";
@@ -105,9 +105,9 @@ const isTolerance = (value: number): boolean => Number.isFinite(value) && value 
 const parseTolerance = (value: string): number => parseFinite("tolerance", value, isTolerance, TOLERANCE_RANGE);
 
 const errorFieldsOf = (label: string, isTargeted: boolean, error: number | null): Array<string> =>
-	isTargeted ? [`${label} ${error === null ? "n/a" : error.toFixed(4)}`] : [];
+	isTargeted ? [`${label} ${error === null ? "n/a" : fixedText(error, 4)}`] : [];
 
-const gainText = (gainDb: number | null): string => (gainDb === null ? "n/a" : gainDb.toFixed(4));
+const gainText = (gainDb: number | null): string => (gainDb === null ? "n/a" : fixedText(gainDb, 4));
 
 const formatAttempt = (attempt: IterationAttempt, attemptIndex: number, targets: Targets): string =>
 	[
@@ -177,7 +177,7 @@ const floorOf = (options: TargetOptions, measurement: SourceMeasurement, pivotDb
 	if (options.floor !== undefined) {
 		if (options.pivot === undefined && options.floor >= pivotDb) {
 			throw new Error(
-				`floor ${options.floor} must be below the automatic pivot ${pivotDb.toFixed(2)} LUFS; set --pivot above it`,
+				`floor ${options.floor} must be below the automatic pivot ${fixedText(pivotDb, 2)} LUFS; set --pivot above it`,
 			);
 		}
 
@@ -256,7 +256,7 @@ const fitMeasured = async (
 	try {
 		if (result.unreachableLufs !== null) {
 			process.stderr.write(
-				`target unreachable: loudness stops rising at ${result.unreachableLufs.toFixed(2)} LUFS\n`,
+				`target unreachable: loudness stops rising at ${fixedText(result.unreachableLufs, 2)} LUFS\n`,
 			);
 		}
 

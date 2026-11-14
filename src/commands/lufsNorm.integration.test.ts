@@ -63,6 +63,7 @@ describe("lufs-norm", () => {
 		const { integratedLufs } = await statsOf(outputPath);
 
 		expect(run.exitCode).toBeUndefined();
+		expect(run.stderr).toBe("");
 		expect(Math.abs((integratedLufs ?? Number.NaN) + 16)).toBeLessThan(0.05);
 	});
 
@@ -79,6 +80,32 @@ describe("lufs-norm", () => {
 		const { truePeakDb } = await statsOf(outputPath);
 
 		expect(Math.abs(printed - (truePeakDb ?? Number.NaN))).toBeLessThanOrEqual(0.01);
-		expect(run.stderr).toBe(`warning: output true peak ${printed.toFixed(2)} dBTP exceeds 0 dBTP\n`);
+		expect(run.stderr).toMatch(
+			new RegExp(
+				`^warning: output true peak ${printed.toFixed(2)} dBTP exceeds 0 dBTP\\nwarning: output clipped [1-9]\\d* samples at full scale\\n$`,
+			),
+		);
+	});
+
+	it("counts the samples its 16-bit output clamps at full scale", async () => {
+		const inputPath = join(workingDirectory, "spikes.wav");
+		const outputPath = join(workingDirectory, "spikes-out.wav");
+		const [body] = createSine(3 * SAMPLE_RATE, 1, SAMPLE_RATE, 997, dbToLinear(-32));
+		const spikes = [0.2, -0.2, 0.2, -0.2, 0.2];
+
+		if (body === undefined) {
+			throw new Error("createSine returned no channel");
+		}
+
+		for (const [index, spike] of spikes.entries()) {
+			body[(index + 1) * 20000] = spike;
+		}
+
+		await writeTestWav(inputPath, [body], { bitDepth: "16" });
+
+		const run = await runCli(["lufs-norm", inputPath, "-o", outputPath, "--lufs", "-16"]);
+
+		expect(run.exitCode).toBeUndefined();
+		expect(run.stderr).toContain(`warning: output clipped ${spikes.length} samples at full scale\n`);
 	});
 });

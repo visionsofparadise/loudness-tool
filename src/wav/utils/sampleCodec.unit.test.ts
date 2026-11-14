@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytesPerSampleOf, decodeSample, encodeSample, quantizerOf } from "./sampleCodec";
+import { bytesPerSampleOf, clampTestOf, decodeSample, encodeSample, quantizerOf } from "./sampleCodec";
 import { type WavBitDepth } from "./wavFormat";
 
 const roundTrip = (sample: number, bitDepth: WavBitDepth): number => {
@@ -275,5 +275,24 @@ describe("integer rounding in encodeSample and quantizerOf", () => {
 		expect(single(0.1)).toBe(0.100000001490116119384765625);
 		expect(single(-1 / 3)).toBe(-0.3333333432674407958984375);
 		expect(single(0.5)).toBe(0.5);
+	});
+});
+
+describe("clampTestOf", () => {
+	it("flags exactly the samples whose code falls outside the integer range", () => {
+		const isClamped = clampTestOf("16");
+
+		expect(isClamped(32767 / 32768)).toBe(false);
+		expect(isClamped(32767.4999 / 32768)).toBe(false);
+		expect(isClamped(32767.5 / 32768)).toBe(true);
+		expect(isClamped(-32768.5 / 32768)).toBe(false);
+		expect(isClamped(-32768.5001 / 32768)).toBe(true);
+		expect(clampTestOf("8")(127.5 / 128)).toBe(true);
+		expect(clampTestOf("24")(8388606.5 / 8388608)).toBe(false);
+	});
+
+	it("flags no sample of a float output", () => {
+		expect(clampTestOf("32f")(4)).toBe(false);
+		expect(clampTestOf("64f")(-4)).toBe(false);
 	});
 });

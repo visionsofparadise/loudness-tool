@@ -130,3 +130,15 @@ export const quantizerOf = (bitDepth: SourceBitDepth): ((sample: number) => numb
 
 	return (sample) => codeOf(sample, fullScale) / fullScale;
 };
+
+export const clampTestOf = (bitDepth: SourceBitDepth): ((sample: number) => boolean) => {
+	if (bitDepth === "32f" || bitDepth === "64f") {
+		return () => false;
+	}
+
+	const fullScale = INTEGER_FULL_SCALES[bitDepth];
+	const highest = (fullScale - 0.5) / fullScale;
+	const lowest = -(fullScale + 0.5) / fullScale;
+
+	return (sample) => sample >= highest || sample < lowest;
+};

@@ -20,7 +20,7 @@ import { WavReader, type AudioBlock } from "../wav/WavReader";
 import { writeExtensibleWav } from "../utils/testWav";
 import { WavStreamReader } from "../wav/WavStreamReader";
 import { WavWriter } from "../wav/WavWriter";
-import { lufsNorm } from "./lufsNorm";
+import { gainDbFor, lufsNorm } from "./lufsNorm";
 
 const SAMPLE_RATE = 48000;
 const PRE_B0 = 1.53512485958697;
@@ -704,5 +704,57 @@ describe("lufs-norm on raw PCM and stream options", () => {
 		expect(same.stdout.equals(silence)).toBe(true);
 		expect(floats.stdout.equals(Buffer.alloc(4 * 2 * 4800))).toBe(true);
 		expect(eightBit.stdout.equals(await dataBytesOf(eightBitPath))).toBe(true);
+	});
+});
+
+describe("gainDbFor", () => {
+	const blockPowerOf = (lufs: number): number => Math.pow(10, (lufs - LUFS_OFFSET) / 10);
+
+	const loudnessOf = (powers: ReadonlyArray<number>): number =>
+		LUFS_OFFSET + 10 * Math.log10(powers.reduce((sum, power) => sum + power, 0) / powers.length);
+
+	const blocksOf = (...groups: ReadonlyArray<readonly [count: number, lufs: number]>): Array<number> =>
+		groups.flatMap(([count, lufs]) => Array.from({ length: count }, () => blockPowerOf(lufs)));
+
+	it("stops at the first gain within 0.01 LU of the target", () => {
+		const powers = blocksOf([400, -65], [1, -71]);
+		const firstError = -10 * Math.log10((400 + Math.pow(10, -0.6)) / 401);
+
+		expect(firstError).toBeGreaterThan(0);
+		expect(firstError).toBeLessThanOrEqual(0.01);
+		expect(gainDbFor(Float64Array.from(powers), 1, -16)).toBeCloseTo(49, 9);
+	});
+
+	it("updates past a first gain more than 0.01 LU off the target", () => {
+		const powers = blocksOf([100, -65], [1, -71]);
+
+		expect(gainDbFor(Float64Array.from(powers), 1, -16)).toBeCloseTo(-16 - loudnessOf(powers), 9);
+	});
+
+	it("returns the closest of the start gain and its first 10 updates", () => {
+		const target = -64;
+		const powers = blocksOf([20, -65]);
+		const gains = [0, target - loudnessOf(powers)];
+
+		for (let tier = 1; tier <= 12; tier++) {
+			const entryLufs = -70 - ((gains.at(-2) ?? 0) + (gains.at(-1) ?? 0)) / 2;
+
+			powers.push(...blocksOf([tier === 6 || tier === 12 ? 1 : 4, entryLufs]));
+			gains.push(target - loudnessOf(powers));
+		}
+
+		const tierSixGain = gains[6] ?? Number.NaN;
+		const errors = gains.slice(1).map((gain, index) => (gains[index + 2] ?? Number.NaN) - gain);
+
+		expect(Math.min(...errors.slice(0, 11))).toBe(errors[5]);
+		expect(Math.min(...errors.slice(0, 11))).toBeGreaterThan(0.01);
+		expect(errors[11]).toBeLessThan(errors[5] ?? Number.NaN);
+		expect(gainDbFor(Float64Array.from(powers), 1, target)).toBeCloseTo(tierSixGain, 9);
+	});
+
+	it("keeps the last measurable gain when an update gates every block", () => {
+		const powers = blocksOf([1, -60], [999, -69.99]);
+
+		expect(gainDbFor(Float64Array.from(powers), 1, -72)).toBeCloseTo(-72 - loudnessOf(powers), 9);
 	});
 });

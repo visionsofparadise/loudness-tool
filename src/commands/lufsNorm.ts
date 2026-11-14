@@ -1,7 +1,9 @@
 import { InvalidArgumentError, type Command } from "commander";
 import { channelWeightsOf } from "../measurement/channelWeights";
+import { applyBs1770Gating, gatedLoudnessAtGain } from "../measurement/gating";
 import { IntegratedLufsAccumulator } from "../measurement/IntegratedLufsAccumulator";
-import { dbToLinear, figureText, peakDbOrNull } from "../utils/db";
+import { TruePeakAccumulator } from "../measurement/TruePeakAccumulator";
+import { dbToLinear, figureText, fixedText, peakDbOrNull } from "../utils/db";
 import { isMultipleOf } from "../utils/multipleOf";
 import { applyUniformGain } from "./utils/applyUniformGain";
 import { replayableInputOptionsOf, withAudioInput } from "./utils/AudioInput";
@@ -46,22 +48,24 @@ const parseTargetLufs = (value: string): number => {
 const MAX_GAIN_UPDATES = 10;
 const LANDING_TOLERANCE_LU = 0.01;
 
-const measureIntegrated = async (source: BlockSource): Promise<IntegratedLufsAccumulator> => {
+const measureIntegrated = async (
+	source: BlockSource,
+): Promise<{ readonly accumulator: IntegratedLufsAccumulator; readonly channelCount: number }> => {
 	const { sampleRate, channelCount, channelMask } = source.format;
 	const accumulator = new IntegratedLufsAccumulator(sampleRate, channelWeightsOf(channelCount, channelMask));
 
 	await pushWavBlocks(source, [accumulator]);
 
-	return accumulator;
+	return { accumulator, channelCount };
 };
 
-const gainDbFor = (accumulator: IntegratedLufsAccumulator, target: number): number => {
-	let gainDb = target - accumulator.finalize();
+export const gainDbFor = (blockSums: Float64Array, blockSize: number, target: number): number => {
+	let gainDb = target - applyBs1770Gating(blockSums, blockSize);
 	let bestGainDb = gainDb;
 	let bestDistance = Number.POSITIVE_INFINITY;
 
 	for (let update = 0; update <= MAX_GAIN_UPDATES; update++) {
-		const error = target - accumulator.integratedAtGain(gainDb);
+		const error = target - gatedLoudnessAtGain(blockSums, blockSize, gainDb);
 
 		if (!Number.isFinite(error)) {
 			break;
@@ -90,7 +94,7 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 	}
 
 	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) => {
-		const accumulator = await input.withFirstPass(measureIntegrated);
+		const { accumulator, channelCount } = await input.withFirstPass(measureIntegrated);
 		const sourceLufs = accumulator.finalize();
 
 		if (!Number.isFinite(sourceLufs)) {
@@ -100,20 +104,29 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 			return;
 		}
 
-		const gainDb = gainDbFor(accumulator, target);
-		const { truePeak } = await applyUniformGain(input.replayPath(), input.output(), dbToLinear(gainDb));
-		const outputTruePeakDb = peakDbOrNull(truePeak);
+		const blocks = accumulator.gatingBlocks();
+		const gainDb = gainDbFor(blocks.sums, blocks.size, target);
+		const truePeakMeter = new TruePeakAccumulator(channelCount);
+		const { clampedSamples } = await applyUniformGain(input.replayPath(), input.output(), dbToLinear(gainDb), [
+			truePeakMeter,
+		]);
+		const outputTruePeakDb = peakDbOrNull(truePeakMeter.finalize());
+		const outputTruePeakText = outputTruePeakDb === null ? null : fixedText(outputTruePeakDb, 2);
 
-		if (outputTruePeakDb !== null && outputTruePeakDb > 0) {
-			process.stderr.write(`warning: output true peak ${outputTruePeakDb.toFixed(2)} dBTP exceeds 0 dBTP\n`);
+		if (outputTruePeakText !== null && Number(outputTruePeakText) > 0) {
+			process.stderr.write(`warning: output true peak ${outputTruePeakText} dBTP exceeds 0 dBTP\n`);
+		}
+
+		if (clampedSamples > 0) {
+			process.stderr.write(`warning: output clipped ${clampedSamples} samples at full scale\n`);
 		}
 
 		await writeSummary(
 			options.output,
 			`${[
-				alignedLine("source integrated", `${sourceLufs.toFixed(2)} LUFS`),
-				alignedLine("target", `${target.toFixed(2)} LUFS`),
-				alignedLine("applied gain", `${gainDb.toFixed(2)} dB`),
+				alignedLine("source integrated", figureText(sourceLufs, 2, "LUFS")),
+				alignedLine("target", figureText(target, 2, "LUFS")),
+				alignedLine("applied gain", figureText(gainDb, 2, "dB")),
 				alignedLine("output true peak", figureText(outputTruePeakDb, 2, "dBTP")),
 				alignedLine("output", options.output),
 			].join("\n")}\n`,
