@@ -10,7 +10,7 @@ npm install -g loudness-tool
 
 ## Commands
 
-An input path of `-` reads stdin. Every command but `stats` writes to `-o, --output <path>`, a file or `-` for stdout, and takes the input's own path for in-place processing.
+An input path of `-` or `pipe:` reads stdin. `tp-norm`, `lufs-norm`, `crest` and `target` require `-o, --output <path>`: a file, `-` for stdout, or the input's own path for in-place processing. Each prints its figures to stdout, or to stderr when the audio goes to stdout.
 
 ### stats
 
@@ -35,7 +35,7 @@ loudness-tool tp-norm input.wav -o output.wav --tp -1
 
 ### lufs-norm
 
-Applies one uniform gain so the integrated loudness lands on a target, and warns when the written file's true peak sits above 0 dBTP.
+Applies one uniform gain so the integrated loudness lands on a target, and warns when the written file's true peak sits above 0 dBTP or when samples clip at full scale.
 
 ```sh
 loudness-tool lufs-norm input.wav -o output.wav --lufs -16
@@ -66,16 +66,16 @@ loudness-tool target input.wav -o output.wav --lufs -16 --tp -1
 ```
 
 - `--lufs <n>`: target integrated loudness in LUFS.
-- `--tp <dBTP>`: target true peak in dBTP, also the ceiling.
-- `--floor <dB>`: loudness below which audio is never raised, in LUFS (default: the quietest short-term loudness, at least 6 LU under the pivot).
-- `--pivot <dB>`: loudness at which audio takes the full body gain, in LUFS (default: the median short-term loudness, or -40 when the audio has none).
+- `--tp <dBTP>`: target true peak in dBTP.
+- `--floor <dB>`: loudness below which audio is never raised, in LUFS (default: from the audio's quietest passages).
+- `--pivot <dB>`: loudness at which audio takes the full body gain, in LUFS (default: the audio's typical loudness).
 - `--limit-percentile <p>`: share of the audio's true-peak levels below the limit (default: 0.995).
 - `--limit-db <dB>`: true-peak level from which the peaks take the peak gain, in dBTP (default: the level `--limit-percentile` sets).
 - `--never-expand`: peaks never get more gain than the body.
 - `--smoothing <ms>`: how gradually the gain changes, in milliseconds (default: 40).
 - `--tolerance <dB>`: how close the loudness lands to `--lufs`, or the true peak to `--tp` without `--lufs`, in dB (default: 0.5).
 
-`--limit-percentile`, `--limit-db` and `--never-expand` shape the peaks and take `--tp`, and `--never-expand` also takes `--lufs`.
+`--limit-percentile`, `--limit-db` and `--never-expand` require `--tp`, and `--never-expand` also requires `--lufs`.
 
 ## Pipes
 
@@ -83,7 +83,7 @@ loudness-tool target input.wav -o output.wav --lufs -16 --tp -1
 ffmpeg -i input.mp3 -f wav - | loudness-tool lufs-norm - -o - | ffmpeg -f wav -i - output.flac
 ```
 
-A piped WAV ends where its header's data size says. Raw PCM takes ffmpeg's `-f <format>` (`u8`, `s16le`, `s24le`, `s32le`, `f32le` or `f64le`; default: wav), `-ar <rate>` (default: 44100) and `-ac <channels>` (default: 1) in front of the input or `-o` they describe. Every command but `stats` copies a piped or raw input to a temporary file in the folder `--scratch-dir <path>` sets (default: the system temporary directory).
+A piped WAV ends at the data size its header states; ffmpeg writes a streaming header, so its piped WAV reads to the end of the stream. As in ffmpeg, `-f <format>` (default: wav) sets the format of the input or `-o` it precedes, the raw PCM formats being `u8`, `s16le`, `s24le`, `s32le`, `f32le` and `f64le`, and a raw input takes `-ar <rate>` (default: 44100) and `-ac <channels>` (default: 1). Every output keeps the input's sample rate and channels. Temporary files, including the copy of a piped or raw input, go in the folder `--scratch-dir <path>` sets (default: the system temporary directory).
 
 ## License
 
