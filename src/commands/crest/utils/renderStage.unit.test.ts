@@ -106,6 +106,7 @@ describe("renderStage", () => {
 			path: new Int32Array(layout.stretchCount + 1),
 			output: sixteenBitOutputOf(outputPath),
 			isLast: true,
+			oversampling: 16,
 		});
 
 		expect((await readFile(outputPath)).equals(await readFile(sourcePath))).toBe(true);
@@ -135,6 +136,7 @@ describe("renderStage", () => {
 			path,
 			output: sixteenBitOutputOf(outputPath),
 			isLast: true,
+			oversampling: 16,
 		});
 		const dispersed = await dispersedOf(sourcePath, 2);
 		const decoded = await decodedSamplesOf(outputPath);
@@ -157,7 +159,7 @@ describe("renderStage", () => {
 			}
 		}
 
-		const accumulator = new TruePeakAccumulator(2);
+		const accumulator = new TruePeakAccumulator(2, 16);
 
 		accumulator.push(decoded, FRAME_COUNT);
 

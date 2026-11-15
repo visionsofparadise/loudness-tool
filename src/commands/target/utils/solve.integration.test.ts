@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { dbToLinear } from "../../../utils/db";
-import { decodedSamplesOf, runCli, writeTestWav } from "../../../utils/testCli";
+import { decodedSamplesOf, printedFigureOf, runCli, writeTestWav } from "../../../utils/testCli";
 import { createNoise, createSine, createSpeechLike, type SpeechLike } from "../../../utils/testSignals";
 
 const SAMPLE_RATE = 48000;
@@ -25,16 +25,6 @@ const statsOf = async (path: string): Promise<StatsFigures> => {
 	}
 
 	return figures;
-};
-
-const printedFigureOf = (stdout: string, label: string): number | null => {
-	const match = new RegExp(`^${label} +(n/a|-?\\d+\\.\\d+)`, "m").exec(stdout);
-
-	if (match?.[1] === undefined) {
-		throw new Error(`no ${label} line in: ${stdout}`);
-	}
-
-	return match[1] === "n/a" ? null : Number(match[1]);
 };
 
 const rmsDbOf = (channel: Float64Array, start: number, end: number): number => {

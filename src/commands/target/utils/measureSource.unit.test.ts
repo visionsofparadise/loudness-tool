@@ -21,6 +21,7 @@ import {
 	type SourceMeasurement,
 } from "./measureSource";
 import { windowSamplesFromMs } from "./window";
+import { OVERSAMPLING_FACTORS, type OversamplingFactor } from "../../../measurement/TruePeakUpsampler";
 
 const SAMPLE_RATE = 48000;
 
@@ -29,6 +30,7 @@ const measureFile = async (args: {
 	scratch: Scratch;
 	limitPercentile: number;
 	halfWidth: number;
+	oversampling?: OversamplingFactor;
 }): Promise<SourceMeasurement> =>
 	withWavReader(args.inputPath, async (source) =>
 		measureSource({
@@ -36,6 +38,7 @@ const measureFile = async (args: {
 			scratch: args.scratch,
 			limitPercentile: args.limitPercentile,
 			halfWidthOf: () => args.halfWidth,
+			oversampling: args.oversampling,
 		}),
 	);
 
@@ -356,6 +359,7 @@ describe("measureSource", () => {
 		frameCount: number,
 		impulseFrame: number,
 		impulseLevel = 1,
+		oversampling?: OversamplingFactor,
 	): Promise<Float64Array> => {
 		scratch = await Scratch.create();
 
@@ -367,7 +371,7 @@ describe("measureSource", () => {
 
 		await writeWav(inputPath, [channel]);
 
-		const measurement = await measureFile({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 0 });
+		const measurement = await measureFile({ inputPath, scratch, limitPercentile: 0.995, halfWidth: 0, oversampling });
 		const envelope = await readEnvelope(measurement.peakEnvelope);
 
 		await closeEnvelopes(measurement);
@@ -375,19 +379,24 @@ describe("measureSource", () => {
 		return envelope;
 	};
 
-	it("reads an impulse's peak at its own frame, each frame holding its 16 interpolated samples", async () => {
-		const envelope = await measureImpulseEnvelope(SAMPLE_RATE, 1000);
-		const sincDb = (offset: number): number =>
-			20 * Math.log10(Math.abs(Math.sin(Math.PI * offset) / (Math.PI * offset)));
-		const firstSidelobeDb = sincDb(1.4303);
+	it.each(OVERSAMPLING_FACTORS)(
+		"reads an impulse's peak at its own frame, each frame holding its %i interpolated samples",
+		async (factor) => {
+			const envelope = await measureImpulseEnvelope(SAMPLE_RATE, 1000, 1, factor);
+			const sincDb = (offset: number): number =>
+				20 * Math.log10(Math.abs(Math.sin(Math.PI * offset) / (Math.PI * offset)));
+			const firstSidelobeDb = Math.max(
+				...Array.from({ length: factor - 1 }, (_, step) => sincDb(1 + (step + 1) / factor)),
+			);
 
-		expect(Math.abs(envelope[1000] ?? Number.NaN)).toBeLessThan(1e-3);
-		expect(Math.abs((envelope[999] ?? Number.NaN) - sincDb(1 / 16))).toBeLessThan(0.01);
-		expect(Math.abs((envelope[998] ?? Number.NaN) - firstSidelobeDb)).toBeLessThan(0.05);
-		expect(Math.abs((envelope[1001] ?? Number.NaN) - firstSidelobeDb)).toBeLessThan(0.05);
-		expect(envelope[990]).toBeLessThan(-20);
-		expect(envelope[1010]).toBeLessThan(-20);
-	});
+			expect(Math.abs(envelope[1000] ?? Number.NaN)).toBeLessThan(1e-3);
+			expect(Math.abs((envelope[999] ?? Number.NaN) - sincDb(1 / factor))).toBeLessThan(0.01);
+			expect(Math.abs((envelope[998] ?? Number.NaN) - firstSidelobeDb)).toBeLessThan(0.05);
+			expect(Math.abs((envelope[1001] ?? Number.NaN) - firstSidelobeDb)).toBeLessThan(0.05);
+			expect(envelope[990]).toBeLessThan(-20);
+			expect(envelope[1010]).toBeLessThan(-20);
+		},
+	);
 
 	it("reads an impulse in the final frame", async () => {
 		const envelope = await measureImpulseEnvelope(SAMPLE_RATE, SAMPLE_RATE - 1);

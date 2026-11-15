@@ -202,3 +202,13 @@ export const expectRawMatchesFileMode = async (args: {
 	expect(pipeRun.stderr).toMatch(/\noutput {4,}-\n$/);
 	expect(await decodedSamplesOf(rawOutputPath)).toEqual(await decodedSamplesOf(filePath));
 };
+
+export const printedFigureOf = (stdout: string, label: string): number | null => {
+	const match = new RegExp(`^${label} +(n/a|-?\\d+\\.\\d+)`, "m").exec(stdout);
+
+	if (match?.[1] === undefined) {
+		throw new Error(`no ${label} line in: ${stdout}`);
+	}
+
+	return match[1] === "n/a" ? null : Number(match[1]);
+};

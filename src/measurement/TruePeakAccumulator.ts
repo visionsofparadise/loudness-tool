@@ -1,10 +1,15 @@
 import { MeasurementOverflow } from "./MeasurementOverflow";
-import { alignedFrameOf, FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "./TruePeakUpsampler";
-
-const FLUSH_OUTPUT_SAMPLES = FLUSH_FRAMES * UPSAMPLE_FACTOR;
+import {
+	alignedFrameOf,
+	DEFAULT_OVERSAMPLING,
+	FLUSH_FRAMES,
+	TruePeakUpsampler,
+	type OversamplingFactor,
+} from "./TruePeakUpsampler";
 
 export class TruePeakAccumulator {
 	private readonly channelCount: number;
+	private readonly factor: OversamplingFactor;
 	private readonly upsamplers: ReadonlyArray<TruePeakUpsampler>;
 	private upsampleScratch: Float64Array = new Float64Array(0);
 	private interpolatedMax = 0;
@@ -12,17 +17,18 @@ export class TruePeakAccumulator {
 	private framesPushed = 0;
 	private finalizedResult: number | undefined;
 
-	constructor(channelCount: number) {
+	constructor(channelCount: number, factor: OversamplingFactor = DEFAULT_OVERSAMPLING) {
 		if (channelCount <= 0) {
 			throw new Error(`TruePeakAccumulator: channelCount must be positive, got ${channelCount}`);
 		}
 
 		this.channelCount = channelCount;
+		this.factor = factor;
 
 		const upsamplers: Array<TruePeakUpsampler> = [];
 
 		for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
-			upsamplers.push(new TruePeakUpsampler());
+			upsamplers.push(new TruePeakUpsampler(factor));
 		}
 
 		this.upsamplers = upsamplers;
@@ -65,7 +71,7 @@ export class TruePeakAccumulator {
 				}
 			}
 
-			const outputLength = frameCount * UPSAMPLE_FACTOR;
+			const outputLength = frameCount * this.factor;
 
 			if (this.upsampleScratch.length < outputLength) {
 				this.upsampleScratch = new Float64Array(outputLength);
@@ -84,9 +90,11 @@ export class TruePeakAccumulator {
 			return this.finalizedResult;
 		}
 
+		const flushOutputSamples = FLUSH_FRAMES * this.factor;
+
 		for (const upsampler of this.upsamplers) {
-			if (this.upsampleScratch.length < FLUSH_OUTPUT_SAMPLES) {
-				this.upsampleScratch = new Float64Array(FLUSH_OUTPUT_SAMPLES);
+			if (this.upsampleScratch.length < flushOutputSamples) {
+				this.upsampleScratch = new Float64Array(flushOutputSamples);
 			}
 
 			this.trackInterpolated(upsampler.flush(this.upsampleScratch), -1);
@@ -105,7 +113,7 @@ export class TruePeakAccumulator {
 			if (!(magnitude <= this.interpolatedMax)) {
 				if (!(magnitude < Number.POSITIVE_INFINITY)) {
 					throw new MeasurementOverflow(
-						alignedFrameOf(this.framesPushed, index, this.framesPushed + lastFrameOffset),
+						alignedFrameOf(this.framesPushed, index, this.framesPushed + lastFrameOffset, this.factor),
 					);
 				}
 

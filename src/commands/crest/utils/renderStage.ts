@@ -6,6 +6,7 @@ import { chunkFrameCountOf, chunkRangeOf, chunkStretchesOf, forEachStretchChunk,
 import { SourceWindow } from "./SourceWindow";
 import { StretchPeakMeter } from "./StretchPeakMeter";
 import type { CrestLayout } from "./layout";
+import type { OversamplingFactor } from "../../../measurement/TruePeakUpsampler";
 import type { AudioOutput } from "../../utils/sinks";
 
 interface RenderedStage {
@@ -39,8 +40,9 @@ export const renderStage = async (args: {
 	path: Int32Array;
 	output: AudioOutput;
 	isLast: boolean;
+	oversampling: OversamplingFactor;
 }): Promise<RenderedStage> => {
-	const { sourcePath, currentPath, layout, stepIndex, path, output, isLast } = args;
+	const { sourcePath, currentPath, layout, stepIndex, path, output, isLast, oversampling } = args;
 	const quantize = isLast ? quantizerOf(output.bitDepth) : (sample: number): number => sample;
 	const capacity = chunkStretchesOf(layout) * layout.stretchFrames;
 	let result: RenderedStage = { peaks: new Float64Array(0) };
@@ -51,7 +53,7 @@ export const renderStage = async (args: {
 		await reader.close();
 
 		const meter = new StretchPeakMeter({ stretchFrames: layout.stretchFrames, channelCount });
-		const accumulator = isLast ? new TruePeakAccumulator(channelCount) : undefined;
+		const accumulator = isLast ? new TruePeakAccumulator(channelCount, oversampling) : undefined;
 		const frames = Array.from({ length: channelCount }, () => new Float64Array(capacity));
 		const window = await SourceWindow.open(currentPath, capacity);
 		let writtenFrames = 0;

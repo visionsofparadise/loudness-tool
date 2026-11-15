@@ -4,7 +4,7 @@ export abstract class GuardedUpsampler {
 
 	protected constructor(
 		private readonly name: string,
-		private readonly factor: number,
+		readonly factor: number,
 		flushFrames: number,
 	) {
 		this.flushInput = new Float64Array(flushFrames);

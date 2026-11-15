@@ -5,12 +5,14 @@ import { figureText, peakDbOrNull } from "../../utils/db";
 import { Scratch } from "../../utils/Scratch";
 import { replayableInputOptionsOf, withAudioInput } from "../utils/AudioInput";
 import { audioOptionsOf } from "../utils/AudioProgram";
+import { addOversamplingOption, oversamplingOf } from "../utils/oversampling";
 import { writeSummary } from "../utils/sinks";
 import { pushWavBlocks } from "../utils/withWavReader";
 import { crestLayoutOf, stretchFramesOf } from "./utils/layout";
 import { renderStage } from "./utils/renderStage";
 import { solveStage } from "./utils/solveStage";
 import { StretchPeakMeter } from "./utils/StretchPeakMeter";
+import type { OversamplingFactor } from "../../measurement/TruePeakUpsampler";
 import type { BlockSource } from "../../wav/WavReader";
 import type { AudioOutput } from "../utils/sinks";
 import type { StreamOptions } from "../utils/streamOptions";
@@ -20,6 +22,7 @@ interface CrestOptions {
 	readonly spread?: number;
 	readonly steps?: number;
 	readonly smoothing?: number;
+	readonly oversampling?: number;
 	readonly scratchDir?: string;
 	readonly inputStream?: StreamOptions;
 	readonly outputStream?: StreamOptions;
@@ -73,6 +76,7 @@ const parseSmoothing = (value: string): number => {
 const meterSource = async (
 	source: BlockSource,
 	smoothingMs: number,
+	oversampling: OversamplingFactor,
 ): Promise<{
 	readonly sampleRate: number;
 	readonly frameCount: number;
@@ -81,7 +85,7 @@ const meterSource = async (
 }> => {
 	const { sampleRate, channelCount } = source.format;
 	const meter = new StretchPeakMeter({ stretchFrames: stretchFramesOf({ smoothingMs, sampleRate }), channelCount });
-	const truePeakAccumulator = new TruePeakAccumulator(channelCount);
+	const truePeakAccumulator = new TruePeakAccumulator(channelCount, oversampling);
 	const frameCount = await pushWavBlocks(source, [meter, truePeakAccumulator]);
 
 	return { sampleRate, frameCount, truePeak: truePeakAccumulator.finalize(), peaks: meter.finish() };
@@ -100,9 +104,12 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 		steps: options.steps ?? DEFAULT_STEPS,
 		smoothingMs: options.smoothing ?? DEFAULT_SMOOTHING_MS,
 	};
+	const oversampling = oversamplingOf(options.oversampling);
 
 	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) => {
-		const measurement = await input.withFirstPass(async (source) => meterSource(source, settings.smoothingMs));
+		const measurement = await input.withFirstPass(async (source) =>
+			meterSource(source, settings.smoothingMs, oversampling),
+		);
 		const layout = crestLayoutOf({
 			...settings,
 			sampleRate: measurement.sampleRate,
@@ -138,6 +145,7 @@ export const crest = async (inputPath: string, options: CrestOptions): Promise<v
 					path,
 					output: isLast ? input.output() : intermediateOutputOf(stagePath, input.output().channelMask),
 					isLast,
+					oversampling,
 				});
 
 				if (currentPath !== sourcePath) {
@@ -196,6 +204,7 @@ export const addCrestCommand = (program: Command): void => {
 		parseSmoothing,
 		DEFAULT_SMOOTHING_MS,
 	);
+	addOversamplingOption(command);
 	command.action(async (input: string, options: CrestOptions) =>
 		crest(input, { ...options, ...audioOptionsOf(command) }),
 	);

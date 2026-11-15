@@ -7,12 +7,14 @@ import { applyUniformGain } from "../utils/applyUniformGain";
 import { replayableInputOptionsOf, withAudioInput, type AudioInput } from "../utils/AudioInput";
 import { audioOptionsOf } from "../utils/AudioProgram";
 import { copyUnchanged } from "../utils/copyUnchanged";
+import { addOversamplingOption, oversamplingOf } from "../utils/oversampling";
 import { writeSummary, type AudioOutput } from "../utils/sinks";
 import { withWavWriter } from "../utils/withWavWriter";
 import { forEachEnvelopedBlock } from "./utils/apply";
 import { bodyPeakDbOf, measureSource } from "./utils/measureSource";
 import { iterateForTargets } from "./utils/solve";
 import { windowSamplesFromMs } from "./utils/window";
+import type { OversamplingFactor } from "../../measurement/TruePeakUpsampler";
 import type { StreamOptions } from "../utils/streamOptions";
 import type { SourceMeasurement } from "./utils/measureSource";
 import type { AnchorBase, IterationAttempt, Targets } from "./utils/solve";
@@ -29,6 +31,7 @@ interface TargetOptions {
 	readonly smoothing?: number;
 	readonly neverExpand?: boolean;
 	readonly tolerance?: number;
+	readonly oversampling?: number;
 	readonly scratchDir?: string;
 	readonly inputStream?: StreamOptions;
 	readonly outputStream?: StreamOptions;
@@ -223,6 +226,7 @@ interface FitSettings {
 	readonly smoothingMs: number;
 	readonly tolerance: number;
 	readonly neverExpand: boolean;
+	readonly oversampling: OversamplingFactor;
 }
 
 const fitMeasured = async (
@@ -234,7 +238,7 @@ const fitMeasured = async (
 		readonly anchorBase: AnchorBase;
 	},
 ): Promise<SampleFile> => {
-	const { targets, smoothingMs, tolerance, neverExpand, measurement, anchorBase } = settings;
+	const { targets, smoothingMs, tolerance, neverExpand, oversampling, measurement, anchorBase } = settings;
 	const output = input.output();
 	const result = await iterateForTargets({
 		inputPath: input.replayPath(),
@@ -250,6 +254,7 @@ const fitMeasured = async (
 		sourceLufs: measurement.integratedLufs,
 		tolerance,
 		neverExpand,
+		oversampling,
 		histogram: measurement.detectionHistogram,
 		loudnessEnvelope: measurement.loudnessEnvelope,
 		peakEnvelope: measurement.peakEnvelope,
@@ -292,7 +297,7 @@ const fitMeasured = async (
 };
 
 const fitInput = async (input: AudioInput, options: TargetOptions, settings: FitSettings): Promise<void> => {
-	const { targets, limitPercentile, smoothingMs } = settings;
+	const { targets, limitPercentile, smoothingMs, oversampling } = settings;
 	const scratch = await Scratch.create(options.scratchDir);
 	const errors: Array<unknown> = [];
 	let openEnvelopes: Array<SampleFile> = [];
@@ -304,6 +309,7 @@ const fitInput = async (input: AudioInput, options: TargetOptions, settings: Fit
 				scratch,
 				limitPercentile,
 				halfWidthOf: (sampleRate) => windowSamplesFromMs(smoothingMs, sampleRate),
+				oversampling,
 			}),
 		);
 
@@ -369,6 +375,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	const smoothingMs = options.smoothing ?? DEFAULT_SMOOTHING_MS;
 	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE;
 	const neverExpand = options.neverExpand === true;
+	const oversampling = oversamplingOf(options.oversampling);
 
 	assertBounded("lufs", options.lufs, isLufs, LUFS_RANGE);
 	assertBoundedNegativeDb("tp", -24, options.tp);
@@ -388,7 +395,7 @@ export const target = async (inputPath: string, options: TargetOptions): Promise
 	assertAppliesWithTp(targets, options);
 
 	await withAudioInput(inputPath, replayableInputOptionsOf(options), async (input) =>
-		fitInput(input, options, { targets, limitPercentile, smoothingMs, tolerance, neverExpand }),
+		fitInput(input, options, { targets, limitPercentile, smoothingMs, tolerance, neverExpand, oversampling }),
 	);
 };
 
@@ -436,6 +443,7 @@ export const addTargetCommand = (program: Command): void => {
 		parseTolerance,
 		DEFAULT_TOLERANCE,
 	);
+	addOversamplingOption(command);
 	command.action(async (input: string, options: TargetOptions) =>
 		target(input, { ...options, ...audioOptionsOf(command) }),
 	);

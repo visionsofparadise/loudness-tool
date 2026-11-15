@@ -9,6 +9,7 @@ import { applyUniformGain } from "./utils/applyUniformGain";
 import { replayableInputOptionsOf, withAudioInput } from "./utils/AudioInput";
 import { audioOptionsOf } from "./utils/AudioProgram";
 import { copyUnchanged } from "./utils/copyUnchanged";
+import { addOversamplingOption, oversamplingOf } from "./utils/oversampling";
 import { writeSummary } from "./utils/sinks";
 import { pushWavBlocks } from "./utils/withWavReader";
 import type { StreamOptions } from "./utils/streamOptions";
@@ -17,6 +18,7 @@ import type { BlockSource } from "../wav/WavReader";
 interface LufsNormOptions {
 	readonly output: string;
 	readonly lufs?: number;
+	readonly oversampling?: number;
 	readonly scratchDir?: string;
 	readonly inputStream?: StreamOptions;
 	readonly outputStream?: StreamOptions;
@@ -88,6 +90,7 @@ export const gainDbFor = (blockSums: Float64Array, blockSize: number, target: nu
 
 export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Promise<void> => {
 	const target = options.lufs ?? DEFAULT_TARGET_LUFS;
+	const oversampling = oversamplingOf(options.oversampling);
 
 	if (!isTargetLufsInRange(target)) {
 		throw new Error(targetLufsMessage(target));
@@ -106,7 +109,7 @@ export const lufsNorm = async (inputPath: string, options: LufsNormOptions): Pro
 
 		const blocks = accumulator.gatingBlocks();
 		const gainDb = gainDbFor(blocks.sums, blocks.size, target);
-		const truePeakMeter = new TruePeakAccumulator(channelCount);
+		const truePeakMeter = new TruePeakAccumulator(channelCount, oversampling);
 		const { clampedSamples } = await applyUniformGain(input.replayPath(), input.output(), dbToLinear(gainDb), [
 			truePeakMeter,
 		]);
@@ -144,6 +147,7 @@ export const addLufsNormCommand = (program: Command): void => {
 		"output path, WAV unless -f names a raw format, or - or pipe: for a pipe",
 	);
 	command.option("--lufs <LUFS>", "target integrated loudness in LUFS", parseTargetLufs, DEFAULT_TARGET_LUFS);
+	addOversamplingOption(command);
 	command.action(async (input: string, options: LufsNormOptions) =>
 		lufsNorm(input, { ...options, ...audioOptionsOf(command) }),
 	);

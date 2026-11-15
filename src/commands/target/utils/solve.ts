@@ -2,6 +2,7 @@ import { IntegratedLufsAccumulator } from "../../../measurement/IntegratedLufsAc
 import { computeLoudnessRange } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
+import { DEFAULT_OVERSAMPLING, type OversamplingFactor } from "../../../measurement/TruePeakUpsampler";
 import { linearToDb, lufsOrNull, peakDbOrNull } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
 import { quantizerOf } from "../../../wav/utils/sampleCodec";
@@ -526,11 +527,12 @@ const measureAttemptOutput = async (args: {
 	weights: Float64Array;
 	quantize: (sample: number) => number;
 	envelope: SampleFile;
+	oversampling: OversamplingFactor;
 }): Promise<MeasuredOutput> => {
-	const { inputPath, sampleRate, channelCount, weights, quantize, envelope } = args;
+	const { inputPath, sampleRate, channelCount, weights, quantize, envelope, oversampling } = args;
 	const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, weights);
 	const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, weights);
-	const truePeakAccumulator = new TruePeakAccumulator(channelCount);
+	const truePeakAccumulator = new TruePeakAccumulator(channelCount, oversampling);
 
 	await forEachEnvelopedBlock(inputPath, envelope, quantize, (channels, frameCount) => {
 		lufsAccumulator.push(channels, frameCount);
@@ -565,6 +567,7 @@ export const iterateForTargets = async (
 		maxAttempts?: number;
 		tolerance?: number;
 		neverExpand: boolean;
+		oversampling?: OversamplingFactor;
 		histogram: DetectionHistogram;
 		loudnessEnvelope: SampleFile;
 		peakEnvelope: SampleFile;
@@ -587,6 +590,7 @@ export const iterateForTargets = async (
 		maxAttempts = DEFAULT_MAX_ATTEMPTS,
 		tolerance = DEFAULT_TOLERANCE,
 		neverExpand,
+		oversampling = DEFAULT_OVERSAMPLING,
 		histogram,
 		loudnessEnvelope,
 		peakEnvelope,
@@ -718,6 +722,7 @@ export const iterateForTargets = async (
 					weights,
 					quantize,
 					envelope: dest,
+					oversampling,
 				});
 			} catch (error: unknown) {
 				await dest.close();

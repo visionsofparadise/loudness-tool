@@ -4,7 +4,13 @@ import { KWeightedSquaredSum } from "../../../measurement/KWeightedSquaredSum";
 import { computeLoudnessRange, getLraConsideredStats } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { SlidingWindowMaxStream, SlidingWindowMeanStream } from "../../../measurement/SlidingWindowStreams";
-import { DELAY_FRAMES, FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "../../../measurement/TruePeakUpsampler";
+import {
+	DEFAULT_OVERSAMPLING,
+	DELAY_FRAMES,
+	FLUSH_FRAMES,
+	TruePeakUpsampler,
+	type OversamplingFactor,
+} from "../../../measurement/TruePeakUpsampler";
 import { linearToDb, peakDbOrNull } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
 import { pairedBlocks } from "./envelope";
@@ -169,12 +175,17 @@ class FrameQueue {
 	}
 }
 
-const collapseMaxPerFrame = (upsampled: Float64Array, frameCount: number, output: Float64Array): void => {
+const collapseMaxPerFrame = (
+	upsampled: Float64Array,
+	frameCount: number,
+	factor: OversamplingFactor,
+	output: Float64Array,
+): void => {
 	for (let baseIndex = 0; baseIndex < frameCount; baseIndex++) {
-		const offset = baseIndex * UPSAMPLE_FACTOR;
+		const offset = baseIndex * factor;
 		let max = 0;
 
-		for (let phase = 0; phase < UPSAMPLE_FACTOR; phase++) {
+		for (let phase = 0; phase < factor; phase++) {
 			const sample = upsampled[offset + phase] ?? 0;
 
 			if (sample > max) {
@@ -246,8 +257,9 @@ export const measureSource = async (args: {
 	scratch: Scratch;
 	limitPercentile: number;
 	halfWidthOf: (sampleRate: number) => number;
+	oversampling?: OversamplingFactor;
 }): Promise<SourceMeasurement> => {
-	const { source, scratch, limitPercentile, halfWidthOf } = args;
+	const { source, scratch, limitPercentile, halfWidthOf, oversampling = DEFAULT_OVERSAMPLING } = args;
 	const loudnessEnvelope = await SampleFile.create(scratch, "loudness");
 	let peakEnvelope: SampleFile | undefined;
 
@@ -273,7 +285,7 @@ export const measureSource = async (args: {
 		const upsampleScratches: Array<Float64Array> = [];
 
 		for (let channelIndex = 0; channelIndex < channelCount; channelIndex++) {
-			upsamplers.push(new TruePeakUpsampler());
+			upsamplers.push(new TruePeakUpsampler(oversampling));
 			upsampleScratches.push(new Float64Array(0));
 		}
 
@@ -281,7 +293,7 @@ export const measureSource = async (args: {
 		let baseScratch = new Float64Array(0);
 		let energyScratch = new Float64Array(0);
 		let frameIndex = 0;
-		let skipRemaining = DELAY_FRAMES * UPSAMPLE_FACTOR;
+		let skipRemaining = DELAY_FRAMES * oversampling;
 		let detectedFrames = 0;
 		let rawMax = 0;
 		let interpolatedMax = 0;
@@ -340,7 +352,7 @@ export const measureSource = async (args: {
 			skipRemaining -= skipped;
 			preRingMax = maxOf(levelsScratch, skipped, preRingMax);
 
-			const frames = Math.min((upLength - skipped) / UPSAMPLE_FACTOR, frameIndex - detectedFrames);
+			const frames = Math.min((upLength - skipped) / oversampling, frameIndex - detectedFrames);
 
 			if (frames <= 0) {
 				return;
@@ -350,7 +362,7 @@ export const measureSource = async (args: {
 				baseScratch = new Float64Array(frames);
 			}
 
-			collapseMaxPerFrame(levelsScratch.subarray(skipped), frames, baseScratch);
+			collapseMaxPerFrame(levelsScratch.subarray(skipped), frames, oversampling, baseScratch);
 
 			if (detectedFrames === 0) {
 				baseScratch[0] = Math.max(baseScratch[0] ?? 0, preRingMax);
@@ -359,7 +371,7 @@ export const measureSource = async (args: {
 			detectedFrames += frames;
 
 			if (detectedFrames === frameIndex) {
-				const tailStart = skipped + frames * UPSAMPLE_FACTOR;
+				const tailStart = skipped + frames * oversampling;
 				const tailMax = maxOf(levelsScratch.subarray(tailStart), upLength - tailStart, 0);
 
 				baseScratch[frames - 1] = Math.max(baseScratch[frames - 1] ?? 0, tailMax);
@@ -401,7 +413,7 @@ export const measureSource = async (args: {
 			energyQueue.push(frameEnergy);
 			await persistLoudness(momentaryWindow.push(frameEnergy, false));
 
-			const upChunkLength = frames * UPSAMPLE_FACTOR;
+			const upChunkLength = frames * oversampling;
 
 			if (levelsScratch.length < upChunkLength) {
 				levelsScratch = new Float64Array(upChunkLength);
@@ -436,7 +448,7 @@ export const measureSource = async (args: {
 			await pushAlignedDetection(upChunkLength);
 		}
 
-		const flushLength = FLUSH_FRAMES * UPSAMPLE_FACTOR;
+		const flushLength = FLUSH_FRAMES * oversampling;
 		const flushChannels = upsamplers.map((upsampler) => {
 			const flushed = new Float64Array(flushLength);
 

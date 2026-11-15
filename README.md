@@ -2,15 +2,11 @@
 
 loudness-tool measures true peak, integrated loudness and loudness range per ITU-R BS.1770 and EBU Tech 3342, and adjusts audio to true-peak and loudness targets. It reads and writes WAV and raw PCM, from files or pipes, and runs offline on your own machine.
 
-## Install
-
-```sh
-npm install -g loudness-tool
-```
-
 ## Commands
 
 An input path of `-` or `pipe:` reads stdin. `tp-norm`, `lufs-norm`, `crest` and `target` require `-o, --output <path>`: a file, `-` for stdout, or the input's own path for in-place processing. Each prints its figures to stdout, or to stderr when the audio goes to stdout.
+
+Every command takes `--oversampling <factor>`, the true-peak oversampling factor, 8 or 16 (default: 8). 16 reads closer to the ideal true peak; 8 runs faster.
 
 ### stats
 

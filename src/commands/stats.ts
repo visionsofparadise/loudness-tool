@@ -7,9 +7,11 @@ import { figureText, lufsOrNull, peakDbOrNull } from "../utils/db";
 import { writeTextToStream } from "../utils/writeToStream";
 import { withAudioInput } from "./utils/AudioInput";
 import { streamScopesOf } from "./utils/AudioProgram";
+import { addOversamplingOption, oversamplingOf } from "./utils/oversampling";
 import { descriptorOf } from "./utils/stdioPath";
 import { DEFAULT_STREAM_OPTIONS, type StreamOptions } from "./utils/streamOptions";
 import { pushWavBlocks } from "./utils/withWavReader";
+import type { OversamplingFactor } from "../measurement/TruePeakUpsampler";
 import type { SourceBitDepth } from "../wav/utils/wavFormat";
 import type { Command } from "commander";
 
@@ -26,6 +28,7 @@ interface StatsJson {
 
 interface StatsOptions {
 	readonly json?: boolean;
+	readonly oversampling?: number;
 	readonly inputStreams?: ReadonlyArray<StreamOptions>;
 }
 
@@ -53,7 +56,11 @@ const errorMessageOf = (error: unknown, inputPath: string): string => {
 	return namesInput ? message : `Cannot read "${inputPath}": ${message}`;
 };
 
-const measureStats = async (inputPath: string, stream: StreamOptions): Promise<StatsJson> =>
+const measureStats = async (
+	inputPath: string,
+	stream: StreamOptions,
+	oversampling: OversamplingFactor,
+): Promise<StatsJson> =>
 	withAudioInput(
 		inputPath,
 		{ replayable: false, scratchDirectory: undefined, stream, output: undefined },
@@ -61,7 +68,7 @@ const measureStats = async (inputPath: string, stream: StreamOptions): Promise<S
 			input.withFirstPass(async (source) => {
 				const { sampleRate, channelCount, channelMask, bitDepth } = source.format;
 				const weights = channelWeightsOf(channelCount, channelMask);
-				const truePeakAccumulator = new TruePeakAccumulator(channelCount);
+				const truePeakAccumulator = new TruePeakAccumulator(channelCount, oversampling);
 				const lufsAccumulator = new IntegratedLufsAccumulator(sampleRate, weights);
 				const shortTermAccumulator = new ShortTermLoudnessAccumulator(sampleRate, weights);
 
@@ -117,6 +124,8 @@ const assertDescriptorsReadOnce = (inputs: ReadonlyArray<string>): void => {
 export const stats = async (inputs: Array<string>, options: StatsOptions): Promise<void> => {
 	assertDescriptorsReadOnce(inputs);
 
+	const oversampling = oversamplingOf(options.oversampling);
+
 	const results: Array<StatsJson> = [];
 	let failed = false;
 
@@ -124,7 +133,7 @@ export const stats = async (inputs: Array<string>, options: StatsOptions): Promi
 		let result: StatsJson | undefined;
 
 		try {
-			result = await measureStats(inputPath, options.inputStreams?.[index] ?? DEFAULT_STREAM_OPTIONS);
+			result = await measureStats(inputPath, options.inputStreams?.[index] ?? DEFAULT_STREAM_OPTIONS, oversampling);
 		} catch (error: unknown) {
 			failed = true;
 			process.stderr.write(`error: ${errorMessageOf(error, inputPath)}\n`);
@@ -149,12 +158,14 @@ export const stats = async (inputs: Array<string>, options: StatsOptions): Promi
 };
 
 export const addStatsCommand = (program: Command): void => {
-	program
+	const command = program
 		.command("stats")
 		.description("Report true-peak, integrated loudness, and loudness range of audio inputs")
 		.argument("<inputs...>", "input paths, WAV unless -f names a raw format, or - or pipe: for a pipe")
-		.option("--json", "print JSON")
-		.action(async (inputs: Array<string>, options: StatsOptions, command: Command) =>
-			stats(inputs, { ...options, inputStreams: streamScopesOf(command).inputs }),
-		);
+		.option("--json", "print JSON");
+
+	addOversamplingOption(command);
+	command.action(async (inputs: Array<string>, options: StatsOptions) =>
+		stats(inputs, { ...options, inputStreams: streamScopesOf(command).inputs }),
+	);
 };

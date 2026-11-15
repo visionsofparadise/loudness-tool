@@ -2,7 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DELAY_FRAMES, FLUSH_FRAMES, TruePeakUpsampler, UPSAMPLE_FACTOR } from "../../../measurement/TruePeakUpsampler";
+import {
+	DEFAULT_OVERSAMPLING as UPSAMPLE_FACTOR,
+	DELAY_FRAMES,
+	FLUSH_FRAMES,
+	TruePeakUpsampler,
+} from "../../../measurement/TruePeakUpsampler";
 import { dbToLinear } from "../../../utils/db";
 import { Scratch } from "../../../utils/Scratch";
 import { createNoise, createSine } from "../../../utils/testSignals";
