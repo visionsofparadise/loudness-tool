@@ -25,7 +25,7 @@
 	"scripts": {
 		"prepare": "node -e \"import('node:child_process').then(({execSync})=>{try{execSync('git rev-parse --is-inside-work-tree',{stdio:'ignore'});execSync('git config core.hooksPath .githooks')}catch{}})\" && node tools.mjs install",
 		"fix": "concurrently -m 1 --group \"prettier --write .\" \"eslint . --fix --cache\" \"stylelint \\\"**/*.css\\\" --fix --allow-empty-input --cache\" \"markdownlint-cli2 --fix \\\"**/*.md\\\"\" \"textlint --fix \\\"**/*.md\\\"\"",
-		"check": "concurrently --group \"prettier --check .\" \"eslint . --no-cache -f unix\" \"tsc --noEmit --pretty false\" \"stylelint \\\"**/*.css\\\" -f unix --allow-empty-input --cache\" \"markdownlint-cli2 \\\"**/*.md\\\"\" \"textlint -f compact \\\"**/*.md\\\"\" \"knip --no-progress\" \"jscpd .\"",
+		"check": "concurrently --group \"prettier --check .\" \"eslint . --no-cache -f unix\" \"tsc --noEmit --pretty false\" \"stylelint \\\"**/*.css\\\" -f unix --allow-empty-input --cache\" \"markdownlint-cli2 \\\"**/*.md\\\"\" \"textlint -f compact \\\"**/*.md\\\"\" \"knip --no-progress\" \"jscpd .\" \"node tools.mjs run actionlint\"",
 		"unit": "vitest run unit",
 		"integration": "vitest run integration",
 		"build": "tsup src/main.ts --format esm --treeshake --clean"
@@ -41,6 +41,7 @@
 		"@html-eslint/eslint-plugin": "^0.65.0",
 		"@stylistic/eslint-plugin": "^5.10.0",
 		"@types/node": "^24.5.2",
+		"bun": "1.4.4",
 		"concurrently": "^9.2.1",
 		"eslint": "^10.9.1",
 		"eslint-config-prettier": "^10.1.8",
@@ -66,6 +67,7 @@
 	},
 	"allowScripts": {
 		"unrs-resolver@1.12.2": true,
-		"esbuild@0.27.7": true
+		"esbuild@0.27.7": true,
+		"bun@1.4.4": true
 	}
 }

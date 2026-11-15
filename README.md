@@ -2,6 +2,13 @@
 
 loudness-tool measures true peak, integrated loudness and loudness range per ITU-R BS.1770 and EBU Tech 3342, and adjusts audio to true-peak and loudness targets. It reads and writes WAV and raw PCM, from files or pipes, and runs offline on your own machine.
 
+## Install
+
+Download the latest release from [GitHub Releases](https://github.com/visionsofparadise/loudness-tool/releases/latest). `SHA256SUMS` lists every download's checksum.
+
+- **Windows:** run `loudness-tool-<version>-windows-x64-setup.exe`, or the `arm64` one on an Arm PC. It installs for your user and adds `loudness-tool` to your PATH, so a new terminal runs it. Apps & features uninstalls it.
+- **macOS and Linux:** download the standalone executable for your platform, such as `loudness-tool-<version>-mac-arm64` or `loudness-tool-<version>-linux-x64` (the Linux builds need glibc), rename it `loudness-tool`, mark it executable with `chmod +x loudness-tool` and move it to a folder on your PATH. On macOS, `xattr -d com.apple.quarantine loudness-tool` lets the unsigned executable run.
+
 ## Commands
 
 An input path of `-` or `pipe:` reads stdin. `tp-norm`, `lufs-norm`, `crest` and `target` require `-o, --output <path>`: a file, `-` for stdout, or the input's own path for in-place processing. Each prints its figures to stdout, or to stderr when the audio goes to stdout.
