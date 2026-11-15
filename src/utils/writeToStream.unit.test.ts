@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { writeToStream } from "./writeToStream";
@@ -93,6 +94,27 @@ describe("writeToStream", () => {
 
 		await expect(pending).rejects.toThrow("write EIO");
 		await expect(writeToStream(stream, Buffer.alloc(1))).rejects.toThrow("write EIO");
+	});
+
+	it("resolves when the stream calls back before write returns, as Bun's stdout does", async () => {
+		const chunks: Array<Buffer> = [];
+		const stream = Object.assign(new EventEmitter(), {
+			write: (chunk: Buffer, callback: (error?: Error | null) => void): boolean => {
+				chunks.push(chunk);
+				callback(null);
+
+				return true;
+			},
+		}) as unknown as NodeJS.WritableStream;
+		let isSettled = false;
+
+		void writeToStream(stream, Buffer.from([1])).then(() => {
+			isSettled = true;
+		});
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(isSettled).toBe(true);
+		expect(chunks).toEqual([Buffer.from([1])]);
 	});
 
 	it("rejects a write to a stream destroyed before the call", async () => {

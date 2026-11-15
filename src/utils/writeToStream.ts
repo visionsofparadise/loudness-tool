@@ -62,7 +62,7 @@ export const writeToStream = async (stream: NodeJS.WritableStream, buffer: Buffe
 		stream.on("close", onClose);
 		stream.on("drain", onDrain);
 
-		isDrained = stream.write(buffer, (error) => {
+		const hasRoom = stream.write(buffer, (error) => {
 			if (error !== undefined && error !== null) {
 				state.error ??= error;
 				settle(error);
@@ -73,6 +73,11 @@ export const writeToStream = async (stream: NodeJS.WritableStream, buffer: Buffe
 			isWritten = true;
 			settleWhenDone();
 		});
+
+		if (hasRoom) {
+			isDrained = true;
+			settleWhenDone();
+		}
 	});
 };
 
