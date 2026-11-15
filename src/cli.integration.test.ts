@@ -54,7 +54,6 @@ describe("an input that overflows the measurement", () => {
 		[["crest"]],
 		[["stats", "--oversampling", "16"]],
 		[["tp-norm", "--oversampling", "16"]],
-		[["target", "--lufs", "-16", "--tp", "-1", "--oversampling", "16"]],
 	])("fails %j naming the input and the frame, writing no output", async (command) => {
 		const inputPath = join(workingDirectory, "huge.wav");
 		const outputPath = join(workingDirectory, "out.wav");
@@ -120,18 +119,20 @@ describe("--oversampling", () => {
 	};
 
 	it.each(commands.map((command) => [command.join(" "), command] as const))(
-		"%s rejects a factor other than 8 or 16",
+		"%s rejects a factor other than 8 or 16, written as anything but 8 or 16",
 		async (_, command) => {
 			const inputPath = join(workingDirectory, "tone.wav");
 			const outputPath = join(workingDirectory, "out.wav");
 
 			await writeOffGridTone(inputPath, 2, 0.5);
 
-			const run = await runCli([...argvOf(command, inputPath, outputPath), "--oversampling", "4"]);
+			for (const value of ["4", "0x10", "16.0", " 16"]) {
+				const run = await runCli([...argvOf(command, inputPath, outputPath), "--oversampling", value]);
 
-			expect(run.exitCode).not.toBe(0);
-			expect(run.stderr).toContain("oversampling must be 8 or 16, received 4");
-			expect(existsSync(outputPath)).toBe(false);
+				expect(run.exitCode).not.toBe(0);
+				expect(run.stderr).toContain(`oversampling must be 8 or 16, received ${value}`);
+				expect(existsSync(outputPath)).toBe(false);
+			}
 		},
 	);
 

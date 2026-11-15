@@ -24,7 +24,7 @@ export const oversamplingOf = (value: number | undefined): OversamplingFactor =>
 const parseOversampling = (value: string): OversamplingFactor => {
 	const parsed = Number(value);
 
-	if (!isOversamplingFactor(parsed)) {
+	if (!isOversamplingFactor(parsed) || value !== String(parsed)) {
 		throw new InvalidArgumentError(oversamplingMessage(value));
 	}
 

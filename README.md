@@ -6,7 +6,7 @@ loudness-tool measures true peak, integrated loudness and loudness range per ITU
 
 An input path of `-` or `pipe:` reads stdin. `tp-norm`, `lufs-norm`, `crest` and `target` require `-o, --output <path>`: a file, `-` for stdout, or the input's own path for in-place processing. Each prints its figures to stdout, or to stderr when the audio goes to stdout.
 
-Every command takes `--oversampling <factor>`, the true-peak oversampling factor, 8 or 16 (default: 8). Every true-peak figure, target and ceiling is read at that factor. A reading sits up to 0.17 dB under the ideal true peak at 8 and up to 0.04 dB under it at 16, the most on content near half the sample rate; 8 runs faster.
+Every command takes `--oversampling <factor>`, the true-peak oversampling factor, 8 or 16 (default: 8). Every true-peak figure, target and ceiling is read at that factor. 16 reads closer to the ideal true peak on content near half the sample rate; 8 runs faster.
 
 ### stats
 
@@ -54,7 +54,7 @@ loudness-tool crest input.wav -o output.wav --spread 8 --steps 2 --smoothing 100
 
 ### target
 
-Brings audio to a loudness target, a true-peak target, or both; quiet passages, the body and the peaks each get their own gain. At least one of `--lufs` and `--tp` is required. The output's true peak stays at or under the ceiling, which is `--tp` when given and 0 dBTP otherwise.
+Brings audio to a loudness target, a true-peak target, or both; quiet passages, the body and the peaks each get their own gain. At least one of `--lufs` and `--tp` is required. The output's true peak stays at or under the ceiling, which is `--tp` when given and 0 dBTP otherwise. `--floor` and `--pivot` read loudness over 400 ms centred on each moment, so audio within 200 ms of louder audio takes that audio's gain.
 
 ```sh
 loudness-tool target input.wav -o output.wav --lufs -16
@@ -63,7 +63,7 @@ loudness-tool target input.wav -o output.wav --lufs -16 --tp -1
 
 - `--lufs <n>`: target integrated loudness in LUFS.
 - `--tp <dBTP>`: target true peak in dBTP.
-- `--floor <dB>`: loudness below which audio is never raised, in LUFS (default: from the audio's quietest passages).
+- `--floor <dB>`: loudness at or below which audio keeps its level, in LUFS (default: from the audio's quietest passages).
 - `--pivot <dB>`: loudness at which audio takes the full body gain, in LUFS (default: the audio's typical loudness).
 - `--limit-percentile <p>`: share of the audio's true-peak levels below the limit (default: 0.995).
 - `--limit-db <dB>`: true-peak level from which the peaks take the peak gain, in dBTP (default: the level `--limit-percentile` sets).

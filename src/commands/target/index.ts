@@ -412,12 +412,12 @@ export const addTargetCommand = (program: Command): void => {
 	command.option("--tp <dBTP>", "target true peak in dBTP, also the ceiling", parseNegativeDb("tp", -24));
 	command.option(
 		"--floor <dB>",
-		"loudness below which audio is never raised, in LUFS",
+		"loudness at or below which audio keeps its level, in LUFS, read over 400 ms",
 		parseNegativeDb("floor", -100),
 	);
 	command.option(
 		"--pivot <dB>",
-		"loudness at which audio takes the full body gain, in LUFS",
+		"loudness at which audio takes the full body gain, in LUFS, read over 400 ms",
 		parseNegativeDb("pivot", -80),
 	);
 	command.option(

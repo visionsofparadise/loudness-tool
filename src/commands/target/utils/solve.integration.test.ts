@@ -229,7 +229,7 @@ describe("target's search", () => {
 		return stderr;
 	};
 
-	it("stops at the body's saturation on speech with a cough under --lufs alone, leaving the room tone at unity", async () => {
+	it("stops at the body's saturation on speech with a cough under --lufs alone, holding room tone 250 ms clear of speech within 1 dB", async () => {
 		const speech = createSpeechLike({
 			seconds: 9,
 			sampleRate: SAMPLE_RATE,
@@ -249,7 +249,7 @@ describe("target's search", () => {
 		expect(stderr).toMatch(BODY_LIMIT_PATTERN);
 	}, 60_000);
 
-	it("stops at the body's saturation on speech with a cough under both targets, leaving the room tone at unity", async () => {
+	it("stops at the body's saturation on speech with a cough under both targets, holding room tone 250 ms clear of speech within 1 dB", async () => {
 		const speech = createSpeechLike({
 			seconds: 9,
 			sampleRate: SAMPLE_RATE,
