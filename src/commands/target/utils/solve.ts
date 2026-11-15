@@ -2,7 +2,6 @@ import { IntegratedLufsAccumulator } from "../../../measurement/IntegratedLufsAc
 import { computeLoudnessRange } from "../../../measurement/loudnessRange";
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { TruePeakAccumulator } from "../../../measurement/TruePeakAccumulator";
-import { DEFAULT_OVERSAMPLING, type OversamplingFactor } from "../../../measurement/TruePeakUpsampler";
 import { linearToDb, lufsOrNull, peakDbOrNull } from "../../../utils/db";
 import { SampleFile } from "../../../utils/SampleFile";
 import { quantizerOf } from "../../../wav/utils/sampleCodec";
@@ -13,6 +12,7 @@ import { CELL_COUNT, cellCentreDb, cellOf, cellShareAtOrAbove } from "./measureS
 import { holdHalfWidthOf, windowSamplesFromMs } from "./window";
 import type { Anchors } from "./curve";
 import type { DetectionHistogram } from "./measureSource";
+import type { OversamplingFactor } from "../../../measurement/TruePeakUpsampler";
 import type { Scratch } from "../../../utils/Scratch";
 import type { SourceBitDepth } from "../../../wav/utils/wavFormat";
 
@@ -567,7 +567,7 @@ export const iterateForTargets = async (
 		maxAttempts?: number;
 		tolerance?: number;
 		neverExpand: boolean;
-		oversampling?: OversamplingFactor;
+		oversampling: OversamplingFactor;
 		histogram: DetectionHistogram;
 		loudnessEnvelope: SampleFile;
 		peakEnvelope: SampleFile;
@@ -590,7 +590,7 @@ export const iterateForTargets = async (
 		maxAttempts = DEFAULT_MAX_ATTEMPTS,
 		tolerance = DEFAULT_TOLERANCE,
 		neverExpand,
-		oversampling = DEFAULT_OVERSAMPLING,
+		oversampling,
 		histogram,
 		loudnessEnvelope,
 		peakEnvelope,

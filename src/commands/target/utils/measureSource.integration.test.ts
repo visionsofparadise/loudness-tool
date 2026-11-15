@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-	DEFAULT_OVERSAMPLING as UPSAMPLE_FACTOR,
+	DEFAULT_OVERSAMPLING,
+	OVERSAMPLING_FACTORS,
 	DELAY_FRAMES,
 	FLUSH_FRAMES,
 	TruePeakUpsampler,
+	type OversamplingFactor,
 } from "../../../measurement/TruePeakUpsampler";
 import { dbToLinear } from "../../../utils/db";
 import { Scratch } from "../../../utils/Scratch";
@@ -21,19 +23,19 @@ import { windowSamplesFromMs } from "./window";
 const SAMPLE_RATE = 48000;
 const SILENCE_FRAMES = 1000;
 
-const upsampledMagnitudes = (signal: Float64Array): Float64Array => {
-	const upsampler = new TruePeakUpsampler();
-	const output = new Float64Array((signal.length + FLUSH_FRAMES) * UPSAMPLE_FACTOR);
+const upsampledMagnitudes = (signal: Float64Array, factor: OversamplingFactor): Float64Array => {
+	const upsampler = new TruePeakUpsampler(factor);
+	const output = new Float64Array((signal.length + FLUSH_FRAMES) * factor);
 
 	upsampler.upsample(signal, signal.length, output);
-	upsampler.flush(output.subarray(signal.length * UPSAMPLE_FACTOR));
+	upsampler.flush(output.subarray(signal.length * factor));
 
 	return output.map(Math.abs);
 };
 
-const maxIn = (values: Float64Array, startFrame: number, endFrame: number): number =>
+const maxIn = (values: Float64Array, factor: OversamplingFactor, startFrame: number, endFrame: number): number =>
 	values
-		.subarray((startFrame + DELAY_FRAMES) * UPSAMPLE_FACTOR, (endFrame + DELAY_FRAMES) * UPSAMPLE_FACTOR)
+		.subarray((startFrame + DELAY_FRAMES) * factor, (endFrame + DELAY_FRAMES) * factor)
 		.reduce((max, value) => Math.max(max, value), 0);
 
 describe("measureSource detection at the file's ends", () => {
@@ -54,6 +56,7 @@ describe("measureSource detection at the file's ends", () => {
 		channels: ReadonlyArray<Float64Array>,
 		limitPercentile = 0.995,
 		halfWidth = 0,
+		oversampling: OversamplingFactor = DEFAULT_OVERSAMPLING,
 	): Promise<SourceMeasurement> => {
 		const inputPath = join(workingDirectory, "input.wav");
 		const writer = await WavWriter.create(
@@ -75,7 +78,7 @@ describe("measureSource detection at the file's ends", () => {
 		scratch = activeScratch;
 
 		return withWavReader(inputPath, async (source) =>
-			measureSource({ source, scratch: activeScratch, limitPercentile, halfWidthOf: () => halfWidth }),
+			measureSource({ source, scratch: activeScratch, limitPercentile, halfWidthOf: () => halfWidth, oversampling }),
 		);
 	};
 
@@ -102,8 +105,10 @@ describe("measureSource detection at the file's ends", () => {
 		return { loudness, peak };
 	};
 
-	const detectionEnvelopeOf = async (signal: Float64Array): Promise<Float64Array> =>
-		(await readAndClose(await measureSignal([signal]))).peak;
+	const detectionEnvelopeOf = async (
+		signal: Float64Array,
+		factor: OversamplingFactor = DEFAULT_OVERSAMPLING,
+	): Promise<Float64Array> => (await readAndClose(await measureSignal([signal], 0.995, 0, factor))).peak;
 
 	it("reads a steady sine's momentary loudness as its integrated loudness away from the edges", async () => {
 		const measurement = await measureSignal(createSine(5 * SAMPLE_RATE, 2, SAMPLE_RATE, 1000, dbToLinear(-12)));
@@ -115,7 +120,7 @@ describe("measureSource detection at the file's ends", () => {
 		}
 	});
 
-	it("reads silence more than 200 ms before an onset as silent and the centred 400 ms loudness within it", async () => {
+	it("reads silence more than 200 ms before an onset as silent and 150 ms before it as louder than -40 LUFS", async () => {
 		const signal = new Float64Array(2 * SAMPLE_RATE);
 		const [tone = new Float64Array(0)] = createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 1000, dbToLinear(-20));
 
@@ -160,37 +165,40 @@ describe("measureSource detection at the file's ends", () => {
 		expect(Math.abs(bodyPeakDb + 20)).toBeLessThan(0.02);
 	});
 
-	it("credits the ringing past the last frame to the last frame", async () => {
+	it.each(OVERSAMPLING_FACTORS)("credits the ringing past the last frame to the last frame at %ix", async (factor) => {
 		const ending = [1, -1, 1, -1, 1, -1, 1, -1, -1, 1, 0];
 		const signal = new Float64Array(SILENCE_FRAMES + ending.length);
 
 		signal.set(ending, SILENCE_FRAMES);
 
 		const lastFrame = signal.length - 1;
-		const magnitudes = upsampledMagnitudes(signal);
-		const lastFrameLevel = maxIn(magnitudes, lastFrame, signal.length);
-		const pastEndLevel = maxIn(magnitudes, signal.length, signal.length + FLUSH_FRAMES - DELAY_FRAMES);
-		const envelope = await detectionEnvelopeOf(signal);
+		const magnitudes = upsampledMagnitudes(signal, factor);
+		const lastFrameLevel = maxIn(magnitudes, factor, lastFrame, signal.length);
+		const pastEndLevel = maxIn(magnitudes, factor, signal.length, signal.length + FLUSH_FRAMES - DELAY_FRAMES);
+		const envelope = await detectionEnvelopeOf(signal, factor);
 
 		expect(pastEndLevel).toBeGreaterThan(1.5 * lastFrameLevel);
 		expect(envelope).toHaveLength(signal.length);
 		expect(Math.abs((envelope[lastFrame] ?? Number.NaN) - 20 * Math.log10(pastEndLevel))).toBeLessThan(1e-9);
 	});
 
-	it("credits the ringing before the first frame to the first frame", async () => {
-		const opening = [-0.5, -0.5, ...Array.from({ length: 33 }, (_, index) => (index % 2 === 0 ? -1 : 1))];
-		const signal = new Float64Array(opening.length + SILENCE_FRAMES);
+	it.each(OVERSAMPLING_FACTORS)(
+		"credits the ringing before the first frame to the first frame at %ix",
+		async (factor) => {
+			const opening = [-0.5, -0.5, ...Array.from({ length: 33 }, (_, index) => (index % 2 === 0 ? -1 : 1))];
+			const signal = new Float64Array(opening.length + SILENCE_FRAMES);
 
-		signal.set(opening, 0);
+			signal.set(opening, 0);
 
-		const magnitudes = upsampledMagnitudes(signal);
-		const firstFrameLevel = maxIn(magnitudes, 0, 1);
-		const preRingLevel = maxIn(magnitudes, -DELAY_FRAMES, 0);
-		const envelope = await detectionEnvelopeOf(signal);
+			const magnitudes = upsampledMagnitudes(signal, factor);
+			const firstFrameLevel = maxIn(magnitudes, factor, 0, 1);
+			const preRingLevel = maxIn(magnitudes, factor, -DELAY_FRAMES, 0);
+			const envelope = await detectionEnvelopeOf(signal, factor);
 
-		expect(preRingLevel).toBeGreaterThan(1.5 * firstFrameLevel);
-		expect(Math.abs((envelope[0] ?? Number.NaN) - 20 * Math.log10(preRingLevel))).toBeLessThan(1e-9);
-	});
+			expect(preRingLevel).toBeGreaterThan(1.5 * firstFrameLevel);
+			expect(Math.abs((envelope[0] ?? Number.NaN) - 20 * Math.log10(preRingLevel))).toBeLessThan(1e-9);
+		},
+	);
 });
 
 describe("measureSource histograms", () => {
@@ -216,7 +224,13 @@ describe("measureSource histograms", () => {
 		}
 
 		return withWavReader(inputPath, async (source) =>
-			measureSource({ source, scratch: activeScratch, limitPercentile: 0.995, halfWidthOf: () => halfWidth }),
+			measureSource({
+				source,
+				scratch: activeScratch,
+				limitPercentile: 0.995,
+				halfWidthOf: () => halfWidth,
+				oversampling: DEFAULT_OVERSAMPLING,
+			}),
 		);
 	};
 

@@ -31,6 +31,7 @@ import {
 	type Targets,
 } from "./solve";
 import { windowSamplesFromMs } from "./window";
+import { DEFAULT_OVERSAMPLING } from "../../../measurement/TruePeakUpsampler";
 
 const SAMPLE_RATE = 48000;
 
@@ -525,6 +526,7 @@ describe("iterateForTargets", () => {
 				scratch: activeScratch,
 				limitPercentile: 0.995,
 				halfWidthOf: (sampleRate) => windowSamplesFromMs(1, sampleRate),
+				oversampling: DEFAULT_OVERSAMPLING,
 			}),
 		);
 		const { truePeakDb } = measurement;
@@ -552,6 +554,7 @@ describe("iterateForTargets", () => {
 			weights: measurement.weights,
 			frameCount: measurement.frameCount,
 			outputBitDepth: "32f",
+			oversampling: DEFAULT_OVERSAMPLING,
 			anchorBase: {
 				floorDb: Number.isFinite(measurement.floorAutoDb) ? Math.min(measurement.floorAutoDb, pivotDb - 6) : null,
 				pivotDb,

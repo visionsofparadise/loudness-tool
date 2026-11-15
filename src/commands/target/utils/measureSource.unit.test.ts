@@ -21,7 +21,11 @@ import {
 	type SourceMeasurement,
 } from "./measureSource";
 import { windowSamplesFromMs } from "./window";
-import { OVERSAMPLING_FACTORS, type OversamplingFactor } from "../../../measurement/TruePeakUpsampler";
+import {
+	DEFAULT_OVERSAMPLING,
+	OVERSAMPLING_FACTORS,
+	type OversamplingFactor,
+} from "../../../measurement/TruePeakUpsampler";
 
 const SAMPLE_RATE = 48000;
 
@@ -38,7 +42,7 @@ const measureFile = async (args: {
 			scratch: args.scratch,
 			limitPercentile: args.limitPercentile,
 			halfWidthOf: () => args.halfWidth,
-			oversampling: args.oversampling,
+			oversampling: args.oversampling ?? DEFAULT_OVERSAMPLING,
 		}),
 	);
 
@@ -459,6 +463,7 @@ describe("measureSource", () => {
 					scratch: measureScratch,
 					limitPercentile: 0.995,
 					halfWidthOf: (sampleRate) => windowSamplesFromMs(1, sampleRate),
+					oversampling: DEFAULT_OVERSAMPLING,
 				});
 				const loudness = await readEnvelope(measurement.loudnessEnvelope);
 				const envelope = await readEnvelope(measurement.peakEnvelope);

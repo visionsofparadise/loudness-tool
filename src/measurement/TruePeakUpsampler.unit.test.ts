@@ -29,7 +29,7 @@ const HALF_BAND_LITERALS: ReadonlyArray<readonly [number, number]> = [
 	[79, 0.6365642327784133],
 ];
 
-const INTERPOLATOR_8X_LITERALS: ReadonlyArray<readonly [number, number]> = [
+const SIXTEEN_X_INTERPOLATOR_LITERALS: ReadonlyArray<readonly [number, number]> = [
 	[1, -0.0007645548686374766],
 	[3, -0.004082089743532789],
 	[5, -0.007574733533176416],
@@ -48,7 +48,7 @@ const INTERPOLATOR_8X_LITERALS: ReadonlyArray<readonly [number, number]> = [
 	[31, 0.9718935112130203],
 ];
 
-const INTERPOLATOR_4X_LITERALS: ReadonlyArray<readonly [number, number]> = [
+const EIGHT_X_INTERPOLATOR_LITERALS: ReadonlyArray<readonly [number, number]> = [
 	[1, -0.002165099394437387],
 	[2, -0.006113914106979858],
 	[3, -0.007585692599830534],
@@ -119,8 +119,8 @@ const steadyPeakDb = (factor: OversamplingFactor, input: Float64Array): number =
 describe("TruePeakUpsampler", () => {
 	it.each([
 		["half-band", HALF_BAND_TAPS, HALF_BAND_LITERALS],
-		["16x interpolator", interpolatorTapsOf(8), INTERPOLATOR_8X_LITERALS],
-		["8x interpolator", interpolatorTapsOf(4), INTERPOLATOR_4X_LITERALS],
+		["16x interpolator", interpolatorTapsOf(8), SIXTEEN_X_INTERPOLATOR_LITERALS],
+		["8x interpolator", interpolatorTapsOf(4), EIGHT_X_INTERPOLATOR_LITERALS],
 	] as const)("computes the %s taps lib.py's two_stage(160, 5, 8 or 4, 8, 6) prints", (_, taps, literals) => {
 		for (const [index, expected] of literals) {
 			expect(Math.abs((taps[index] ?? Number.NaN) - expected)).toBeLessThan(1e-12);
@@ -132,15 +132,15 @@ describe("TruePeakUpsampler", () => {
 		expect(new TruePeakUpsampler().factor).toBe(8);
 	});
 
-	it("reads a 0.45 fs tone peaking 1/16 of a sample past a frame within the 8x grid's scallop at 8x and within 0.01 dB at 16x", () => {
+	it("reads a 0.4 fs tone peaking 1/16 of a sample off the 8x grid at the 8x scallop at 8x and within 0.01 dB at 16x", () => {
 		const input = Float64Array.from(
 			{ length: 4000 },
-			(_, index) => 0.5 * Math.cos(2 * Math.PI * 0.45 * (index - 1 / 16)),
+			(_, index) => 0.5 * Math.cos(2 * Math.PI * 0.4 * (index - 1 / 16)),
 		);
-		const scallopDb = 20 * Math.log10(Math.cos((2 * Math.PI * 0.45) / 16));
+		const scallopDb = 20 * Math.log10(Math.cos((2 * Math.PI * 0.4) / 16));
 
-		expect(steadyPeakDb(8, input) + 6.0206).toBeLessThan(0.02);
-		expect(steadyPeakDb(8, input) + 6.0206).toBeGreaterThan(scallopDb - 0.02);
+		expect(scallopDb).toBeLessThan(-0.1);
+		expect(Math.abs(steadyPeakDb(8, input) + 6.0206 - scallopDb)).toBeLessThan(0.02);
 		expect(Math.abs(steadyPeakDb(16, input) + 6.0206)).toBeLessThan(0.01);
 	});
 

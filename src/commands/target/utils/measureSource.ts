@@ -5,7 +5,6 @@ import { computeLoudnessRange, getLraConsideredStats } from "../../../measuremen
 import { ShortTermLoudnessAccumulator } from "../../../measurement/ShortTermLoudnessAccumulator";
 import { SlidingWindowMaxStream, SlidingWindowMeanStream } from "../../../measurement/SlidingWindowStreams";
 import {
-	DEFAULT_OVERSAMPLING,
 	DELAY_FRAMES,
 	FLUSH_FRAMES,
 	TruePeakUpsampler,
@@ -257,9 +256,9 @@ export const measureSource = async (args: {
 	scratch: Scratch;
 	limitPercentile: number;
 	halfWidthOf: (sampleRate: number) => number;
-	oversampling?: OversamplingFactor;
+	oversampling: OversamplingFactor;
 }): Promise<SourceMeasurement> => {
-	const { source, scratch, limitPercentile, halfWidthOf, oversampling = DEFAULT_OVERSAMPLING } = args;
+	const { source, scratch, limitPercentile, halfWidthOf, oversampling } = args;
 	const loudnessEnvelope = await SampleFile.create(scratch, "loudness");
 	let peakEnvelope: SampleFile | undefined;
 

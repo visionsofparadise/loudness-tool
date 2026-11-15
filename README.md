@@ -6,7 +6,7 @@ loudness-tool measures true peak, integrated loudness and loudness range per ITU
 
 An input path of `-` or `pipe:` reads stdin. `tp-norm`, `lufs-norm`, `crest` and `target` require `-o, --output <path>`: a file, `-` for stdout, or the input's own path for in-place processing. Each prints its figures to stdout, or to stderr when the audio goes to stdout.
 
-Every command takes `--oversampling <factor>`, the true-peak oversampling factor, 8 or 16 (default: 8). 16 reads closer to the ideal true peak; 8 runs faster.
+Every command takes `--oversampling <factor>`, the true-peak oversampling factor, 8 or 16 (default: 8). Every true-peak figure, target and ceiling is read at that factor. A reading sits up to 0.17 dB under the ideal true peak at 8 and up to 0.04 dB under it at 16, the most on content near half the sample rate; 8 runs faster.
 
 ### stats
 
