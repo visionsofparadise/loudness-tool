@@ -21,7 +21,7 @@ npm run integration
 
 ## Releases
 
-A release publishes the version in `package.json` as the `v<version>` GitHub release. Bump the version on `main`, then start the Release workflow from the Actions tab. Publishing a version deletes the older releases.
+CI checks and tests every push and pull request. A push to `main` that carries an unreleased `package.json` version also publishes it as the `v<version>` GitHub release, and publishing a version deletes the older releases.
 
 ## Commits
 
