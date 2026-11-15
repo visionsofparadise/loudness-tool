@@ -1,7 +1,5 @@
-#!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import { CommanderError, type Command } from "commander";
+import { version } from "../package.json";
 import { addCrestCommand } from "./commands/crest";
 import { addLufsNormCommand } from "./commands/lufsNorm";
 import { addStatsCommand } from "./commands/stats";
@@ -10,17 +8,13 @@ import { addTpNormCommand } from "./commands/tpNorm";
 import { AudioProgram } from "./commands/utils/AudioProgram";
 import { STREAM_OPTIONS_HELP } from "./commands/utils/streamOptions";
 
-const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
-	version: string;
-};
-
 export const createProgram = (): Command => {
 	const program = new AudioProgram();
 
 	program
 		.name("loudness-tool")
 		.description("WAV and raw PCM loudness processing")
-		.version(packageJson.version)
+		.version(version)
 		.configureHelp({ showGlobalOptions: true });
 	program.option("--scratch-dir <path>", "directory for temporary files");
 
@@ -59,9 +53,3 @@ export const runProgram = async (argv: Array<string>): Promise<void> => {
 		process.exitCode = 1;
 	}
 };
-
-const entryPath = process.argv[1];
-
-if (entryPath !== undefined && import.meta.url === pathToFileURL(entryPath).href) {
-	void runProgram(process.argv);
-}

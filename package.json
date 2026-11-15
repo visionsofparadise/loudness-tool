@@ -4,7 +4,7 @@
 	"description": "WAV and raw PCM loudness processing",
 	"type": "module",
 	"bin": {
-		"loudness-tool": "./dist/cli.js"
+		"loudness-tool": "./dist/main.js"
 	},
 	"files": [
 		"dist"
@@ -15,6 +15,9 @@
 	},
 	"author": "Matt Cavender",
 	"license": "MIT",
+	"engines": {
+		"node": ">=24"
+	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/visionsofparadise/loudness-tool.git"
@@ -25,7 +28,7 @@
 		"check": "concurrently --group \"prettier --check .\" \"eslint . --no-cache -f unix\" \"tsc --noEmit --pretty false\" \"stylelint \\\"**/*.css\\\" -f unix --allow-empty-input --cache\" \"markdownlint-cli2 \\\"**/*.md\\\"\" \"textlint -f compact \\\"**/*.md\\\"\" \"knip --no-progress\" \"jscpd .\"",
 		"unit": "vitest run unit",
 		"integration": "vitest run integration",
-		"build": "tsup src/cli.ts --format esm --treeshake --clean"
+		"build": "tsup src/main.ts --format esm --treeshake --clean"
 	},
 	"dependencies": {
 		"commander": "^14.0.1"
