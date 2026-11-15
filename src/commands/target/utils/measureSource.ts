@@ -19,7 +19,6 @@ const CELL_DB = 0.5;
 const PEAK_LEVEL_BIN_DB = 0.01;
 const PEAK_LEVEL_BIN_COUNT = Math.round((CELL_COUNT * CELL_DB) / PEAK_LEVEL_BIN_DB);
 const MOMENTARY_HALF_WINDOW_SECONDS = 0.2;
-const LOCAL_HALF_WINDOW_SECONDS = 0.05;
 const LUFS_OFFSET = -0.691;
 const SILENT_MEAN_SQUARE = 1e-20;
 const SILENT_LOUDNESS_DB = -200;
@@ -263,9 +262,6 @@ export const measureSource = async (args: {
 		const shortTerm = new ShortTermLoudnessAccumulator(sampleRate, weights);
 		const kWeighted = new KWeightedSquaredSum(sampleRate, weights);
 		const momentaryWindow = new SlidingWindowMeanStream(Math.floor(MOMENTARY_HALF_WINDOW_SECONDS * sampleRate));
-		const localWindow = new SlidingWindowMeanStream(Math.floor(LOCAL_HALF_WINDOW_SECONDS * sampleRate));
-		const momentaryQueue = new FrameQueue();
-		const localQueue = new FrameQueue();
 		const peakHold = new SlidingWindowMaxStream(halfWidthOf(sampleRate));
 		const energy = new Float64Array(CELL_COUNT * CELL_COUNT);
 		const counts = new Float64Array(CELL_COUNT * CELL_COUNT);
@@ -312,17 +308,11 @@ export const measureSource = async (args: {
 			}
 		};
 
-		const persistLoudness = async (momentary: Float64Array, local: Float64Array): Promise<void> => {
-			momentaryQueue.push(momentary);
-			localQueue.push(local);
+		const persistLoudness = async (momentaryMeans: Float64Array): Promise<void> => {
+			const loudnessDb = new Float64Array(momentaryMeans.length);
 
-			const frames = Math.min(momentaryQueue.length, localQueue.length);
-			const momentaryMeans = momentaryQueue.take(frames);
-			const localMeans = localQueue.take(frames);
-			const loudnessDb = new Float64Array(frames);
-
-			for (let index = 0; index < frames; index++) {
-				loudnessDb[index] = loudnessDbOf(Math.max(0, Math.min(momentaryMeans[index] ?? 0, localMeans[index] ?? 0)));
+			for (let index = 0; index < momentaryMeans.length; index++) {
+				loudnessDb[index] = loudnessDbOf(Math.max(0, momentaryMeans[index] ?? 0));
 			}
 
 			await loudnessEnvelope.append(loudnessDb, loudnessDb.length);
@@ -409,7 +399,7 @@ export const measureSource = async (args: {
 
 			kWeighted.push(block.channels, frames, frameEnergy);
 			energyQueue.push(frameEnergy);
-			await persistLoudness(momentaryWindow.push(frameEnergy, false), localWindow.push(frameEnergy, false));
+			await persistLoudness(momentaryWindow.push(frameEnergy, false));
 
 			const upChunkLength = frames * UPSAMPLE_FACTOR;
 
@@ -463,10 +453,7 @@ export const measureSource = async (args: {
 
 		await pushAlignedDetection(flushLength);
 		await persistPeak(peakHold.push(new Float64Array(0), true));
-		await persistLoudness(
-			momentaryWindow.push(new Float64Array(0), true),
-			localWindow.push(new Float64Array(0), true),
-		);
+		await persistLoudness(momentaryWindow.push(new Float64Array(0), true));
 
 		const shortTermSeries = shortTerm.finalize();
 		const stats = getLraConsideredStats(shortTermSeries.subarray(0, shortTerm.sourceWindowCount));

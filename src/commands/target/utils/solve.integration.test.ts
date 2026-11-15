@@ -51,7 +51,7 @@ const scaled = (channels: ReadonlyArray<Float64Array>, gain: number): Array<Floa
 	channels.map((channel) => channel.map((sample) => sample * gain));
 
 const NOISE_RMS = 1 / Math.sqrt(3);
-const BACKGROUND_CLEARANCE_SECONDS = 0.1;
+const BACKGROUND_CLEARANCE_SECONDS = 0.25;
 const BODY_LIMIT_PATTERN = /^target unreachable: loudness reaches (-?\d+\.\d+) LUFS at the body's limit$/m;
 const STOPS_RISING_PATTERN = /^target unreachable: loudness stops rising at (-?\d+\.\d+) LUFS$/m;
 
@@ -224,7 +224,7 @@ describe("target's search", () => {
 		const writtenLufs = written.integratedLufs ?? Infinity;
 		const unreachable = (BODY_LIMIT_PATTERN.exec(stderr) ?? STOPS_RISING_PATTERN.exec(stderr))?.[1];
 
-		expect(background.windows).toBeGreaterThan(20);
+		expect(background.windows).toBeGreaterThan(10);
 		expect(background.largestDb).toBeLessThan(1);
 		expect(writtenLufs).toBeLessThanOrEqual(-16 + GRAIN);
 

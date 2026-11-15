@@ -110,7 +110,7 @@ describe("measureSource detection at the file's ends", () => {
 		}
 	});
 
-	it("keeps silence 50 ms or more before an onset at the silent loudness", async () => {
+	it("reads silence more than 200 ms before an onset as silent and the centred 400 ms loudness within it", async () => {
 		const signal = new Float64Array(2 * SAMPLE_RATE);
 		const [tone = new Float64Array(0)] = createSine(SAMPLE_RATE, 1, SAMPLE_RATE, 1000, dbToLinear(-20));
 
@@ -120,9 +120,9 @@ describe("measureSource detection at the file's ends", () => {
 		const before = (seconds: number): number =>
 			loudness[SAMPLE_RATE - Math.round(seconds * SAMPLE_RATE)] ?? Number.NaN;
 
-		expect(before(0.15)).toBe(-200);
-		expect(before(0.06)).toBe(-200);
-		expect(before(0.04)).toBeGreaterThan(-40);
+		expect(before(0.25)).toBe(-200);
+		expect(before(0.21)).toBe(-200);
+		expect(before(0.15)).toBeGreaterThan(-40);
 	});
 
 	it("sets the limit default at the level the loudest 0.5 % of frames reach", async () => {
