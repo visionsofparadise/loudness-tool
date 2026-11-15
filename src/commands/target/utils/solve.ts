@@ -8,7 +8,7 @@ import { quantizerOf } from "../../../wav/utils/sampleCodec";
 import { forEachEnvelopedBlock } from "./apply";
 import { gainDbAt } from "./curve";
 import { renderEnvelope } from "./envelope";
-import { CELL_COUNT, cellCentreDb, cellOf } from "./measureSource";
+import { CELL_COUNT, cellCentreDb, cellOf, cellShareAtOrAbove } from "./measureSource";
 import { holdHalfWidthOf, windowSamplesFromMs } from "./window";
 import type { Anchors } from "./curve";
 import type { DetectionHistogram } from "./measureSource";
@@ -57,6 +57,11 @@ export interface IterateResult {
 }
 
 export type UnreachableCause = "body-limit" | "stops-rising";
+
+export interface SearchCap {
+	readonly boost: number;
+	readonly cause: UnreachableCause;
+}
 
 export interface AnchorBase {
 	readonly floorDb: number | null;
@@ -158,12 +163,16 @@ export const bodySaturationBoost = (args: {
 	tolerance: number;
 }): number => {
 	const { anchorsAt, histogram, startB, tolerance } = args;
-	const pivotCell = cellOf(anchorsAt(startB).pivotDb);
+	const { pivotDb } = anchorsAt(startB);
+	const pivotCell = cellOf(pivotDb);
+	const pivotCellShare = cellShareAtOrAbove(pivotDb);
 	const bodyCells: Array<{ readonly loudnessDb: number; readonly peakDb: number; readonly energy: number }> = [];
 
 	for (let loudnessCell = pivotCell; loudnessCell < CELL_COUNT; loudnessCell++) {
+		const share = loudnessCell === pivotCell ? pivotCellShare : 1;
+
 		for (let peakCell = 0; peakCell < CELL_COUNT; peakCell++) {
-			const energy = histogram.energy[loudnessCell * CELL_COUNT + peakCell] ?? 0;
+			const energy = share * (histogram.energy[loudnessCell * CELL_COUNT + peakCell] ?? 0);
 
 			if (energy > 0) {
 				bodyCells.push({ loudnessDb: cellCentreDb(loudnessCell), peakDb: cellCentreDb(peakCell), energy });
@@ -250,12 +259,19 @@ export const searchCapOf = (args: {
 	targetLufs: number;
 	startB: number;
 	tolerance: number;
-}): number => {
+}): SearchCap => {
 	const { predict, anchorsAt, histogram, attempts, targetLufs, startB, tolerance } = args;
-	const cap = Math.min(bodySaturationBoost({ anchorsAt, histogram, startB, tolerance }), measuredCapOf(attempts));
-	const plateau = bracketBoost({ predict, targetLufs, startB, maxB: cap, tolerance });
+	const bodyBound = bodySaturationBoost({ anchorsAt, histogram, startB, tolerance });
+	const measuredCap = measuredCapOf(attempts);
+	const bound: SearchCap =
+		measuredCap <= bodyBound
+			? { boost: measuredCap, cause: "stops-rising" }
+			: { boost: bodyBound, cause: "body-limit" };
+	const plateau = bracketBoost({ predict, targetLufs, startB, maxB: bound.boost, tolerance });
 
-	return plateau.kind === "capped" ? plateau.boost : cap;
+	return plateau.kind === "capped" && plateau.boost < bound.boost
+		? { boost: plateau.boost, cause: "stops-rising" }
+		: bound;
 };
 
 export const stopsRisingAt = (args: {
@@ -275,7 +291,11 @@ export const stopsRisingAt = (args: {
 	);
 };
 
-export const unreachableCauseOf = (attempts: ReadonlyArray<IterationAttempt>): UnreachableCause =>
+export const unreachableCauseOf = (
+	stopCause: UnreachableCause,
+	attempts: ReadonlyArray<IterationAttempt>,
+): UnreachableCause =>
+	stopCause === "stops-rising" ||
 	attempts.some((lower) =>
 		attempts.some(
 			(higher) =>
@@ -615,9 +635,9 @@ export const iterateForTargets = async (
 	});
 	const predictWithResidual = (boost: number): number =>
 		predictOutputLufs(sourceLufs, anchorsAt(boost), histogram) + residual;
-	const capOf = (lufsTarget: number | undefined): number =>
+	const capOf = (lufsTarget: number | undefined): SearchCap =>
 		lufsTarget === undefined
-			? Number.POSITIVE_INFINITY
+			? { boost: Number.POSITIVE_INFINITY, cause: "body-limit" }
 			: searchCapOf({
 					predict: predictWithResidual,
 					anchorsAt,
@@ -659,7 +679,7 @@ export const iterateForTargets = async (
 	};
 	let winningAttempt: IterationAttempt | undefined;
 	let winningEnvelope: SampleFile | undefined;
-	let stoppedRising = false;
+	let stopCap: SearchCap | undefined;
 
 	try {
 		for (
@@ -673,13 +693,13 @@ export const iterateForTargets = async (
 		) {
 			const cap = capOf(targetLufs);
 
-			if (stopsRising(cap)) {
-				stoppedRising = true;
+			if (stopsRising(cap.boost)) {
+				stopCap = cap;
 
 				break;
 			}
 
-			const boost = nextBoost(cap);
+			const boost = nextBoost(cap.boost);
 
 			if (repeatsAttempt(attempts, boost, effectiveCeilingDb)) {
 				break;
@@ -751,7 +771,13 @@ export const iterateForTargets = async (
 
 		const converged = hasConverged(winningAttempt, targetLufs, ceilingDb, tolerance);
 
-		stoppedRising = !converged && (stoppedRising || stopsRising(capOf(targetLufs)));
+		if (!converged && stopCap === undefined) {
+			const cap = capOf(targetLufs);
+
+			stopCap = stopsRising(cap.boost) ? cap : undefined;
+		}
+
+		const unreachable = converged ? undefined : stopCap;
 
 		const result: IterateResult = {
 			bestSmoothedEnvelope: winningEnvelope ?? (await SampleFile.create(scratch, "empty-envelope")),
@@ -759,8 +785,8 @@ export const iterateForTargets = async (
 			bestPeakGainDb: winningAttempt?.peakGainDb ?? null,
 			attempts,
 			converged,
-			unreachableLufs: stoppedRising ? (winningAttempt?.outputLufs ?? null) : null,
-			unreachableCause: stoppedRising ? unreachableCauseOf(attempts) : null,
+			unreachableLufs: unreachable === undefined ? null : (winningAttempt?.outputLufs ?? null),
+			unreachableCause: unreachable === undefined ? null : unreachableCauseOf(unreachable.cause, attempts),
 			winnerOutputLufs: winningAttempt?.outputLufs ?? null,
 			winnerOutputTruePeakDb: winningAttempt?.outputTruePeakDb ?? null,
 			winnerOutputLra: winningAttempt?.outputLra ?? null,

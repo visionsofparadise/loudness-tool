@@ -257,6 +257,28 @@ describe("bodySaturationBoost", () => {
 		expect(bodySaturationBoost({ anchorsAt, histogram, startB: 300, tolerance: 0.5 })).toBeCloseTo(boost, 1);
 	});
 
+	it("weighs the pivot's loudness cell by the share of that cell at or above the pivot", () => {
+		const histogram = histogramWith([
+			{ loudnessDb: -25.1, peakDb: -30.1, energy: 0.01 },
+			{ loudnessDb: -20.1, peakDb: -10.1, energy: 1 },
+		]);
+		const boundAt = (pivotDb: number): number =>
+			bodySaturationBoost({
+				anchorsAt: (boost) => anchorsOf({ pivotDb, ceilingDb: 0, B: boost, peakGainDb: boost }),
+				histogram,
+				startB: 4,
+				tolerance: 0.5,
+			});
+
+		// The pivot cell spans [-25.5, -25); its frames cap at 30.25 dB and the louder cell's at 10.25 dB.
+		// At -25.005 the cell holds 1 % of its frames at or above the pivot, too little to keep the body rising past 10.25.
+		expect(boundAt(-25.005)).toBeGreaterThan(10.15);
+		expect(boundAt(-25.005)).toBeLessThanOrEqual(10.25);
+		// At -25.5 the whole cell is at or above the pivot, and the body rises until its frames cap too.
+		expect(boundAt(-25.5)).toBeGreaterThan(30.1);
+		expect(boundAt(-25.5)).toBeLessThanOrEqual(30.25);
+	});
+
 	it("returns +Infinity when no frame reaches the pivot", () => {
 		const histogram = histogramWith([{ loudnessDb: -60.1, peakDb: -50.1, energy: 1 }]);
 
@@ -300,19 +322,27 @@ describe("searchCapOf", () => {
 			{ loudnessDb: -30.1, peakDb: 2.1, energy: quietEnergy },
 		]);
 
-	it("caps at the body gain where the predicted loudness stops rising when that comes before the body bound", () => {
+	it("caps where the predicted loudness stops rising when that comes before the body bound, as loudness stopping", () => {
 		const histogram = histogramOf(10);
 
 		expect(bodySaturationBoost({ anchorsAt, histogram, startB: 4, tolerance: 0.5 })).toBeGreaterThan(12);
-		expect(searchCapOf(capArgsOf(histogram))).toBe(10);
+		expect(searchCapOf(capArgsOf(histogram))).toEqual({ boost: 10, cause: "stops-rising" });
 	});
 
-	it("keeps the body bound while the predicted loudness rises up to it", () => {
+	it("keeps the body bound while the predicted loudness rises up to it, as the body's limit", () => {
 		const histogram = histogramOf(1);
 
-		expect(searchCapOf(capArgsOf(histogram))).toBe(
-			bodySaturationBoost({ anchorsAt, histogram, startB: 4, tolerance: 0.5 }),
-		);
+		expect(searchCapOf(capArgsOf(histogram))).toEqual({
+			boost: bodySaturationBoost({ anchorsAt, histogram, startB: 4, tolerance: 0.5 }),
+			cause: "body-limit",
+		});
+	});
+
+	it("caps at a lower body gain that landed louder than a higher one, as loudness stopping", () => {
+		const histogram = histogramOf(1);
+		const attempts = [attemptOf({ boost: 6, outputLufs: -18 }), attemptOf({ boost: 8, outputLufs: -18.2 })];
+
+		expect(searchCapOf({ ...capArgsOf(histogram), attempts })).toEqual({ boost: 6, cause: "stops-rising" });
 	});
 });
 
@@ -336,22 +366,32 @@ describe("stopsRisingAt", () => {
 });
 
 describe("unreachableCauseOf", () => {
-	it("names the body's limit while each higher body gain landed louder by at least 0.01 LU per dB", () => {
-		expect(unreachableCauseOf([attemptOf({ boost: 7.7792, outputLufs: -20 })])).toBe("body-limit");
+	it("names the body's limit when the body bound stopped the search and each higher body gain landed louder by at least 0.01 LU per dB", () => {
+		expect(unreachableCauseOf("body-limit", [attemptOf({ boost: 11.66, outputLufs: -20 })])).toBe("body-limit");
 		expect(
-			unreachableCauseOf([
+			unreachableCauseOf("body-limit", [
 				attemptOf({ boost: 14.4204, outputLufs: -16.5868 }),
 				attemptOf({ boost: 14.6905, outputLufs: -16.5694 }),
 			]),
 		).toBe("body-limit");
 	});
 
-	it("says loudness stops rising once a higher body gain landed quieter or rose by under 0.01 LU per dB", () => {
+	it("says loudness stops rising when the plateau or a quieter higher attempt stopped the search, from one attempt on", () => {
+		expect(unreachableCauseOf("stops-rising", [attemptOf({ boost: 7.7792, outputLufs: -20 })])).toBe("stops-rising");
+	});
+
+	it("says loudness stops rising at the body bound once a higher body gain landed quieter or rose by under 0.01 LU per dB", () => {
 		expect(
-			unreachableCauseOf([attemptOf({ boost: 10, outputLufs: -18 }), attemptOf({ boost: 12, outputLufs: -18.1 })]),
+			unreachableCauseOf("body-limit", [
+				attemptOf({ boost: 10, outputLufs: -18 }),
+				attemptOf({ boost: 12, outputLufs: -18.1 }),
+			]),
 		).toBe("stops-rising");
 		expect(
-			unreachableCauseOf([attemptOf({ boost: 10, outputLufs: -18 }), attemptOf({ boost: 12, outputLufs: -17.99 })]),
+			unreachableCauseOf("body-limit", [
+				attemptOf({ boost: 10, outputLufs: -18 }),
+				attemptOf({ boost: 12, outputLufs: -17.99 }),
+			]),
 		).toBe("stops-rising");
 	});
 });

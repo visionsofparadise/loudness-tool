@@ -337,7 +337,7 @@ describe("target's search", () => {
 	it("stops unreachable without repeating a body gain where the predicted loudness stops rising under the body bound", async () => {
 		const { stderr, written } = await runTarget("pulses-lead-in", [pulsedNoise(0.046, 2)], ["--lufs", "-16"]);
 		const bodyGains = [...stderr.matchAll(/^attempt \d+ +body gain (-?\d+\.\d+)/gm)].map((match) => match[1]);
-		const unreachable = BODY_LIMIT_PATTERN.exec(stderr);
+		const unreachable = STOPS_RISING_PATTERN.exec(stderr);
 
 		expect(new Set(bodyGains).size).toBe(bodyGains.length);
 		expect(unreachable).not.toBeNull();

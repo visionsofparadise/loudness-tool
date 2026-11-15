@@ -54,6 +54,9 @@ export const cellOf = (levelDb: number): number =>
 
 export const cellCentreDb = (cell: number): number => CELL_MIN_DB + (cell + 0.5) * CELL_DB;
 
+export const cellShareAtOrAbove = (levelDb: number): number =>
+	Math.min(1, Math.max(0, (CELL_MIN_DB + (cellOf(levelDb) + 1) * CELL_DB - levelDb) / CELL_DB));
+
 const peakLevelBinOf = (levelDb: number): number =>
 	clampIndex(Math.floor((levelDb - CELL_MIN_DB) / PEAK_LEVEL_BIN_DB), PEAK_LEVEL_BIN_COUNT);
 
