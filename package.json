@@ -68,6 +68,7 @@
 	"allowScripts": {
 		"unrs-resolver@1.12.2": true,
 		"esbuild@0.27.7": true,
-		"bun@1.4.4": true
+		"bun@1.4.4": true,
+		"fsevents@2.3.3": true
 	}
 }
